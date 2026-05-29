@@ -1,6 +1,6 @@
 # zypper-declarative
 
-A reconciling, declarative converger for SUSE SL Micro and SLES 16.1, surfaced as
+A reconciling, declarative converger for SL Micro and SLES in immutable mode, surfaced as
 the `zypper declarative` subcommand. You author the desired state of a host as a
 signed manifest; the tool reads the actual state, computes the difference, applies
 it inside a snapshot transaction, and records what it did so the next run can also
@@ -13,7 +13,7 @@ the SUSE Machinery system description.
 
 | | |
 |---|---|
-| Substrate | SL Micro 6.2, SLES 16.1 (transactional, btrfs + snapper) |
+| Substrate | SL Micro 6.2++, SLES 16 (immutable and transactional, btrfs + snapper) |
 | Surface | `zypper declarative <verb>` (or `zypper-declarative <verb>`) |
 | Manifest | Machinery system description, declarable subset; JSON canonical, YAML optional |
 | Method | Post-Coding Development (spec-driven, generated implementation) |
@@ -214,7 +214,7 @@ zypper declarative describe > base.json    # or: format=yaml > base.yaml
 
 The boundary to the snapshot transaction is deliberately abstract, so the same
 tool works whether the transactional machinery is a separate tool
-(`transactional-update`, SL Micro today) or merged into zypper (SLES 16.1). The
+(`transactional-update`, SL Micro today) or merged into zypper potentially. The
 `mode=auto|external|internal` option selects the binding; `auto` detects it. The
 convergence behaviour is identical either way.
 
@@ -239,7 +239,7 @@ runs it as `zypper declarative`. It is also invokable directly as
 
 ## Requirements
 
-- SL Micro 6.2 or SLES 16.1, on x86-64 or AArch64.
+- SL Micro or SLES in Transactional mode 
 - A btrfs root with snapper, and a transactional update mechanism.
 - For `apply`, sufficient privilege to modify the system and open a transaction.
   The read-only verbs need only read access; a complete `describe` of all `/etc`
