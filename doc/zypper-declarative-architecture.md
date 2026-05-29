@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.5.1)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.5.2)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -261,7 +261,13 @@ themselves. It performs no network refresh and reads no privileged cache, which
 keeps it deterministic and lets a normal user read whatever is world-readable
 (repository definitions and most of `/etc` are). A complete description still wants
 root, because some `/etc` files are root-only, so `describe` run unprivileged may
-not see everything.
+not see everything. The config-file reading is bounded to `/etc`: it never reads,
+hashes, or verifies files outside the declarable file domain, and in particular
+never runs a whole-system package verification. That is both correctness (the tool
+only ever manages `/etc`) and the reason a description is fast: its cost scales
+with the size of `/etc`, not with the installed package base. A package verifier
+reporting changed files (commonly via a non-zero exit) is the normal result that
+yields the changed set, not a read failure.
 
 That last point hides a footgun that the absent-versus-empty contract makes sharp,
 and the design closes it deliberately. An empty scope in a desired manifest means
@@ -517,6 +523,14 @@ objective.
 
 ## Changelog
 
+- 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.5.2. Section 5.5 now
+  records that the config-file reader is bounded to `/etc` (it never reads, hashes,
+  or verifies files outside the declarable file domain, and never runs a
+  whole-system package verification), which is both correctness and why a
+  description is fast, and that a verifier reporting changed files via a non-zero
+  exit is the normal result rather than a read failure. This corrected a `describe`
+  abort that misread the package verifier's non-zero exit as an unreadable source,
+  and removed the slow full-system verification.
 - 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.5.1. The stable verb
   surface now notes the bare-word global commands `version` and `help` (with
   `--version` / `--help` / `-h` as tolerated aliases), matching the cli-tool

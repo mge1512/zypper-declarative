@@ -204,10 +204,14 @@ That means:
 - `[spec]` The `describe` verb passes `on_unreadable` through from its option;
   every other caller (apply, diff, status, verify reading live state) passes
   `on_unreadable=error`.
-- `[spec]` `config_files` actual state is the changed-from-package and unpackaged
-  `/etc` files, excluding package-pristine files, the keep-list, and
+- `[spec]` `[changed-0.5.2]` `config_files` actual state is the changed-from-package
+  and unpackaged `/etc` files, excluding package-pristine files, the keep-list, and
   `/etc/etc.syncpoint`. `package_name` is populated from rpm; `content_ref` is
-  empty in actual state.
+  empty in actual state. Bound the work to `/etc`: do not read, hash, or verify
+  anything outside `/etc`, and do not run a whole-system verification such as
+  `rpm -Va` (it is the cause of the slow describe). Treat a verifier's non-zero
+  exit (it returns non-zero when it finds changed files) as the normal changed-file
+  result, not an unreadable source.
 
 ### Integration with the system (Go-specific)
 
@@ -261,7 +265,7 @@ That means:
 
 ---
 
-## Do NOT carry these over from the existing code (v0.5.0 and v0.5.1 changes)
+## Do NOT carry these over from the existing code (v0.5.0, v0.5.1, v0.5.2 changes)
 
 1. `describe` writing JSON regardless of the `out` extension. Output now follows
    `resolve-format`.
@@ -274,6 +278,18 @@ That means:
 5. (v0.5.1) `version` and `help` as bare words returning "unknown verb" (exit 2)
    while only `--version` / `--help` work. The bare words are now the canonical
    global commands and exit 0; the flags are tolerated aliases.
+6. (v0.5.2) Treating a package-verification command's non-zero exit (it returns
+   non-zero when it finds changed files, i.e. the normal case) as an unreadable
+   source. Consume the verifier output; only a genuine access or I/O failure is
+   unreadable.
+7. (v0.5.2) Running a whole-system package verification (for example `rpm -Va`)
+   for config_files. Bound the work to `/etc`: enumerate `/etc`, and consult
+   package metadata only for the `/etc` files found (for example query the
+   packaged `/etc` file digests from the rpmdb and compare, or verify only the
+   packages that own an `/etc` file). Do not read, hash, or verify files outside
+   `/etc`. This is both correctness and the performance fix (the slow full-system
+   verification scales with the installed base; the bounded read scales with the
+   size of `/etc`).
 
 ## Slots to fill from /tmp/pcd-original/code/
 

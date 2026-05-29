@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.5.1
+Version:     0.5.2
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -622,18 +622,34 @@ STEPS:
    (`_attributes.init_system = "systemd"`) with each unit's state normalised to
    enabled, disabled, or masked. Purely-static units are omitted (not
    declarable). If enablement cannot be read, treat per `on_unreadable` (step 6).
-4. config_files: enumerate `/etc` under `root`; for each file determine its
-   owning package. Build a ManagedFileRecord with actual sha256, mode, user,
-   group, type, and package_name for every file that is either changed from its
-   package default or unpackaged. Skip files that are package-pristine, the
-   keep-list, and `/etc/etc.syncpoint`. content_ref is "". If a file that must be
-   inspected cannot be read (for example a root-only file under a non-root run),
-   treat per `on_unreadable` (step 6).
+4. config_files: enumerate only `<root>/etc` and inspect only paths under it. For
+   each `/etc` file determine its owning package and whether it differs from that
+   package's recorded baseline. Build a ManagedFileRecord with actual sha256,
+   mode, user, group, type, and package_name for every `/etc` file that is either
+   changed from its package default or unpackaged. Skip files that are
+   package-pristine, the keep-list, and `/etc/etc.syncpoint`. content_ref is "".
+   Two constraints on this step:
+   - Bounded scope: the package-baseline comparison consults package metadata only
+     for the `/etc` files enumerated here. The reader does not read, hash, or
+     verify files outside `/etc` (the declarable file domain), and in particular
+     does not perform a whole-system package verification. The cost therefore
+     scales with the size of `/etc`, not with the installed package base.
+   - Difference reporting is not failure: a package-verification mechanism reports
+     changed files as its normal, successful result, and commonly signals "one or
+     more files differ" with a non-zero exit status. That non-zero status, and an
+     empty match, are the expected outcome that yields the changed-file set; they
+     are NOT an unreadable source. Only a genuine access or I/O failure to read a
+     required `/etc` file is unreadable, treated per `on_unreadable` (step 6).
 5. Assemble the Manifest with meta.format_version = 1, generator, created_at, and
    empty desired_sha256. Omit any scope whose readable content is genuinely empty
    (so a bootstrapped manifest leaves that scope unmanaged rather than asserting
    deletion). Return it, with any warn diagnostics.
-6. Unreadable-source handling: a scope or item whose source cannot be read is
+6. Unreadable-source handling. "Unreadable" means a genuine access or I/O failure
+   to read a source: a permission denial on a required path, a missing required
+   path, or an rpmdb, repos.d, or unit-state source that cannot be opened or read.
+   It explicitly does NOT include a verification or query command exiting non-zero
+   to report content differences, nor a query returning an empty result; those are
+   normal successful outcomes. A scope or item that is genuinely unreadable is
    never represented as an empty scope. Under `on_unreadable=error`, return an
    error naming the unreadable source (the caller fails the run). Under
    `on_unreadable=warn`, omit the affected scope (or the affected items), append a
@@ -646,6 +662,9 @@ POSTCONDITIONS:
 - config_files contains exactly the changed-from-package and unpackaged /etc
   files it could read (minus keep-list and syncpoint); package-pristine files are
   absent.
+- config_files inspection is bounded to `/etc`: no file outside the declarable
+  file domain is read, hashed, or verified, so the cost is a function of the size
+  of `/etc`, not of the installed package base.
 - No scope is emitted with empty `_elements` because its source was unreadable; an
   unreadable source is an error (strict) or an omission with a diagnostic (warn).
 - A scope that is readable and genuinely empty is omitted, not emitted empty.
@@ -1250,6 +1269,14 @@ resolver fills in the transitive set.
 - [observable] `describe-actual-state` never emits a scope with empty `_elements`
   because its source could not be read; an unreadable source is an error (strict)
   or an omission with a diagnostic (warn).
+- [observable] `describe-actual-state` inspects only `/etc` for the config_files
+  scope; it does not read, hash, or verify files outside `/etc`, and does not run
+  a whole-system package verification. Its config_files cost scales with the size
+  of `/etc`, not the installed package base.
+- [observable] A verification or query command exiting non-zero to report content
+  differences, or returning an empty result, is a normal successful outcome and is
+  never treated as an unreadable source; only a genuine access or I/O failure to
+  read a required source is unreadable.
 - [observable] A genuinely empty actual scope is omitted from `describe` output,
   so a bootstrapped manifest leaves that scope unmanaged rather than asserting
   deletion.
@@ -1532,6 +1559,31 @@ WHEN:
 THEN:
   the config_files scope contains the changed file with package_name set
   the package-pristine file is absent from the config_files scope
+
+### EXAMPLE: describe_config_files_bounded_to_etc
+GIVEN:
+  a system with several thousand installed packages and many changed /etc files
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the config_files scope reflects only files under /etc
+  files outside /etc (for example under /usr) are never hashed or verified
+  exit_code = 0
+
+### EXAMPLE: describe_verify_differences_not_unreadable
+GIVEN:
+  /etc has package-owned files that have been modified, so the package
+    verification mechanism reports differences and exits non-zero
+  on-unreadable defaults to error
+  invocation: zypper declarative describe out=/tmp/state.json
+WHEN:
+  describe runs
+THEN:
+  the non-zero verification status is treated as the normal changed-file result,
+    not as an unreadable source
+  the config_files scope includes the modified /etc files
+  exit_code = 0
 
 ### EXAMPLE: lock_is_fully_resolved_packages_scope
 GIVEN:
@@ -1983,6 +2035,22 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-05-29: Version 0.5.2. Fixed a `describe` defect surfaced by the build:
+  `describe` aborted with "files: unreadable scope source: rpm config-file
+  verification: exit status 1". The package-verification mechanism returns
+  non-zero precisely when it finds changed files, which on any real system is the
+  normal case, and the reader misclassified that as an unreadable source.
+  "Unreadable" is now defined precisely (a genuine access or I/O failure to read a
+  required source), and a verification or query command exiting non-zero to report
+  differences, or returning an empty result, is explicitly a normal successful
+  outcome, never unreadable. In the same step, the config_files reader is now
+  bounded to `/etc`: it inspects only `/etc`, consults package metadata only for
+  the `/etc` files it enumerates, and never performs a whole-system package
+  verification. This is both correctness (the reader only ever manages `/etc`) and
+  the performance fix for the slow full-system verification, since the cost now
+  scales with the size of `/etc` rather than the installed package base. Added
+  matching invariants and two examples (config_files bounded to `/etc`;
+  verification differences are not an unreadable source).
 - 2026-05-29: Version 0.5.1. Fixed a CLI-surface defect surfaced by the v0.5.0
   build: `zypper declarative version` returned "unknown verb" (exit 2) while only
   the `--version` flag worked, which contradicts the cli-tool template
