@@ -1,0 +1,20 @@
+Source: zypper-declarative
+Section: admin
+Priority: optional
+Maintainer: Matthias G. Eckermann <pcd@mailbox.org>
+Build-Depends: debhelper-compat (= 13), golang-go (>= 2:1.23~), pandoc
+Standards-Version: 4.6.2
+Homepage: https://github.com/mge1512/zypper-declarative
+X-PCD-Spec-SHA256: 714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+
+Package: zypper-declarative
+Architecture: linux-any
+Depends: ${misc:Depends}, rpm, zypper
+Recommends: snapper, systemd
+Description: Declarative reconciling converger surfaced as a zypper subcommand
+ zypper-declarative converges a SUSE system to a desired manifest expressed in
+ the declarable subset of the SUSE Machinery system-description format
+ (packages, repositories, services, config_files), inside a single snapshot
+ transaction, recording what was applied. It provides the verbs apply, diff,
+ verify, status, and describe, and is surfaced both as the zypper subcommand
+ "zypper declarative" and as a direct binary.

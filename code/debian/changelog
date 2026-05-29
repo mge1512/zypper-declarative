@@ -1,0 +1,8 @@
+zypper-declarative (0.4.0-1) unstable; urgency=medium
+
+  * Initial release. Declarable subset of the SUSE Machinery system
+    description (packages, repositories, services, config_files) with verbs
+    apply, diff, verify, status, describe. YAML opt-in serialisation
+    alongside canonical JSON.
+
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 08:30:00 +0000
