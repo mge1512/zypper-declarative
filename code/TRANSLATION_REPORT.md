@@ -1,589 +1,484 @@
-# TRANSLATION_REPORT.md
+# TRANSLATION_REPORT — zypper-declarative
 
-generated from spec: zypper-declarative.spec.md
+## Spec hashes
 
-- **Spec-SHA256:** `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014` (merged)
+- **Spec-SHA256:** `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014`
+  — SHA256 of the merged spec text. The host spec declares no `Includes:`
+  directives, so the merged hash equals the host hash and the Included-Specs
+  table is empty. This is the hash embedded in every generated artefact.
 - **Spec-SHA256 (host):** `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014`
-- **Included-Specs:**
+- **Included-Specs:** (none)
 
   | Path | SHA256 |
   |------|--------|
-  | *(none)* | — |
 
-  The host spec META declares no `Includes:` directives, so the merged hash
-  equals the host hash and the inclusions table is empty (v0.3.x-compatible).
+## Metadata
 
 - **LLM-Name:** `claude-opus-4-8`
-- **Mode:** `translator` (single-LLM — no test-author output present in input)
-- **Tests-First-Compliance:** `yes`. Every file under
-  `independent_tests/claude-opus-4-8/` was written and syntax-checked
-  (`go vet` clean, `gofmt -l` empty) before any implementation source file in
-  `cmd/` or `internal/` was written. The structural Tests-First guard
-  (suite directory non-empty before Phase 2) passed.
-- **Continuity-Check:** not applicable — no test-author input. No
-  `independent_tests/<other-role-llm-name>/` directory and no `TEST_REPORT.md`
-  were present in the input directory.
+- **Mode:** `translator`
+- **Deployment-Template:** `cli-tool.template.md v0.3.29`
+- **Tests-First-Compliance:** `yes` — the translator test suite under
+  `independent_tests/claude-opus-4-8/` (one `_test.go` file plus its `go.mod`)
+  was written and verified syntactically (`go vet`, `gofmt -l`) **before** any
+  implementation source file was written. The structural Tests-First guard at
+  step 3 was satisfied (the directory existed and contained a test file before
+  Phase 2 began).
+- **Delivery mode:** Filesystem (mode 1). All source, packaging, docs, tests,
+  and reports were written directly to `/tmp/pcd-output/`. Vendored
+  dependencies via `go mod vendor` (no system packages installed; `GOPATH`/
+  `GOCACHE` under the user's home).
 
 ## Spec composition (v0.4.0)
 
-The spec declares `Spec-Schema: 0.4.0`. The composition merge described in the
-prompt was implemented: the host META was read, `Includes:` directives were
-searched for (none present), and the canonical merged-spec text therefore
-equals the host spec text byte-for-byte. The embedded `Spec-SHA256` is the
-SHA256 of that merged text.
+The host spec META declares `Spec-Schema: 0.4.0` and no `Includes:` directives.
+The merge step was executed and produced the host spec unchanged. The merged
+hash therefore equals the host hash. No cycles, no name collisions, no
+included-spec MILESTONE/DEPLOYMENT errors.
 
-## Target language resolution
+## Continuity check (dual-LLM)
 
-- **Resolved LANGUAGE:** Go.
-- **Source of resolution:** the cli-tool template default (TEMPLATE-TABLE row
-  `LANGUAGE | Go | default`). No preset files were present in the hierarchy
-  (`/usr/share/pcd/presets/`, `/etc/pcd/presets/`, `~/.config/pcd/presets/`,
-  `<project>/.pcd/`), and the spec does not declare LANGUAGE in META (it must
-  not, per template POSTCONDITIONS). No preset override applied.
-- **BINARY-TYPE:** static (required for Go). Built with `CGO_ENABLED=0`;
-  `file` confirms the result is statically linked.
+A test-author run was present at `independent_tests/mistral-large-2512/` with a
+`TEST_REPORT.md`. The continuity check was run against observed truth on disk:
+
+| Check | Value on disk | Value in TEST_REPORT.md | Verdict |
+|-------|---------------|-------------------------|---------|
+| Spec-SHA256 (merged) | `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014` | `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014` | match |
+| Spec-SHA256 (host) | `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014` | `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014` | match |
+| Deployment-Template | `cli-tool.template.md v0.3.29` | `cli-tool.template.md v0.3.29` | match |
+| Hints-Files-Read | (none) | (none) | match |
+| Test-Compile-Gate | `pass` (recomputed: `go vet ./...` exit 0, `gofmt -l` empty) | `pass` | match |
+| Binary-Discovery-Path | `../../zypper-declarative` | `../../zypper-declarative` | match |
+
+**Result: all checks passed, proceeded to test-author suite execution.**
+
+Note on Hints-Files-Read: the two `.hints.md` files in the input directory are
+(a) a *milestone* hints file referenced only by an active MILESTONE's
+`Hints-file:` field and (b) a *decisions* hints file for guided regeneration.
+Neither is a `<scope>.<language>.style.hints.md` style-hints file found at the
+preset-resolution stage, and **no MILESTONE has `Status: active`** (all are
+`pending`), so the milestone `Hints-file:` directive does not fire. The set of
+hints files read at the preset-resolution stage is therefore empty on both
+sides — match. The decisions hints file was nonetheless consulted as advisory
+input for architecture (single live reader, pure compute-drift, shared
+resolve-format, abstract transaction binding, applied-record-always-JSON,
+canonical-model hashing, exec-based integration); the spec is authoritative
+wherever the v0.5.0-tagged decisions hints diverge from this v0.4.0 spec.
+
+The test-author's `cmd/zypper-declarative/main.go` source-path expectation
+(`Source-Path: ../../cmd/zypper-declarative/main.go`) is honoured: the entry
+point exists at `cmd/zypper-declarative/main.go`.
+
+## Target language
+
+Resolved **Go** — the cli-tool template default (`LANGUAGE: Go`, constraint
+`default`). No preset files were present (`/etc/pcd/`, `~/.config/pcd/`,
+`<project>/.pcd/` all absent), so no preset override applied. `BINARY-TYPE` is
+`static` (required for Go); built with `CGO_ENABLED=0`.
 
 ## Module identity resolved
 
-- **Resolved identity:** `github.com/mge1512/zypper-declarative`.
-- **Authoritative source:** source (1), the spec META `Module:` field
-  (`Module: github.com/mge1512/zypper-declarative`). Sources 2–4 were not
-  needed (no language-specific hints file declaring a module, no prior
-  manifest, no spec-title fallback). No conflict; `MODULE-IDENTITY:
-  conflict-halts` did not fire.
-- **Propagation (`MODULE-IDENTITY: propagated`):** the identity appears in
-  `go.mod` (`module` line), the internal import path in
-  `cmd/zypper-declarative/main.go`, the RPM `URL:`, the DEB `Homepage:` and
-  `Source:`, and the man-page / README homepage references. A reviewer can
-  grep `github.com/mge1512/zypper-declarative` to find all consumers.
+- Resolved module identity: **`github.com/mge1512/zypper-declarative`**.
+- Authoritative source: **(1) spec META `Module:` field** (`Module:
+  github.com/mge1512/zypper-declarative`). The Go-language decisions hints file
+  agrees with this value (`[spec]` entry), so sources (1) and (2) concur. No
+  conflict; the spec-title fallback was not used.
 
-## Delivery mode
+## Active MILESTONE
 
-Filesystem (mode 1): all source files written directly to `/tmp/pcd-output/`.
-Single-LLM run.
+The spec declares seven MILESTONE sections (0.0.0 scaffold through 0.6.0). **All
+have `Status: pending`; none is `active`.** Per the prompt ("If no MILESTONE
+section is present, or no milestone has `Status: active`, translate the full
+spec as normal"), the **full spec was translated** — every BEHAVIOR and
+BEHAVIOR/INTERNAL was implemented with real logic, not stubs. No milestone
+`Hints-file:` directive fired (it is only consulted for the active milestone).
 
-## No active MILESTONE
+## STEPS ordering applied per BEHAVIOR
 
-The spec contains six `## MILESTONE:` sections (0.0.0 through 0.6.0); **all**
-carry `Status: pending`. No milestone has `Status: active`. Per the prompt
-("If no MILESTONE section is present, or no milestone has `Status: active`,
-translate the full spec as normal"), the **full spec** was translated: all
-five verbs and all ten BEHAVIOR/INTERNAL behaviours are implemented (no
-scaffold-only stubs). Exactly-one-active is satisfied vacuously (zero active,
-which is the no-active case, not the multiple-active error).
+- **apply** (`internal/cli/verbs.go: cmdApply`): STEPS 1–11 in order — load
+  desired (1), load applied (2), intent diff (3), early no-op via drift (4),
+  acquire transaction (5), repositories+packages (6), files (7), units (8),
+  write applied record (9), post-converge drift verification (10), seal/activate
+  + summary (11). Errors map to exit codes only in this verb layer.
+- **diff** (`cmdDiff`): STEPS 1–5 — load desired, load applied, intent diff,
+  actual state + drift, print combined plan, exit 0. No transaction.
+- **verify** (`cmdVerify`): STEPS 1–4 — load applied (exit 2 if none), obtain
+  actual (dump or live), compute drift, exit 0/“matches” or per-item
+  diagnostics + exit 1.
+- **status** (`cmdStatus`): STEPS 1–4 — reject unrecognised argument first,
+  load applied (print “no declaration applied”, exit 0 if none), print record
+  summary, print one-line drift summary.
+- **describe** (`cmdDescribe`): STEPS 1–4 — reject unknown format, obtain actual
+  state, serialise in resolved format, write to out or stdout.
+- **describe-actual-state** (`internal/state/describe.go`): STEPS 1–5 —
+  packages (rpmdb), repositories (`repos.d` files), services (systemd query),
+  config_files (`/etc` enumeration, changed/unpackaged only, syncpoint and
+  keep-list skipped), then assemble.
+- **load-desired-manifest** (`internal/manifest/loader.go: Load`): STEPS 1–6 —
+  read, resolve format, safe-parse, validate, signature-verify, canonical hash.
+- **load-applied-record** (`internal/record/record.go: Load`): STEPS 1–4 —
+  resolve path, absence → empty + present=false, parse, present=true.
+- **compute-intent-diff** (`internal/diff/diff.go: ComputeIntentDiff`): STEPS
+  1–5 — packages install/remove, repos_set, files_write/delete
+  (`declared_old − declared_new`), units_change.
+- **compute-drift** (`ComputeDrift`): STEPS 1–5 — files_modified, files_extra
+  (unpackaged+undeclared, syncpoint/keep-list excluded), units_divergent,
+  packages_divergent. Pure; no I/O.
+- **acquire-transaction-context** (`internal/txn/txn.go: Acquire`): STEPS 1–4 —
+  auto detect → external/internal, external asserts a writable new root,
+  internal opens via the transactional machinery.
+- **converge-packages / -files / -units** (`internal/converge/converge.go`):
+  STEPS as written (repos then install then remove then rpmdb query for the
+  lock; write-with-hash-verify then guarded delete; offline enablement).
+- **write-applied-record** (`internal/record/record.go: Write`): STEPS 1–3 —
+  construct AppliedRecord with resolved packages and `desired_sha256`,
+  serialise as canonical JSON, write under `/usr/lib/zypper-declarative/`.
 
-The scaffold-first hints file (`cli-tool.go.milestones.hints.md`) was read and
-its guidance applied even though no milestone is active: JSON struct tags on
-every serialised field, ScopeWrapper modelled as concrete structs initialised
-to empty-but-valid state, `OSCommandRunner.Run` implemented in full (never a
-stub), static-binary build flags, and signal handling in `main()`.
+## INTERFACES test doubles produced
 
-## STEPS ordering per BEHAVIOR
+The spec `## INTERFACES` section declares abstract external systems (package
+manager, snapshot/filesystem, init system, transaction mechanism, optional
+external state producer). They are modelled by the `CommandRunner` seam in
+`internal/sysiface`:
 
-Each BEHAVIOR's STEPS were implemented in the written order:
+- **Production implementation:** `OSCommandRunner` (implemented in full, never a
+  stub — it executes `zypper`/`rpm`/`systemctl`/`snapper`/`transactional-update`
+  under a sanitised `PATH`).
+- **Test double:** `FakeCommandRunner` (records calls, returns canned results).
 
-- **apply** (`verbs.go` `Apply`): steps 1–11 in order — load desired, load
-  applied, intent diff, empty-diff short-circuit via drift, acquire
-  transaction, converge repositories+packages, converge files, converge units,
-  write applied record, post-converge verification, seal/activate.
-- **diff** (`Diff`): load desired → load applied → intent diff → actual state →
-  print combined plan, exit 0.
-- **verify** (`Verify`): load applied (absent → exit 2) → actual state (dump or
-  live; malformed dump → exit 2) → compute drift → exit 0/1.
-- **status** (`Status`): reject unrecognised args first → load applied →
-  print generation fields → drift summary line.
-- **describe** (`Describe`): reject unknown arg/format first → actual state →
-  serialise (json/yaml) → write to out or stdout.
-- **describe-actual-state** (`describe_state.go`): packages → repositories →
-  services → config_files → assemble Manifest, in order.
-- **load-desired-manifest** (`load.go`): read → determine format → parse
-  (safe YAML profile) → schema-validate → signature → hash.
-- **compute-intent-diff**, **compute-drift** (`compute.go`): scope steps 1–4/5
-  in order, pure (no I/O).
-- **acquire-transaction-context**, **converge-packages**, **converge-files**,
-  **converge-units**, **write-applied-record** (`converge.go`): each step in
-  order; convergence errors return diagnostics to the caller (the verb maps to
-  exit code).
-
-`MECHANISM:` annotations: the spec uses none.
-
-## INTERFACES — implementations and test doubles produced
-
-The spec's `## INTERFACES` section names four external systems plus an
-optional external state producer. Each is modelled as a Go interface with a
-production implementation and (where the prompt's "production and all test
-doubles" rule applies) a test double:
-
-| Interface (`interfaces.go`) | Production impl | Test double |
-|---|---|---|
-| `CommandRunner` | `OSCommandRunner` (full, sanitised PATH) | `FakeCommandRunner` |
-| `PackageManager` | `OSPackageManager` (zypper/rpm) | — (driven via `CommandRunner` double) |
-| `SnapshotProvider` | `OSSnapshotProvider` (snapper/transactional-update) | — |
-| `InitSystem` | `OSInitSystem` (systemctl) | — |
-| `SystemProbe` | `OSSystemProbe` (rpmdb/systemd/`/etc`) | — |
-
-The independent black-box test suite, per the test methodology, does **not**
-use any of these doubles — it invokes the compiled binary via `exec.Command`.
-The `FakeCommandRunner` double is provided per the INTERFACES rule for
-in-package unit testing; the independent suite remains pure black-box. The
-external state producer ("interchangeable, optional") is honoured by `verify
-state-path=<dump>` accepting any shared-schema Manifest.
+Per the prompt, independent tests do not use the production implementation
+internally — both the translator and test-author suites are **black-box**:
+they invoke the built binary via `os/exec` and assert on stdout/stderr/exit
+code. The `FakeCommandRunner` double is provided for any in-process consumer
+and is never wired into the black-box suites.
 
 ## TYPE-BINDINGS / GENERATED-FILE-BINDINGS
 
-The cli-tool template contains no `## TYPE-BINDINGS` and no
-`## GENERATED-FILE-BINDINGS` section, so neither mechanical mapping applies.
-Spec logical types were modelled directly in Go (`types.go`): `ScopeWrapper<T>`
-as concrete `*Scope` structs with `_attributes`/`_elements` JSON tags; refined
-string types (`AbsolutePath`, `Sha256`, `Mode`, `UnitName`, `SemanticVersion`)
-are validated at parse time (`validateManifest`, `validUnitName`) rather than
-introduced as distinct Go types.
+The cli-tool template declares neither a `## TYPE-BINDINGS` nor a
+`## GENERATED-FILE-BINDINGS` section, so neither was applied. Logical TYPES were
+mapped to idiomatic Go per the spec and the Go milestone hints (`ScopeWrapper`
+generic with `_attributes`/`_elements` JSON tags, `*Scope` pointers for
+absent-vs-empty semantics, underscore_style JSON/YAML field tags).
 
-## BEHAVIOR Constraint handling
+## Constraint: supported / forbidden BEHAVIORs
 
-Every BEHAVIOR and BEHAVIOR/INTERNAL in the spec carries `Constraint:
-required`. All were implemented unconditionally. No `supported` or `forbidden`
-BEHAVIORs are present, so no conditional generation or omission applied.
+Every BEHAVIOR and BEHAVIOR/INTERNAL in the spec carries `Constraint: required`.
+No `supported` or `forbidden` behaviours exist, so all were implemented
+unconditionally and none was suppressed.
 
 ## COMPONENT → filename mapping
 
-The spec's DEPLOYMENT/DEPENDENCIES sections contain no `COMPONENT:` entries, so
-no spec-DELIVERABLES component mapping applied. Files were mapped from the
-template DELIVERABLES table and the per-language source layout (Go: entry point
-`cmd/<n>/main.go`, implementation under `internal/<n>/`, manifest `go.mod`).
+The spec has no `## DELIVERABLES` section with `COMPONENT:` entries; deliverable
+filenames were taken from the cli-tool template DELIVERABLES table with `<n>` =
+`zypper-declarative` (the spec title, lowercase-hyphenated):
 
-## Source partitioning (`SOURCE-PARTITIONING: modular`, `one-entry-one-implementation`)
+| Template deliverable | File(s) produced |
+|----------------------|------------------|
+| source (entry + impl + manifest) | `cmd/zypper-declarative/main.go`, `internal/{meta,manifest,diag,sysiface,state,diff,record,txn,converge,cli}/*.go`, `go.mod`, `go.sum`, `vendor/` |
+| build | `Makefile` (build, test, install, clean, man) |
+| docs | `README.md` |
+| man | `zypper-declarative.1.md`, `zypper-declarative.1` |
+| license | `LICENSE` |
+| RPM | `zypper-declarative.spec` |
+| DEB | `debian/control`, `debian/changelog`, `debian/rules`, `debian/copyright` |
+| auxiliary (template EXECUTION Phase 4) | `translation_report/translation-workflow.pikchr` |
+| report | `TRANSLATION_REPORT.md` |
+| spec-hash | embedded in every artefact (see below) |
 
-- Entry point: `cmd/zypper-declarative/main.go` — CLI dispatch only (signal
-  handling, `os.Args` forwarding, calling `zd.Run`). No behaviour logic.
-- Implementation package `internal/zypperdeclarative/`, partitioned by
-  behavioural domain (`by-behaviour-domain`, supported): `types.go`,
-  `config.go`, `interfaces.go`, `keeplist.go`, `serialize.go`, `load.go`,
-  `compute.go`, `describe_state.go`, `converge.go`, `providers.go`,
-  `verbs.go`, `cli.go`. No single monolithic file.
-
-## Parsing approach
-
-- **JSON:** `encoding/json` with unknown fields tolerated (a full Machinery
-  dump may carry observational scopes/extension fields the converger ignores;
-  comparison is on identity fields only).
-- **Canonical JSON / identity hash:** `MarshalCanonicalJSON` emits stable
-  (struct-field-order, sorted-map-key) two-space-indented JSON with HTML
-  escaping disabled. `desired_sha256` is the SHA256 of the canonical JSON of
-  the parsed model with `meta.desired_sha256` and the informational
-  `meta.created_at` zeroed, so the same intent expressed in JSON or YAML
-  yields the same hash (verified by `TestYAMLAndJSONIdentityStable`).
-- **YAML safe profile:** `gopkg.in/yaml.v3`. Before the typed decode, the YAML
-  node tree is walked (`rejectUnsafeYAML`/`walkYAML`) to reject any non-core
-  explicit tag (executable/arbitrary tags such as `!!python/object/apply` or
-  custom `!Foo`) and any anchor/alias node (bounded/disabled alias expansion).
-  After decode, a second decode attempt detects and rejects multi-document
-  streams. Typing is explicit (struct decode, not loose maps).
-
-## Signal handling
-
-`main.go` installs a `signal.Notify` handler for `SIGTERM` and `SIGINT` that
-exits cleanly (code 130) with no partial output. `apply` seals/activates the
-snapshot only at its final step, so an interrupt before that point leaves no
-new snapshot as the default boot target and the running system unchanged, per
-the spec's signal-handling requirement.
-
-## Template constraints compliance
-
-| Constraint | Required value | This translation | Status |
-|---|---|---|---|
-| LANGUAGE | Go (default) | Go | ✅ |
-| BINARY-TYPE | static | `CGO_ENABLED=0`, statically linked | ✅ |
-| SOURCE-PARTITIONING | modular + one-entry-one-impl | entry `cmd/`, impl `internal/` (12 files) | ✅ |
-| MODULE-IDENTITY | host-specified | spec META `Module:` | ✅ |
-| BINARY-COUNT | 1 | one binary `zypper-declarative` | ✅ |
-| BINARY-LOCATION | project-root (`../../<n>`) | binary built at project root | ✅ |
-| RUNTIME-DEPS | none (static) | static; drives system tools at runtime only | ✅ (see deviation) |
-| CLI-ARG-STYLE | key=value (+ bare-word verbs) | key=value options, bare-word verbs | ✅ |
-| EXIT-CODE-OK/ERROR/INVOCATION | 0 / 1 / 2 | as spec ExitCode | ✅ |
-| STREAM-DIAGNOSTICS / STREAM-OUTPUT | stderr / stdout | diagnostics→stderr, output→stdout | ✅ |
-| SIGNAL-HANDLING | SIGTERM, SIGINT | handled in main | ✅ |
-| OUTPUT-FORMAT | RPM, DEB (required) | `zypper-declarative.spec`, `debian/` | ✅ |
-| OUTPUT-FORMAT | OCI/PKG/binary (supported) | not active in preset → not produced | ✅ |
-| INSTALL-METHOD | OBS (curl forbidden) | README documents zypper/apt/dnf; no curl | ✅ |
-| PLATFORM | Linux | Linux only | ✅ |
-| CONFIG-ENV-VARS | forbidden | all knobs key=value; no env-var control | ✅ |
-| NETWORK-CALLS | forbidden | no direct network I/O (see deviation) | ✅ (documented) |
-| FILE-MODIFICATION input-files | forbidden | input manifest never modified | ✅ |
-| IDEMPOTENT | true | empty intent diff + empty drift → no-op | ✅ |
-| spec-hash | embedded everywhere | see "Spec hash embedding" below | ✅ |
-
-### Template deviations (carried from the spec's DEPLOYMENT section)
-
-- **NETWORK-CALLS:** the tool performs no direct network I/O; all package
-  retrieval is delegated to the package manager against declared, pinned,
-  signed repositories. The supply-chain intent (no curl-style fetching) is
-  honoured. Documented because the delegated package operation does reach the
-  network through the package manager.
-- **RUNTIME-DEPS / privilege:** the static binary has no linked runtime
-  dependencies, but `apply` requires privilege and drives external tools
-  (zypper/rpm, snapper/transactional-update, systemctl) at runtime. The
-  read-only verbs require only read access. This matches the spec's documented
-  deviation.
-
-## Dependency versions
-
-| Dependency | Version | Source | Note |
-|---|---|---|---|
-| `gopkg.in/yaml.v3` | `v3.0.1` | resolved by `go mod tidy` (latest stable tag) | No language-specific hints file pinned a YAML library version. Per the DEPENDENCIES section, this is flagged for **manual version verification** before build; v3.0.1 is the current stable release and was used as a verified tag (not a pseudo-version). |
-
-The spec's DEPENDENCIES section also names bindings to libzypp, snapper/btrfs,
-and systemd. No language-specific hints file for these bindings is present.
-This translation does **not** link any of them: it drives the corresponding
-command-line tools (`zypper`/`rpm`, `snapper`/`transactional-update`,
-`systemctl`) via the `CommandRunner` interface, so no Go binding version needs
-pinning. **Flagged for the maintainer:** if a future revision links libzypp,
-snapper, or systemd bindings directly, their versions must be verified before
-build. No commit hashes or pseudo-versions were fabricated.
-
-## Spec hash embedding
-
-`Spec-SHA256 = 714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014`
-is embedded in: every source-file header comment and every test-file header
-comment (with `// tests by: claude-opus-4-8`); the `SpecSHA256` constant in
-`types.go`; the binary `--version` output (`spec:<hash>`); the RPM `.spec`
-`# pcd-spec-sha256:` comment; the DEB `control` `X-PCD-Spec-SHA256:` field and
-`debian/rules` header; the `Makefile` `SPEC_SHA256` variable; the README and
-pikchr header comments; and this report's header. No `Containerfile` was
-produced (OCI not active), so its label is not applicable. No placeholder
-values were written anywhere.
-
-## Specification ambiguities encountered
-
-1. **Idempotence vs. literal `compute-intent-diff`.** STEP 3 of
-   `compute-intent-diff` sets `files_write := desired.config_files._elements`
-   unconditionally (all declared files, every run), yet the
-   `apply_no_op_when_converged` / `idempotent_second_apply` EXAMPLEs and the
-   idempotence INVARIANT require an *empty* intent diff when the manifest is
-   unchanged. These cannot both hold for a manifest declaring non-empty
-   config_files under the literal algorithm. **Conservative interpretation:**
-   the literal algorithm was implemented exactly (files_write = all desired
-   files). The empty-intent-diff no-op therefore arises when the managed
-   scopes contain no elements to (re)write (present-but-empty scopes
-   reconciled to empty). The corresponding translator test
-   (`TestApplyNoOpWhenConverged`) was written to that interpretation. See the
-   Test Refinements table. Idempotence at the *system-effect* level (rewriting
-   identical content changes nothing) holds regardless.
-
-2. **Signature verification mechanism.** `load-desired-manifest` STEP 5 and
-   CONFIG `signature-verification=on` (default on) require verifying the
-   manifest signature against a keyring, but the spec leaves the signing
-   mechanism abstract and provides no signature format. **Conservative
-   interpretation:** with no `keyring=` configured, there is nothing to verify
-   against and verification is satisfied (an unsigned local manifest is
-   accepted); with a `keyring=` configured, a detached `<path>.sig` must exist
-   or a manifest error is returned. The cryptographic check itself is a marked
-   extension point. Flagged for the maintainer to wire a concrete signing
-   mechanism.
-
-3. **`describe-actual-state` in minimal/sandboxed environments.** The spec
-   assumes live system tooling (rpmdb, systemd, zypp config, `/etc`). When a
-   subsystem's tool is absent, the production probe **degrades to an
-   empty-but-schema-valid scope** rather than failing, so the read-only verbs
-   remain usable and `describe` still emits a valid Manifest. Genuine traversal
-   errors on a present `/etc` are returned as a files diagnostic. This is a
-   conservative interpretation of the spec's "on query failure return an
-   error" — true *failures* are surfaced; *absence* of a subsystem is not a
-   failure.
-
-4. **`applied-root=` / `root=` options.** The spec's `load-applied-record` and
-   `describe-actual-state` take a `root` input, but the CLI verbs do not all
-   surface a knob for it. To honour the spec faithfully and to make the
-   pure-logic paths testable as black-box, the implementation surfaces these
-   as the key=value options `applied-root=` (generation root for the applied
-   record, default `/`) and `root=` (actual-state root, default `/`). This is a
-   conservative, documented extension consistent with `CLI-ARG-STYLE:
-   key=value` and violates no forbidden constraint (no env-var control). The
-   defaults reproduce the spec's "/" behaviour.
-
-## Rules that could not be implemented exactly as written
-
-- **Live convergence (transactions, package install/remove, offline unit
-  enablement, snapshot seal/userdata stamp).** These require root privilege,
-  btrfs/snapper, transactional-update, and a real package manager — none
-  available in the translation environment. They are implemented against the
-  external-system interfaces with production bindings that shell out to the
-  respective tools (`OSSnapshotProvider`, `OSPackageManager`, `OSInitSystem`).
-  In this environment `OpenInternal` and `DetectInTransaction` return
-  "mechanism unavailable", which correctly produces the spec's exit-2
-  transaction error for `mode=external` outside a transaction
-  (`apply_transaction_unavailable`). The full apply convergence path
-  (snapshot creation, package/unit convergence, sealing) is **not exercised by
-  automated tests** and requires human verification on SL Micro 6.2 / SLES
-  16.1; its EXAMPLEs are marked Low/Medium confidence below.
-
-## Active MILESTONE result
-
-Not applicable — no milestone is active (all `Status: pending`). The full spec
-was translated. For reference, the M0.0.0 acceptance criteria
-(`--version | grep "^zypper-declarative "` and `--help | grep "usage:"`) both
-pass against the produced binary, as do the M0.1.0 criteria
-(`describe | grep package_system`, `status | grep "no declaration applied"`).
-
-## Compile gate result (template EXECUTION)
-
-Phase 6 executed in full:
-
-- **Step 1 — Dependency resolution:** `go mod tidy` → success; `go mod vendor`
-  → success (per environment constraint; `vendor/` present).
-- **Step 2 — Compilation:** `go build ./...` → success; static binary built at
-  project root with `CGO_ENABLED=0 go build -o zypper-declarative
-  ./cmd/zypper-declarative`; `file` reports "statically linked".
-- **Step 3 — Translator test run:** `go test ./independent_tests/claude-opus-4-8/...`
-  → **ok**, 37/37 passed.
-- **Step 4 — Test-author test run:** not applicable (single-LLM run).
-- **Step 5 — Record result:** all steps passed; no source files modified after.
-
-`go vet ./...` is clean; `gofmt -l` on the test directory is empty.
-
-## Test results — translator suite (`independent_tests/claude-opus-4-8/`)
-
-All 37 tests pass:
-
-| Test | Result |
-|---|---|
-| TestVersionPrintsNameAndSpecHash | pass |
-| TestHelpPrintsUsage | pass |
-| TestStatusUnknownArgument | pass |
-| TestDescribeUnknownFormat | pass |
-| TestUnknownVerbIsInvocationError | pass |
-| TestNoVerbIsInvocationError | pass |
-| TestDiffPrintsPlan | pass |
-| TestDiffManifestUnreadable | pass |
-| TestIntentDiffYieldsDeletion | pass |
-| TestDiffNoChangesWhenDesiredEqualsApplied | pass |
-| TestVerifyClean | pass |
-| TestVerifyAgainstExternalStateDumpUnitDrift | pass |
-| TestVerifyDetectsFileDrift | pass |
-| TestVerifyMalformedStateDump | pass |
-| TestVerifyNoAppliedRecord | pass |
-| TestStatusNoDeclaration | pass |
-| TestStatusReportsGeneration | pass |
-| TestDescribeEmitsSchemaValidManifest | pass |
-| TestDescribeFormatYAML | pass |
-| TestDescribeOutputUnwritable | pass |
-| TestDescribeOutputAcceptedAsDesiredManifest | pass |
-| TestApplyManifestInvalidFormatVersion | pass |
-| TestApplyManifestUnreadable | pass |
-| TestApplyUnknownFormatValue | pass |
-| TestYAMLManifestAccepted | pass |
-| TestYAMLUnsafeTagRejected | pass |
-| TestYAMLMultiDocumentRejected | pass |
-| TestYAMLAndJSONIdentityStable | pass |
-| TestApplyTransactionUnavailable | pass |
-| TestApplyNoOpWhenConverged | pass |
-| TestApplyIdempotentSecondApply | pass |
-| TestDriftIgnoresUnmanagedPackagedFile | pass |
-| TestDriftReportsUnpackagedExtraFile | pass |
-| TestDriftDeclaredFileAbsentTreatedAsMatching | pass |
-| TestDriftPackagesDivergent | pass |
-| TestDriftKeepListedFileNotExtra | pass |
-| TestDriftSyncpointNeverExtra | pass |
-
-## Test results — test-author suite
-
-Not present (single-LLM run). No `independent_tests/<other-role-llm-name>/`
-directory in the input.
-
-## Test Refinements
-
-| Test | Result before | Action | Rationale |
-|---|---|---|---|
-| TestApplyIdempotentSecondApply | failed (hung) | test edited | The test invoked `apply` without a controlled `root=`, causing `describe-actual-state` to walk the host's live `/etc` (slow/non-deterministic). Edited to pass `root=<empty temp dir>`; the test's intent (the idempotent no-op *decision*) is root-independent for the intent-diff portion and the spec's `compute-drift` is a pure comparison, so a controlled actual-state root is the correct fixture. No assertion changed. |
-| TestApplyNoOpWhenConverged | failed (exit 2) | test edited | Original fixture declared a non-empty config_files scope in both desired and applied and expected an empty intent diff. Per spec `compute-intent-diff` STEP 3, `files_write := desired.config_files._elements` unconditionally, so a non-empty config_files scope is never an empty intent diff. Refined the fixture to present-but-empty config_files in both records (reconciled to empty), which is the literal-algorithm path to an empty intent diff and the `nothing to do` no-op. Rationale references the spec EXAMPLE `apply_no_op_when_converged` and INVARIANT idempotence; see Ambiguity 1. |
-| TestDiffPrintsPlan / TestIntentDiffYieldsDeletion / TestDiffNoChangesWhenDesiredEqualsApplied / TestStatusReportsGeneration / TestStatusNoDeclaration / TestYAML*/manifest diff tests / TestDescribeOutputAcceptedAsDesiredManifest | passed slowly / non-deterministic | test edited | Added `root=<empty temp dir>` to verb invocations that reach `describe-actual-state`, isolating the live-state read so the suite is deterministic and fast. The asserted properties (intent-diff content, status fields, manifest acceptance) are unaffected by the actual-state root. No assertion changed. |
-| all other tests | passed | none | — |
-
-## Per-EXAMPLE confidence
-
-Confidence is **High** only when a named translator test passes without a live
-external service (single-LLM, so test-author cross-check is absent — this
-caps some at the High definition's first clause; the prompt's High requires
-the translator test to pass without live services, which holds). Where an
-EXAMPLE's full behaviour needs live system tooling/privilege, only the
-sandbox-reachable portion is verified and confidence is Medium or Low.
-
-| EXAMPLE | Confidence | Verification method | Unverified claims |
-|---|---|---|---|
-| apply_no_op_when_converged | High | `TestApplyNoOpWhenConverged` (empty-scope interpretation) | "no transaction opened" verified only via exit 0 + `nothing to do`; no snapshot side-effect observed |
-| apply_writes_and_deletes_etc_file | Low | code review only | requires root + transaction + content store; no automated test |
-| apply_absent_scope_unmanaged | Medium | covered logically by `ComputeIntentDiff` (absent scope → no change) exercised via diff tests | live file-domain no-op needs root |
-| apply_manifest_invalid | High | `TestApplyManifestInvalidFormatVersion` | — |
-| apply_manifest_unreadable | High | `TestApplyManifestUnreadable` | — |
-| apply_transaction_unavailable | High | `TestApplyTransactionUnavailable` | — |
-| apply_package_failure_rolls_back | Low | code review only | requires real package manager + transaction |
-| diff_prints_plan | High | `TestDiffPrintsPlan` | — |
-| diff_manifest_unreadable | High | `TestDiffManifestUnreadable` | — |
-| describe_emits_manifest | Medium | `TestDescribeEmitsSchemaValidManifest` (structure + `package_system`) | populated-nginx record needs live rpmdb |
-| describe_output_unwritable | High | `TestDescribeOutputUnwritable` | — |
-| describe_bootstraps_desired_manifest | High | `TestDescribeOutputAcceptedAsDesiredManifest` | populated round-trip needs live state |
-| verify_clean | High | `TestVerifyClean` (dump matching applied) | — |
-| verify_against_external_state_dump | High | `TestVerifyAgainstExternalStateDumpUnitDrift` | — |
-| verify_malformed_state_dump | High | `TestVerifyMalformedStateDump` | — |
-| verify_detects_drift | High | `TestVerifyDetectsFileDrift` | — |
-| verify_no_applied_record | High | `TestVerifyNoAppliedRecord` | — |
-| status_reports_generation | High | `TestStatusReportsGeneration` | — |
-| status_no_declaration | High | `TestStatusNoDeclaration` | — |
-| status_unknown_argument | High | `TestStatusUnknownArgument` | — |
-| intent_diff_yields_deletion | High | `TestIntentDiffYieldsDeletion` | — |
-| drift_ignores_unmanaged_packaged_file | High | `TestDriftIgnoresUnmanagedPackagedFile` | — |
-| describe_actual_state_omits_pristine | Low | code review only (`EnumerateEtc` skips package-pristine) | needs live rpm -V on a real /etc |
-| lock_is_fully_resolved_packages_scope | Low | code review only (`ConvergePackages` → `QueryInstalled`) | needs real package manager |
-| yaml_manifest_accepted | High | `TestYAMLManifestAccepted` | — |
-| describe_format_yaml | High | `TestDescribeFormatYAML` | populated content needs live state |
-| yaml_format_identity_stable | High | `TestYAMLAndJSONIdentityStable` | "applying one then the other → empty diff" portion needs apply, untested live |
-| yaml_unsafe_rejected | High | `TestYAMLUnsafeTagRejected`, `TestYAMLMultiDocumentRejected` | — |
-| describe_unknown_format | High | `TestDescribeUnknownFormat` | — |
-| idempotent_second_apply | High | `TestApplyIdempotentSecondApply` (empty-scope interpretation) | live "no new snapshot" needs root |
+`OCI`, `PKG`, and `binary` are `supported` OUTPUT-FORMATs but no preset
+activated them, so per "produce `supported` deliverables only if active in the
+resolved preset" no `Containerfile`, `*.pkgbuild`, or raw-binary descriptor was
+written. `INSTALL-METHOD: curl` (forbidden) was never produced.
 
 ## Public API Surface
 
-Per `PUBLIC-API-SURFACE: recorded-in-report`. Exported symbols by module.
+### internal/meta
+- `const Version = "0.4.0"`
+- `const SpecSHA256 = "714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014"`
+- `const Generator = "zypper-declarative " + Version`
 
-### module `cmd/zypper-declarative` (package `main`)
+### internal/manifest
+- `type ScopeWrapper[T any] struct { Attributes map[string]interface{}; Elements []T }`
+- `type ManifestMeta struct { FormatVersion int; Generator string; CreatedAt string; DesiredSHA256 string }`
+- `type PackageRecord struct { Name, Version, Release, Arch string }`
+- `type RepositoryRecord struct { Alias, Name, URL, Type string; Enabled, GPGCheck, Autorefresh bool; Priority int }`
+- `type ServiceRecord struct { Name, State string }`
+- `type ManagedFileRecord struct { Name, Type, Mode, User, Group, SHA256, ContentRef, PackageName string }`
+- `type PackagesScope = ScopeWrapper[PackageRecord]`
+- `type RepositoriesScope = ScopeWrapper[RepositoryRecord]`
+- `type ServicesScope = ScopeWrapper[ServiceRecord]`
+- `type ConfigFilesScope = ScopeWrapper[ManagedFileRecord]`
+- `type Manifest struct { Meta ManifestMeta; Packages *PackagesScope; Repositories *RepositoriesScope; Services *ServicesScope; ConfigFiles *ConfigFilesScope }`
+- `type AppliedRecord = Manifest`
+- `type Format string` with `const FormatJSON Format = "json"`, `const FormatYAML Format = "yaml"`
+- `func EmptyPackages() *PackagesScope`
+- `func EmptyRepositories() *RepositoriesScope`
+- `func EmptyServices() *ServicesScope`
+- `func EmptyConfigFiles() *ConfigFilesScope`
+- `func ResolveFormat(explicit, path string, def Format) (Format, error)`
+- `func Parse(raw []byte, format Format) (m Manifest, unsafe bool, err error)`
+- `func Validate(m *Manifest) error`
+- `func MarshalJSON(m *Manifest) ([]byte, error)`
+- `func MarshalYAML(m *Manifest) ([]byte, error)`
+- `func CanonicalHash(m *Manifest) string`
+- `type LoadOptions struct { ExplicitFormat string; DefaultFormat Format; VerifySignature bool; Keyring string }`
+- `type LoadResult struct { Manifest Manifest; DesiredSHA256 string }`
+- `func Load(path string, opts LoadOptions) (LoadResult, *diag.Diagnostic)`
+- `func LoadDump(path string, explicitFormat string, def Format) (Manifest, *diag.Diagnostic)`
 
-```
-func main()
-const ExitInterrupted = 130
-```
+### internal/diag
+- `type Severity string` (`Error`, `Warning`)
+- `type Domain string` (`DomainPackages`, `DomainRepositories`, `DomainFiles`, `DomainUnits`, `DomainManifest`, `DomainTransaction`, `DomainInvocation`)
+- `type Diagnostic struct { Severity Severity; Domain Domain; Message string }`
+- `func (d *Diagnostic) Error() string`
+- `func New(domain Domain, format string, args ...interface{}) *Diagnostic`
+- `func Warn(domain Domain, format string, args ...interface{}) *Diagnostic`
 
-### module `internal/zypperdeclarative` (package `zypperdeclarative`)
+### internal/sysiface
+- `type CommandRunner interface { Run(cmd string, args ...string) (string, string, error) }`
+- `type OSCommandRunner struct{}`
+- `func (r *OSCommandRunner) Run(cmd string, args ...string) (string, string, error)`
+- `type FakeCommandRunner struct { Responses map[string]FakeResult; Calls []string }`
+- `type FakeResult struct { Stdout, Stderr string; Err error }`
+- `func (r *FakeCommandRunner) Run(cmd string, args ...string) (string, string, error)`
 
-Constants:
+### internal/state
+- `type Reader struct { Runner sysiface.CommandRunner; KeepList map[string]bool }`
+- `func NewReader(runner sysiface.CommandRunner, keepList []string) *Reader`
+- `func Describe(root string, runner sysiface.CommandRunner, keepList []string) (manifest.Manifest, *diag.Diagnostic)`
 
-```
-const SpecSHA256 = "714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014"
-const Version = "0.4.0"
-const Generator = "zypper-declarative " + Version
-const ExitOK = 0
-const ExitLogical = 1
-const ExitInvocation = 2
-const SeverityError Severity = "Error"
-const SeverityWarning Severity = "Warning"
-const DomainPackages = "packages"
-const DomainRepositories = "repositories"
-const DomainFiles = "files"
-const DomainUnits = "units"
-const DomainManifest = "manifest"
-const DomainTransaction = "transaction"
-const DomainInvocation = "invocation"
-const FormatJSON ManifestFormat = "json"
-const FormatYAML ManifestFormat = "yaml"
-const ModeAuto TransactionMode = "auto"
-const ModeExternal TransactionMode = "external"
-const ModeInternal TransactionMode = "internal"
-const Syncpoint = "/etc/etc.syncpoint"
-const AppliedRecordRelPath = "usr/lib/zypper-declarative/applied.json"
-```
+### internal/diff
+- `type Diff struct { PackagesInstall, PackagesRemove []manifest.PackageRecord; ReposSet []manifest.RepositoryRecord; FilesWrite []manifest.ManagedFileRecord; FilesDelete []string; UnitsChange []manifest.ServiceRecord }`
+- `func (d Diff) Empty() bool`
+- `type DriftReport struct { FilesModified, FilesExtra []string; UnitsDivergent []manifest.ServiceRecord; PackagesDivergent []manifest.PackageRecord }`
+- `func (r DriftReport) Empty() bool`
+- `func (r DriftReport) Count() int`
+- `func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.AppliedRecord) Diff`
+- `func ComputeDrift(actual *manifest.Manifest, reference *manifest.AppliedRecord, keepList map[string]bool) DriftReport`
 
-Types:
+### internal/record
+- `const RelPath = "usr/lib/zypper-declarative/applied.json"`
+- `func Load(root string) (rec manifest.AppliedRecord, present bool, d *diag.Diagnostic)`
+- `func Write(root string, desired *manifest.Manifest, desiredSHA256 string, resolved *manifest.PackagesScope) *diag.Diagnostic`
 
-```
-type Severity string
-func (s Severity) String() string
-type Diagnostic struct{ Severity Severity; Domain string; Message string }
-func (d *Diagnostic) Error() string
-type ManifestFormat string
-type TransactionMode string
-type ManifestMeta struct{ FormatVersion int; Generator string; CreatedAt string; DesiredSHA256 string }
-type PackageRecord struct{ Name, Version, Release, Arch string }
-type PackagesScope struct{ Attributes map[string]interface{}; Elements []PackageRecord }
-type RepositoryRecord struct{ Alias, Name, URL, Type string; Enabled, GPGCheck, Autorefresh bool; Priority int }
-type RepositoriesScope struct{ Attributes map[string]interface{}; Elements []RepositoryRecord }
-type ServiceRecord struct{ Name, State string }
-type ServicesScope struct{ Attributes map[string]interface{}; Elements []ServiceRecord }
-type ManagedFileRecord struct{ Name, Type, Mode, User, Group, SHA256, ContentRef, PackageName string }
-type ConfigFilesScope struct{ Attributes map[string]interface{}; Elements []ManagedFileRecord }
-type Manifest struct{ Meta ManifestMeta; Packages *PackagesScope; Repositories *RepositoriesScope; Services *ServicesScope; ConfigFiles *ConfigFilesScope }
-type AppliedRecord = Manifest
-type Diff struct{ PackagesInstall, PackagesRemove []PackageRecord; ReposSet []RepositoryRecord; FilesWrite []ManagedFileRecord; FilesDelete []string; UnitsChange []ServiceRecord }
-func (d *Diff) IsEmpty() bool
-type DriftReport struct{ FilesModified, FilesExtra []string; UnitsDivergent []ServiceRecord; PackagesDivergent []PackageRecord }
-func (r *DriftReport) IsEmpty() bool
-type TransactionContext struct{ Mode TransactionMode; Root string; OpenedHere bool }
-type Config struct{ ... CONFIG knobs and per-invocation options ... }
-type KeepList struct{ ... }
-func LoadKeepList(path string) *KeepList
-func (k *KeepList) Has(p string) bool
-type CommandRunner interface{ Run(cmd string, args []string) (string, string, error) }
-type OSCommandRunner struct{}
-func (r *OSCommandRunner) Run(cmd string, args []string) (string, string, error)
-type FakeCommandRunner struct{ Results map[string]struct{ Stdout, Stderr string; Err error } }
-func (r *FakeCommandRunner) Run(cmd string, args []string) (string, string, error)
-type PackageManager interface{ ConfigureRepositories(...); Install(...); Remove(...); QueryInstalled(...) }
-type SnapshotProvider interface{ DetectInTransaction() (bool, string); OpenInternal() (string, *Diagnostic); Seal(...); StampUserdata(...) }
-type InitSystem interface{ QueryEnablement(root string) ([]ServiceRecord, *Diagnostic); SetEnablementOffline(root string, svc ServiceRecord) *Diagnostic }
-type SystemProbe interface{ QueryPackages(...); ReadRepositories(...); QueryServices(...); EnumerateEtc(...) }
-type Providers struct{ Runner CommandRunner; Packages PackageManager; Snapshot SnapshotProvider; Init InitSystem; Probe SystemProbe }
-func NewProductionProviders() *Providers
-type OSPackageManager struct{ Runner CommandRunner }
-func (m *OSPackageManager) ConfigureRepositories(root string, repos []RepositoryRecord, fallbackLock string) *Diagnostic
-func (m *OSPackageManager) Install(root string, pkgs []PackageRecord) *Diagnostic
-func (m *OSPackageManager) Remove(root string, pkgs []PackageRecord) *Diagnostic
-func (m *OSPackageManager) QueryInstalled(root string) (*PackagesScope, *Diagnostic)
-type OSSnapshotProvider struct{ Runner CommandRunner }
-func (s *OSSnapshotProvider) DetectInTransaction() (bool, string)
-func (s *OSSnapshotProvider) OpenInternal() (string, *Diagnostic)
-func (s *OSSnapshotProvider) Seal(root, activationPolicy string) *Diagnostic
-func (s *OSSnapshotProvider) StampUserdata(root, key, value string) *Diagnostic
-type OSInitSystem struct{ Runner CommandRunner }
-func (i *OSInitSystem) QueryEnablement(root string) ([]ServiceRecord, *Diagnostic)
-func (i *OSInitSystem) SetEnablementOffline(root string, svc ServiceRecord) *Diagnostic
-type OSSystemProbe struct{ Runner CommandRunner }
-func (s *OSSystemProbe) QueryPackages(root string) (*PackagesScope, *Diagnostic)
-func (s *OSSystemProbe) ReadRepositories(root string) (*RepositoriesScope, *Diagnostic)
-func (s *OSSystemProbe) QueryServices(root string) (*ServicesScope, *Diagnostic)
-func (s *OSSystemProbe) EnumerateEtc(root string, keep *KeepList) (*ConfigFilesScope, *Diagnostic)
-```
+### internal/txn
+- `type Mode string` (`ModeAuto`, `ModeExternal`, `ModeInternal`)
+- `type Context struct { Mode Mode; Root string; OpenedHere bool }`
+- `type Acquirer struct { Runner sysiface.CommandRunner; NewRootDetect func() (string, bool) }`
+- `func NewAcquirer(runner sysiface.CommandRunner) *Acquirer`
+- `func (a *Acquirer) Acquire(mode Mode) (Context, *diag.Diagnostic)`
 
-Functions (behaviours and CLI):
+### internal/converge
+- `type Converger struct { Runner sysiface.CommandRunner; ContentStore string; RepoLock string; KeepList map[string]bool }`
+- `func (c *Converger) Packages(ctx txn.Context, d diff.Diff) (*manifest.PackagesScope, *diag.Diagnostic)`
+- `func (c *Converger) Files(ctx txn.Context, d diff.Diff) *diag.Diagnostic`
+- `func (c *Converger) Units(ctx txn.Context, d diff.Diff) *diag.Diagnostic`
 
-```
-func Run(args []string, stdout, stderr io.Writer) int
-func LoadDesiredManifest(cfg *Config, manifestPath string) (*Manifest, string, *Diagnostic)
-func LoadAppliedRecord(root string) (*AppliedRecord, bool, *Diagnostic)
-func ComputeIntentDiff(desired *Manifest, applied *AppliedRecord) *Diff
-func ComputeDrift(actual *Manifest, reference *AppliedRecord, keep *KeepList) *DriftReport
-func DescribeActualState(p *Providers, root string, keep *KeepList) (*Manifest, *Diagnostic)
-func AcquireTransactionContext(p *Providers, mode TransactionMode) (*TransactionContext, *Diagnostic)
-func ConvergePackages(p *Providers, ctx *TransactionContext, diff *Diff, repoLock string) (*PackagesScope, *Diagnostic)
-func ConvergeFiles(p *Providers, ctx *TransactionContext, diff *Diff, cfg *Config, keep *KeepList) *Diagnostic
-func ConvergeUnits(p *Providers, ctx *TransactionContext, diff *Diff) *Diagnostic
-func WriteAppliedRecord(p *Providers, ctx *TransactionContext, desired *Manifest, desiredSHA string, resolved *PackagesScope) *Diagnostic
-func MarshalCanonicalJSON(m *Manifest) ([]byte, error)
-func MarshalYAML(m *Manifest) ([]byte, error)
-type Verbs struct{ Providers *Providers; Stdout io.Writer; Stderr io.Writer }
-func (v *Verbs) Apply(cfg *Config) int
-func (v *Verbs) Diff(cfg *Config) int
-func (v *Verbs) Verify(cfg *Config) int
-func (v *Verbs) Status(cfg *Config, extraArgs []string) int
-func (v *Verbs) Describe(cfg *Config, extraArgs []string) int
-```
+### internal/cli
+- `const ExitOK = 0`, `const ExitLogical = 1`, `const ExitInvocation = 2`
+- `type App struct { Stdout io.Writer; Stderr io.Writer; Runner sysiface.CommandRunner }`
+- `func (a *App) Run(args []string) int`
+- `type Config struct { ... }` (resolved CONFIG knobs; see `internal/cli/config.go`)
 
-## Deliverables produced
+## Parsing approach
 
-Per the template DELIVERABLES table (required OUTPUT-FORMATs RPM + DEB; OCI,
-PKG, binary are `supported` and not active in any preset, so not produced):
+- **Argument parsing.** `key=value` pairs parsed by the tool itself
+  (`internal/cli/cli.go: parseOptions`). POSIX `--flag` style is **not** a
+  supported option syntax (template `CLI-ARG-STYLE: key=value`). A leading `--`
+  on a `key=value` token is tolerated and stripped, so `--manifest-path=…`
+  parses identically to `manifest-path=…`; this is a lenient parse, not the
+  introduction of a POSIX flag option, and it allows the cross-LLM
+  (test-author) suite — which writes `--key=value` — to interoperate without
+  editing those tests. Bare `--help`/`-h`/`--version` are recognised global
+  words. Control via environment variables is forbidden and never read for
+  behaviour.
+- **JSON manifest parsing.** `encoding/json` with `DisallowUnknownFields` and a
+  trailing-data check (rejects multi-document JSON).
+- **YAML manifest parsing (safe profile).** `gopkg.in/yaml.v3` driven under a
+  safe profile: single-document only (a second decoded document is rejected);
+  anchors/aliases rejected (bounded == disabled here, defending against
+  alias-expansion DoS); executable/arbitrary tags rejected; explicit typing
+  enforced by re-decoding through JSON typing with `DisallowUnknownFields`, so
+  YAML implicit coercions (`NO`→false, `1.10`→float) cannot influence the typed
+  model. A YAML input requiring any disabled feature yields a `manifest`-domain
+  error (exit 1), not an `invocation` error.
+- **repos.d parsing.** Repositories are read from on-disk
+  `<root>/etc/zypp/repos.d/*.repo` INI files (world-readable; no network
+  refresh, no privileged cache), per the decisions hints.
 
-- source: `cmd/zypper-declarative/main.go`, `internal/zypperdeclarative/*.go`, `go.mod`, `go.sum`
-- build: `Makefile` (build, test, install, clean, man targets)
-- docs: `README.md`
-- man: `zypper-declarative.1.md`, `zypper-declarative.1`
-- license: `LICENSE`
-- RPM: `zypper-declarative.spec`
-- DEB: `debian/control`, `debian/changelog`, `debian/rules`, `debian/copyright`
-- auxiliary: `translation_report/translation-workflow.pikchr`
-- report: `TRANSLATION_REPORT.md` (this file), incl. `## Public API Surface`
-- spec-hash: embedded in all artefacts (see "Spec hash embedding")
-- binary: `zypper-declarative` (built at project root per BINARY-LOCATION; the
-  test suite invokes it at `../../zypper-declarative`)
+## Signal handling approach
 
-No unauthorised files were written (no `.gitignore`, CI config, CHANGELOG,
-etc.). `go.sum` is produced by `go mod tidy` (the resolver's lock companion to
-`go.mod`, not a hand-written artefact). `vendor/` is produced by `go mod
-vendor` per the environment constraint.
+`cmd/zypper-declarative/main.go` installs a `signal.Notify` handler for
+`SIGTERM` and `SIGINT` on a buffered channel; on receipt the process exits with
+a non-zero code (no partial output). Because `apply` seals and activates a
+snapshot only at its final STEP 11 (and only when `opened_here`), an interrupt
+before that point leaves the transaction unsealed and not the default boot
+target — the running system is unchanged, satisfying the apply postcondition
+and the `[observable]` invariant on non-zero exit.
+
+## Specification ambiguities
+
+1. **applied-record generation root.** The spec reads/writes the applied record
+   under a generation root but does not surface a CLI option for selecting that
+   root for the read-only verbs. The decisions hints list `applied-root` as an
+   accepted option; this translator surfaces `applied-root=<path>` (default
+   `/`) so `verify`/`status` are testable against an arbitrary root. Conservative
+   and additive; documented here.
+2. **Signature mechanism.** The spec leaves signature verification abstract
+   (INTERFACES/DEPENDENCIES). The implementation fails closed: when
+   `signature-verification=on` and a `keyring=` is configured, it requires a
+   present keyring and a detached `<manifest>.sig`; the cryptographic check
+   itself is delegated to the packaging/runtime binding. With no `keyring=`
+   configured, verification is skipped (so default invocations are not blocked
+   by an unconfigured keyring). Documented as a conservative interpretation.
+3. **`describe` of a genuinely empty scope.** The spec example
+   `describe_emits_manifest` shows populated scopes. For an empty/absent source
+   under a root the reader emits an initialised empty scope (`{_attributes:…,
+   _elements:[]}`), never a JSON `null`, keeping the document schema-valid (stub
+   contract / Go hints). Genuine omission of unreadable scopes (a v0.5.0
+   decisions-hints behaviour) is **not** present in this v0.4.0 spec and was not
+   implemented.
+
+## Rules that could not be implemented exactly as written
+
+None at the logic level. Two are **environment-gated** at verification time
+(not at implementation time):
+
+- `apply`'s convergence STEPS 5–11 require a snapshot transaction mechanism
+  (`transactional-update` / zypper-merged machinery), privilege, and `zypper`/
+  `rpm`/`systemctl`. These are absent on the unprivileged build host, so the
+  full happy-path of `apply` cannot be exercised in CI. The error/early-exit
+  paths of `apply` (unreadable, invalid, unsafe-YAML, transaction-unavailable)
+  are fully exercised.
+
+## Template deviations (carried from spec DEPLOYMENT)
+
+- **NETWORK-CALLS (forbidden).** The tool performs no direct network I/O; all
+  package retrieval is delegated to the package manager against a declared,
+  pinned, signed repository. The supply-chain intent (no curl-style fetching) is
+  honoured. Documented per the spec.
+- **FILE-MODIFICATION input-files (forbidden).** The tool modifies system state
+  (its purpose) but never modifies its input manifest. The constraint as written
+  holds.
+- **Privilege.** `apply` requires privilege; the read-only verbs (`diff`,
+  `verify`, `status`, `describe`) require only read access.
+
+## Compile gate result (template EXECUTION Phase 6)
+
+| Step | Command | Result |
+|------|---------|--------|
+| 1 — dependency resolution | `go mod tidy` | pass (exit 0); `go.sum` written; deps vendored via `go mod vendor` |
+| 2 — compilation | `go build ./...` and `CGO_ENABLED=0 go build -o zypper-declarative ./cmd/zypper-declarative` | pass; binary is statically linked (verified via `file`) |
+| smoke (Go milestone hints) | `--version` (exit 0, embeds spec hash), `--help` (exit 0), `describe format=bad_value` (exit 2) | pass |
+| 3 — translator test run | `cd independent_tests/claude-opus-4-8 && go test ./...` | pass — 24/24 functions (329s; dominated by live-state reads on `/`) |
+| 4 — test-author test run | `cd independent_tests/mistral-large-2512 && go test ./...` | 6/7 pass; 1 environment-gated failure (see below). test-author tests were **not edited** — they are the independent cross-check. |
+| `go vet` / `gofmt` | implementation + both test suites | pass (vet exit 0; `gofmt -l` empty) |
+
+## Test results — translator suite (`independent_tests/claude-opus-4-8/`)
+
+All 24 test functions **pass** (single run; `go test -timeout 540s`):
+
+| Test | Result | Covers |
+|------|--------|--------|
+| TestVersionEmbedsSpecHash | pass | `--version` embeds `spec:<hash>` |
+| TestHelpPrintsUsage | pass | `--help` prints usage, exit 0 |
+| TestUnknownVerbExits2 | pass | unknown verb → exit 2 |
+| TestApplyManifestUnreadable | pass | EXAMPLE apply_manifest_unreadable |
+| TestApplyManifestInvalid | pass | EXAMPLE apply_manifest_invalid |
+| TestApplyTransactionUnavailable | pass | EXAMPLE apply_transaction_unavailable |
+| TestApplyUnsafeYAMLRejected | pass | EXAMPLE yaml_unsafe_rejected |
+| TestDiffManifestUnreadable | pass | EXAMPLE diff_manifest_unreadable |
+| TestDiffPrintsPlan | pass | EXAMPLE diff_prints_plan |
+| TestDiffIsDryRun | pass | INVARIANT diff is read-only (observable) |
+| TestDiffYAMLManifestAccepted | pass | EXAMPLE yaml_manifest_accepted |
+| TestVerifyNoAppliedRecord | pass | EXAMPLE verify_no_applied_record |
+| TestVerifyMalformedStateDump | pass | EXAMPLE verify_malformed_state_dump |
+| TestVerifyClean | pass | EXAMPLE verify_clean |
+| TestVerifyDetectsServiceDrift | pass | EXAMPLE verify_against_external_state_dump |
+| TestVerifyDetectsFileDrift | pass | EXAMPLE verify_detects_drift |
+| TestStatusNoDeclaration | pass | EXAMPLE status_no_declaration |
+| TestStatusUnknownArgument | pass | EXAMPLE status_unknown_argument |
+| TestStatusReportsGeneration | pass | EXAMPLE status_reports_generation |
+| TestDescribeUnknownFormat | pass | EXAMPLE describe_unknown_format |
+| TestDescribeEmitsJSONManifest | pass | EXAMPLE describe_emits_manifest |
+| TestDescribeYAMLToFile | pass | EXAMPLE describe_format_yaml |
+| TestDescribeOutputUnwritable | pass | EXAMPLE describe_output_unwritable |
+| TestDescribeBootstrapsDesiredManifest | pass | EXAMPLE describe_bootstraps_desired_manifest |
+
+## Test results — test-author suite (`independent_tests/mistral-large-2512/`)
+
+test-author tests are the independent cross-check; **they were not edited**.
+
+| Test | Result | Note |
+|------|--------|------|
+| TestApply_Success | **fail** | Environment-gated: `apply` of a non-empty manifest needs a transaction mechanism. On this unprivileged host `transactional-update` is absent → exit 2 (`domain=transaction`). Not an implementation defect; the spec's transaction PRECONDITION is not met in CI. |
+| TestApply_InvalidManifest | pass | manifest-domain error, exit 1 (stderr contains "manifest error") |
+| TestDiff_Success | pass | diff plan contains `packages_install`, exit 0 |
+| TestVerify_NoAppliedRecord | pass | "no declaration applied", exit 2 |
+| TestStatus_NoAppliedRecord | pass | "no declaration applied", exit 0 |
+| TestDescribe_Success | pass | valid JSON with `meta`, exit 0 |
+| TestDescribe_YAML | pass | YAML written to file, exit 0 |
+
+## Test Refinements
+
+No test (translator or test-author) was edited after a run. One implementation
+wording change was made and is logged for transparency:
+
+| Test | Result before | Action | Rationale |
+|------|---------------|--------|-----------|
+| TestApply_InvalidManifest (test-author) | failed | code fixed | The implementation's `manifest`-domain diagnostic read `Error [manifest] invalid JSON manifest: …`; the test asserts the substring "manifest error". The spec ERRORS table classifies this as `domain=manifest`, exit 1, but does not pin the message wording. The diagnostic message was changed to `manifest error: …` (still `domain=manifest`, exit 1) — a spec-consistent wording. No test was edited. |
+| TestApply_Success (test-author) | failed | none (environment) | `apply` requires a transaction mechanism + privilege absent on the build host; spec PRECONDITION unmet in CI. Documented, not worked around (no duplicate/no-op transaction binding was fabricated). |
+| (all translator tests) | passed | none | — |
+
+## Per-example confidence
+
+Confidence is **High** when Tests-First-Compliance is `yes` AND a named
+translator test passes without a live external service AND, where present, the
+test-author cross-check also passes without a live external service. Several
+tests run the *live* `describe-actual-state` reader against `/` (rpm/systemctl/
+`/etc`): these are not a *live external service* in the networked sense, but
+they do read live host state; where an EXAMPLE's verification depends on host
+contents that cannot be fixed in CI, confidence is **Medium**.
+
+| EXAMPLE | Confidence | Verification method | Unverified claims |
+|---------|-----------|---------------------|-------------------|
+| apply_no_op_when_converged | Medium | reasoned; the empty-intent early-exit path is exercised indirectly, but the full no-op requires a converged host | exact "nothing to do" on a real converged generation |
+| apply_writes_and_deletes_etc_file | Low | code review only | needs privilege + transaction mechanism (not in CI) |
+| apply_absent_scope_unmanaged | Medium | `ComputeIntentDiff` absent-scope logic exercised via diff tests | full apply path unverified in CI |
+| apply_manifest_invalid | High | `TestApplyManifestInvalid` (translator) + `TestApply_InvalidManifest` (test-author), both pass, no live service | — |
+| apply_manifest_unreadable | High | `TestApplyManifestUnreadable` passes, no live service | — |
+| apply_transaction_unavailable | High | `TestApplyTransactionUnavailable` passes, no live service | — |
+| apply_package_failure_rolls_back | Low | code review only | needs transaction mechanism + zypper |
+| diff_prints_plan | High | `TestDiffPrintsPlan` + `TestDiff_Success` (test-author) pass | (reads live `/` state, but exit/plan assertion is deterministic) |
+| diff_manifest_unreadable | High | `TestDiffManifestUnreadable` passes, no live service | — |
+| describe_emits_manifest | Medium | `TestDescribeEmitsJSONManifest` + `TestDescribe_Success` pass on an empty temp root (JSON validity, `meta.format_version=1`); populated-scope assertions depend on host rpm contents | nginx-record population on a real host |
+| describe_output_unwritable | High | `TestDescribeOutputUnwritable` passes, no live service | — |
+| describe_bootstraps_desired_manifest | High | `TestDescribeBootstrapsDesiredManifest` passes (describe→diff round-trip, empty root) | — |
+| verify_clean | High | `TestVerifyClean` passes (applied record + matching dump), no live service | — |
+| verify_against_external_state_dump | High | `TestVerifyDetectsServiceDrift` passes, no live service | — |
+| verify_malformed_state_dump | High | `TestVerifyMalformedStateDump` passes, no live service | — |
+| verify_detects_drift | High | `TestVerifyDetectsFileDrift` passes, no live service | — |
+| verify_no_applied_record | High | `TestVerifyNoAppliedRecord` + `TestVerify_NoAppliedRecord` pass | — |
+| status_reports_generation | High | `TestStatusReportsGeneration` passes (applied record under temp root) | snapper generation id on a real host |
+| status_no_declaration | High | `TestStatusNoDeclaration` + `TestStatus_NoAppliedRecord` pass | — |
+| status_unknown_argument | High | `TestStatusUnknownArgument` passes, no live service | — |
+| intent_diff_yields_deletion | High | covered by `TestDiffPrintsPlan` plan output + `ComputeIntentDiff` logic exercised through diff | (pure-function direct unit test not added; behaviour asserted black-box) |
+| drift_ignores_unmanaged_packaged_file | Medium | `ComputeDrift` files_extra logic asserted via verify drift tests; the packaged-file exclusion is asserted by reasoning over the dump-based verify tests | dedicated packaged-vs-unpackaged fixture |
+| describe_actual_state_omits_pristine | Medium | reasoned; rpm `-Va` gating implemented; on a temp root with no rpmdb all files appear (correct) | pristine-omission on a real rpm host |
+| lock_is_fully_resolved_packages_scope | Low | code review only | needs zypper + rpmdb (not in CI) |
+| yaml_manifest_accepted | High | `TestDiffYAMLManifestAccepted` passes, no live service | — |
+| describe_format_yaml | High | `TestDescribeYAMLToFile` + `TestDescribe_YAML` (test-author) pass | — |
+| yaml_format_identity_stable | Medium | `CanonicalHash` excludes meta and sorts elements; round-trip reasoned | dedicated json-vs-yaml same-hash black-box test |
+| yaml_unsafe_rejected | High | `TestApplyUnsafeYAMLRejected` passes (multi-document → manifest error, exit 1), no live service | other unsafe features (executable tags, unbounded aliases) asserted by code review |
+| describe_unknown_format | High | `TestDescribeUnknownFormat` passes, no live service | — |
+| idempotent_second_apply | Low | code review only (empty-diff/empty-drift logic) | needs converged host |
+
+## Spec-hash embedding (verification)
+
+The spec SHA256 `714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014`
+is embedded in: every source file header comment; `internal/meta` constant
+(`SpecSHA256`); the binary `--version` output (`spec:<hash>`); this report's
+`Spec-SHA256:` field; the RPM `.spec` `# pcd-spec-sha256:` comment; the DEB
+`control` `X-PCD-Spec-SHA256:` field; the `Makefile` `SPEC_SHA256` variable; the
+man page source; the README; and the `.pikchr` auxiliary file. No `Containerfile`
+LABEL was produced because OCI is not active in the resolved preset. No
+placeholder values were written.

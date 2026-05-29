@@ -13,5 +13,6 @@ License: GPL-2.0-or-later
  Software Foundation; either version 2 of the License, or (at your option)
  any later version.
  .
- On Debian systems, the full text of the GNU General Public License version 2
- can be found in the file /usr/share/common-licenses/GPL-2.
+ The full text of the GNU General Public License version 2 is available at
+ https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt and on Debian systems
+ in /usr/share/common-licenses/GPL-2.

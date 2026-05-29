@@ -1,21 +1,22 @@
 #!/usr/bin/make -f
 # generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
-# X-PCD-Spec-SHA256: 714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
 
-export DH_VERBOSE = 1
-export CGO_ENABLED = 0
+export CGO_ENABLED=0
+export GOFLAGS=-mod=vendor
+
+BINARY := zypper-declarative
 
 %:
 	dh $@
 
 override_dh_auto_build:
-	go build -o zypper-declarative ./cmd/zypper-declarative
-	pandoc zypper-declarative.1.md -s -t man -o zypper-declarative.1
+	go build -o $(BINARY) ./cmd/$(BINARY)
+	pandoc $(BINARY).1.md -s -t man -o $(BINARY).1
 
 override_dh_auto_install:
-	install -D -m 0755 zypper-declarative debian/zypper-declarative/usr/bin/zypper-declarative
-	install -D -m 0755 zypper-declarative debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
-	install -D -m 0644 zypper-declarative.1 debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
+	install -D -m 0755 $(BINARY) debian/$(BINARY)/usr/bin/$(BINARY)
+	install -D -m 0755 $(BINARY) debian/$(BINARY)/usr/lib/zypper/commands/zypper-declarative
+	install -D -m 0644 $(BINARY).1 debian/$(BINARY)/usr/share/man/man1/$(BINARY).1
 
 override_dh_auto_test:
-	go test ./independent_tests/claude-opus-4-8/...
+	cd independent_tests/claude-opus-4-8 && go test ./...

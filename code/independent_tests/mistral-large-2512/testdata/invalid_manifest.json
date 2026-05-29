@@ -1,0 +1,9 @@
+{
+  "packages": {
+    "_attributes": {"package_system": "rpm"},
+    "_elements": [
+      {"name": "nginx", "version": "", "release": "", "arch": ""}
+    ]
+  }
+  // Missing "meta" field (schema violation).
+}

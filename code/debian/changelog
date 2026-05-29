@@ -1,8 +1,6 @@
 zypper-declarative (0.4.0-1) unstable; urgency=medium
 
-  * Initial release. Declarable subset of the SUSE Machinery system
-    description (packages, repositories, services, config_files) with verbs
-    apply, diff, verify, status, describe. YAML opt-in serialisation
-    alongside canonical JSON.
+  * Generated from zypper-declarative.spec.md (PCD translator, full-spec build).
+    Spec-SHA256: 714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
 
- -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 08:30:00 +0000
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 14:30:00 +0200

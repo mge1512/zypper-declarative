@@ -1,19 +1,18 @@
-# Translation workflow for zypper-declarative (cli-tool, Go).
 # generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
-# Pikchr diagram of the Post-Coding translator delivery phases.
+# Translation workflow for zypper-declarative (cli-tool, Go, dual-LLM run).
 
 box "spec + template" "+ hints" fit
 arrow
-box "Phase 1" "Tests First" "independent_tests/" "claude-opus-4-8/" fit
+box "resolve" "module identity" "+ language (Go)" fit
 arrow
-box "Tests-First" "guard" "(suite exists?)" fit
-arrow "yes" above
-box "Phase 2" "implementation" "cmd/ + internal/" "go.mod" fit
+box "continuity check" "(test-author" "TEST_REPORT.md)" fit
 arrow
-box "Phase 3" "packaging" "Makefile, RPM," "debian/, LICENSE, man" fit
+box "Phase 1" "translator tests" "(Tests First)" fit
 arrow
-box "Phase 5" "README.md" fit
+box "Phase 2" "core impl" "internal/* + cmd" fit
 arrow
-box "Phase 6" "compile gate" "go build + go test" fit
+box "Phase 3" "Makefile, RPM," "DEB, LICENSE, man" fit
 arrow
-box "Phase 7" "TRANSLATION_REPORT.md" fit
+box "Phase 6" "compile gate" "+ test runs" fit
+arrow
+box "Phase 7" "TRANSLATION_" "REPORT.md" fit
