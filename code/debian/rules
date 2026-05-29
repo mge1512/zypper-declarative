@@ -1,8 +1,6 @@
 #!/usr/bin/make -f
-# debian/rules for zypper-declarative
-# pcd-spec-sha256: f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
+# X-PCD-Spec-SHA256: b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
 
-export DH_GOPKG := github.com/mge1512/zypper-declarative
 export CGO_ENABLED := 0
 
 %:
@@ -13,15 +11,10 @@ override_dh_auto_build:
 	pandoc zypper-declarative.1.md -s -t man -o zypper-declarative.1
 
 override_dh_auto_install:
-	install -D -m 0755 zypper-declarative \
-	    debian/zypper-declarative/usr/bin/zypper-declarative
+	install -D -m 0755 zypper-declarative debian/zypper-declarative/usr/bin/zypper-declarative
 	install -d debian/zypper-declarative/usr/lib/zypper/commands
-	ln -sf /usr/bin/zypper-declarative \
-	    debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
-	install -D -m 0644 zypper-declarative.1 \
-	    debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
+	ln -sf /usr/bin/zypper-declarative debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
+	install -D -m 0644 zypper-declarative.1 debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
 
 override_dh_auto_test:
-	# Tests require live system tooling (rpm, systemctl) and privilege for
-	# convergence paths; the non-privileged subset runs in CI.
-	true
+	go test ./independent_tests/claude-opus-4-8/...

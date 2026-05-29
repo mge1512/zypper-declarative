@@ -1,5 +1,5 @@
-zypper-declarative (0.5.1-1) unstable; urgency=medium
+zypper-declarative (0.6.0-1) unstable; urgency=medium
 
-  * Generated from zypper-declarative.spec.md v0.5.1.
+  * Initial package for zypper-declarative 0.6.0.
 
- -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 16:13:54 +0200
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 00:00:00 +0000

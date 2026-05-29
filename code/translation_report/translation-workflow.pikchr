@@ -1,18 +1,22 @@
-# translation-workflow.pikchr
-# Pikchr diagram of the zypper-declarative translation workflow.
-# generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
-
-arrow right 200% "spec + template" "+ hints" above
-box "Tests First" "independent_tests/" "claude-opus-4-8/" fit
-arrow right 200% "guard: tests exist" above
-box "Implementation" "cmd/ + internal/*" fit
-arrow right 200% "go build" above
-box "Binary" "zypper-declarative" "(static, project root)" fit
-arrow right 200% "go test" above
-box "Compile gate" "all tests pass" fit
+# generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+#
+# Translation workflow for zypper-declarative (cli-tool, Go, single-LLM run).
 
 down
-arrow from last box.s down 80%
-box "Packaging" "Makefile, RPM .spec," "debian/, LICENSE, man" fit
-arrow right 200% "written last" above
-box "TRANSLATION_REPORT.md" fit
+box "spec + template" "+ hints (Go)" fit
+arrow
+box "resolve module" "identity (META Module)" fit
+arrow
+box "Phase 1:" "independent_tests/" "claude-opus-4-8/ (Tests First)" fit
+arrow
+box "Tests-First guard:" "test files present" "gofmt + go vet pass" fit
+arrow
+box "Phase 2: core impl" "cmd/ + internal/* packages" fit
+arrow
+box "Phase 3: packaging" "Makefile, RPM .spec," "debian/*, LICENSE" fit
+arrow
+box "Phase 5: docs" "README.md, man page" fit
+arrow
+box "Phase 6: compile gate" "go mod tidy / build /" "go test (all pass)" fit
+arrow
+box "Phase 7:" "TRANSLATION_REPORT.md" fit

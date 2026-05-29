@@ -1,31 +1,18 @@
-// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
+// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
 //
-// Package meta holds the build-time identity of the binary: its version (from
-// the spec META Version field) and the SHA256 of the specification it was
-// translated from. Both are embedded so that `version` output is
-// cryptographically tied to its source of truth.
+// Package meta carries the program version and the SHA256 of the
+// specification this binary was produced from. The spec hash is embedded so
+// the version boundary is cryptographically verifiable, per the cli-tool
+// template spec-hash requirement and the spec DEPLOYMENT section.
 package meta
 
-const (
-	// ProgramName is the canonical binary name.
-	ProgramName = "zypper-declarative"
+// Program is the binary's program name.
+const Program = "zypper-declarative"
 
-	// Version is the spec META Version of zypper-declarative.spec.md.
-	Version = "0.5.1"
+// Version is the implemented specification Version (spec META Version: 0.6.0).
+const Version = "0.6.0"
 
-	// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as translated.
-	SpecSHA256 = "f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2"
-)
-
-// Generator returns the generator string embedded in produced manifests, e.g.
-// "zypper-declarative 0.5.1".
-func Generator() string {
-	return ProgramName + " " + Version
-}
-
-// VersionLine returns the single-line version string printed by the `version`
-// verb and the `--version` alias: program name, version, and the embedded spec
-// hash.
-func VersionLine() string {
-	return ProgramName + " " + Version + " spec:" + SpecSHA256
-}
+// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as provided at
+// translation time. It is embedded in --version output and is the value the
+// translation report records as Spec-SHA256.
+const SpecSHA256 = "b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057"

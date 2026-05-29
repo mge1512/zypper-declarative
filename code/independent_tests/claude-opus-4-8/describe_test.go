@@ -1,191 +1,192 @@
-// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
+// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
 // tests by: claude-opus-4-8
 //
-// Tests for the describe verb, exercised against a controlled root= tree so the
-// asserted paths need no privilege and no live system state. The repositories
-// scope is read from <root>/etc/zypp/repos.d/*.repo (world-readable INI files),
-// which is the spec's pinned source. on-unreadable=warn is used so the other
-// scopes (rpmdb, systemd, /etc) under an empty synthetic root are omitted with
-// diagnostics rather than failing the run, isolating the repositories-scope and
-// format-resolution assertions.
-
-package independent_test
+// describe verb tests: format resolution (resolve-format), unwritable output,
+// and the read-only invariant.
+//
+// describe reads live state via describe-actual-state. To keep these tests
+// deterministic and fast on any host (a developer workstation, a CI runner, a
+// SUSE build host), they point describe at a controlled small root via the
+// root= option (a spec-declared describe input) containing a tiny /etc, rather
+// than at "/" where the size of the real /etc and per-file rpm queries make
+// the run host-dependent and slow. The format-selection behaviour and the
+// read-only/output-write behaviour under test are independent of which root is
+// described.
+package zypperdeclarative_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// twoRepoRoot builds a synthetic root containing two readable .repo files under
-// etc/zypp/repos.d and returns the root path.
-func twoRepoRoot(t *testing.T) string {
+// fakeRoot builds a small describable root with one /etc file and returns its
+// path. With rpm queries against this root yielding nothing, the file is
+// treated as unpackaged and appears in config_files, so describe produces a
+// non-empty, deterministic document.
+func fakeRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	reposd := filepath.Join(root, "etc", "zypp", "repos.d")
-	mkdirAll(t, reposd)
-	repo1 := "[sl-micro-6.2-pinned]\n" +
-		"name=SL Micro 6.2 (pinned)\n" +
-		"baseurl=https://internal.example/obs/SLMicro/standard\n" +
-		"type=rpm-md\n" +
-		"enabled=1\n" +
-		"gpgcheck=1\n" +
-		"autorefresh=0\n" +
-		"priority=99\n"
-	repo2 := "[update]\n" +
-		"name=Update repo\n" +
-		"baseurl=https://internal.example/obs/Update/standard\n" +
-		"type=rpm-md\n" +
-		"enabled=1\n" +
-		"gpgcheck=1\n" +
-		"autorefresh=1\n" +
-		"priority=100\n"
-	writeFile(t, filepath.Join(reposd, "pinned.repo"), repo1)
-	writeFile(t, filepath.Join(reposd, "update.repo"), repo2)
+	etc := filepath.Join(root, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatalf("setup fake root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(etc, "demo.conf"), []byte("key = value\n"), 0o644); err != nil {
+		t.Fatalf("setup fake root file: %v", err)
+	}
 	return root
 }
 
-// emptyReposRoot builds a synthetic root whose repos.d exists and is readable
-// but contains no .repo files.
-func emptyReposRoot(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	mkdirAll(t, filepath.Join(root, "etc", "zypp", "repos.d"))
-	return root
-}
-
-// EXAMPLE: describe_repositories_from_reposd
-// Two readable .repo files -> the repositories scope contains two records and
-// the scope is not empty; exit 0.
-func TestDescribeRepositoriesFromReposd(t *testing.T) {
-	root := twoRepoRoot(t)
-	r := run(t, "describe", "root="+root, "on-unreadable=warn")
-	if r.exitCode != 0 {
-		t.Fatalf("describe repos: exit = %d, want 0; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
-	}
-	if !strings.Contains(r.stdout, "repositories") {
-		t.Fatalf("describe repos: stdout %q does not contain a repositories scope", r.stdout)
-	}
-	if !strings.Contains(r.stdout, "sl-micro-6.2-pinned") {
-		t.Errorf("describe repos: stdout %q does not contain first repo alias", r.stdout)
-	}
-	if !strings.Contains(r.stdout, "update") {
-		t.Errorf("describe repos: stdout %q does not contain second repo alias", r.stdout)
-	}
-}
-
-// EXAMPLE: describe_emits_manifest (shape assertion on the produced document):
-// stdout is a JSON document with meta.format_version = 1.
-func TestDescribeEmitsManifestShape(t *testing.T) {
-	root := twoRepoRoot(t)
-	r := run(t, "describe", "root="+root, "on-unreadable=warn")
-	if r.exitCode != 0 {
-		t.Fatalf("describe shape: exit = %d, want 0; stderr=%q", r.exitCode, r.stderr)
-	}
-	if !strings.HasPrefix(strings.TrimSpace(r.stdout), "{") {
-		t.Errorf("describe shape: stdout %q is not a JSON document", r.stdout)
-	}
-	if !strings.Contains(r.stdout, "\"format_version\"") || !strings.Contains(r.stdout, "1") {
-		t.Errorf("describe shape: stdout %q does not contain meta.format_version = 1", r.stdout)
-	}
-}
-
-// EXAMPLE: describe_omits_genuinely_empty_scope
-// repos.d is readable but contains no .repo files -> the output omits the
-// repositories scope rather than emitting empty _elements; exit 0.
-func TestDescribeOmitsGenuinelyEmptyScope(t *testing.T) {
-	root := emptyReposRoot(t)
-	r := run(t, "describe", "root="+root, "on-unreadable=warn")
-	if r.exitCode != 0 {
-		t.Fatalf("describe empty repos: exit = %d, want 0; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
-	}
-	// The repositories scope must not appear with empty _elements. Since no
-	// repos exist and the source is readable, the scope is omitted entirely.
-	if strings.Contains(r.stdout, "repository_system") {
-		t.Errorf("describe empty repos: stdout %q emitted a repositories scope for a genuinely-empty source", r.stdout)
-	}
-}
-
-// EXAMPLE: describe_out_extension_yaml
-// No format option; out=...yaml -> resolve-format selects yaml; the file holds a
-// YAML document (not starting with '{'); exit 0.
-func TestDescribeOutExtensionYAML(t *testing.T) {
-	root := twoRepoRoot(t)
-	out := filepath.Join(t.TempDir(), "state.yaml")
-	r := run(t, "describe", "root="+root, "on-unreadable=warn", "out="+out)
-	if r.exitCode != 0 {
-		t.Fatalf("describe out yaml: exit = %d, want 0; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
-	}
-	content := readFileTrim(t, out)
-	if strings.HasPrefix(content, "{") {
-		t.Errorf("describe out yaml: %s holds a JSON document, want YAML: %q", out, content)
-	}
-	if !strings.Contains(content, "sl-micro-6.2-pinned") {
-		t.Errorf("describe out yaml: %s does not contain the repo alias: %q", out, content)
-	}
-}
-
-// EXAMPLE: describe_out_extension_json
-// No format option; out=...json -> resolve-format selects json; the file holds a
-// JSON document (starts with '{'); exit 0.
-func TestDescribeOutExtensionJSON(t *testing.T) {
-	root := twoRepoRoot(t)
-	out := filepath.Join(t.TempDir(), "state.json")
-	r := run(t, "describe", "root="+root, "on-unreadable=warn", "out="+out)
-	if r.exitCode != 0 {
-		t.Fatalf("describe out json: exit = %d, want 0; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
-	}
-	content := readFileTrim(t, out)
-	if !strings.HasPrefix(content, "{") {
-		t.Errorf("describe out json: %s does not hold a JSON document: %q", out, content)
-	}
-}
-
-// EXAMPLE: describe_format_overrides_extension
-// format=json out=...yaml -> resolve-format returns json (explicit wins); the
-// file holds a JSON document; exit 0.
-func TestDescribeFormatOverridesExtension(t *testing.T) {
-	root := twoRepoRoot(t)
-	out := filepath.Join(t.TempDir(), "state.yaml")
-	r := run(t, "describe", "root="+root, "on-unreadable=warn", "format=json", "out="+out)
-	if r.exitCode != 0 {
-		t.Fatalf("describe format overrides: exit = %d, want 0; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
-	}
-	content := readFileTrim(t, out)
-	if !strings.HasPrefix(content, "{") {
-		t.Errorf("describe format overrides: %s does not hold a JSON document despite format=json: %q", out, content)
-	}
-}
-
-// EXAMPLE: describe_format_yaml
-// format=yaml -> stdout is a YAML document (not starting with '{'); exit 0.
-func TestDescribeFormatYAML(t *testing.T) {
-	root := twoRepoRoot(t)
-	r := run(t, "describe", "root="+root, "on-unreadable=warn", "format=yaml")
-	if r.exitCode != 0 {
-		t.Fatalf("describe format=yaml: exit = %d, want 0; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
-	}
-	if strings.HasPrefix(strings.TrimSpace(r.stdout), "{") {
-		t.Errorf("describe format=yaml: stdout %q is a JSON document, want YAML", r.stdout)
-	}
-}
-
-// EXAMPLE: describe_output_unwritable
-// out points into a non-existent/unwritable directory -> domain=invocation, exit 2.
+// EXAMPLE: describe_output_unwritable -- writing to an unwritable path is an
+// invocation error (exit 2, domain=invocation).
 func TestDescribeOutputUnwritable(t *testing.T) {
-	root := twoRepoRoot(t)
-	r := run(t, "describe", "root="+root, "on-unreadable=warn", "out=/nonexistent-zd-dir/state.json")
-	if r.exitCode != 2 {
-		t.Fatalf("describe unwritable out: exit = %d, want 2; stdout=%q stderr=%q", r.exitCode, r.stdout, r.stderr)
+	// A path whose parent component is a regular file (not a directory) is
+	// unwritable.
+	tmp := t.TempDir()
+	notADir := filepath.Join(tmp, "regular-file")
+	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
 	}
-	if !strings.Contains(r.stderr, "invocation") {
-		t.Errorf("describe unwritable out: stderr %q does not carry domain=invocation", r.stderr)
+	target := filepath.Join(notADir, "state.json")
+	r := run(t, "describe", "root="+fakeRoot(t), "out="+target)
+	assertExit(t, r, 2)
+}
+
+// EXAMPLE: describe_out_extension_json -- with no format option, the .json
+// extension selects JSON. The written file's first non-space byte is '{'.
+func TestDescribeOutExtensionJSON(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.json")
+	r := run(t, "describe", "root="+fakeRoot(t), "out="+out)
+	assertExit(t, r, 0)
+	assertFileIsJSON(t, out)
+}
+
+// EXAMPLE: describe_out_extension_yaml -- with no format option, the .yaml
+// extension selects YAML. The written file is not a JSON object.
+func TestDescribeOutExtensionYAML(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.yaml")
+	r := run(t, "describe", "root="+fakeRoot(t), "out="+out)
+	assertExit(t, r, 0)
+	assertFileIsYAML(t, out)
+}
+
+// EXAMPLE: describe_format_overrides_extension -- explicit format=json with a
+// .yaml out path writes JSON (explicit option wins over extension).
+func TestDescribeFormatOverridesExtension(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.yaml")
+	r := run(t, "describe", "root="+fakeRoot(t), "format=json", "out="+out)
+	assertExit(t, r, 0)
+	assertFileIsJSON(t, out)
+}
+
+// EXAMPLE: describe_format_yaml -- describe format=yaml to stdout produces a
+// YAML document (not a JSON object).
+func TestDescribeFormatYAMLToStdout(t *testing.T) {
+	r := run(t, "describe", "root="+fakeRoot(t), "format=yaml")
+	assertExit(t, r, 0)
+	trimmed := strings.TrimLeft(r.stdout, " \t\r\n")
+	if strings.HasPrefix(trimmed, "{") {
+		t.Errorf("expected YAML output, got JSON-looking stdout:\n%s", r.stdout)
 	}
 }
 
-// readFileTrim reads a file and returns its trimmed content, failing on error.
-func readFileTrim(t *testing.T, path string) string {
+// describe to stdout with default format (json) yields a JSON document whose
+// meta.format_version is 1.
+func TestDescribeDefaultJSONToStdout(t *testing.T) {
+	r := run(t, "describe", "root="+fakeRoot(t))
+	assertExit(t, r, 0)
+	trimmed := strings.TrimLeft(r.stdout, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Errorf("expected a JSON document on stdout\nstdout:\n%s", r.stdout)
+	}
+	assertStdoutContains(t, r, "format_version")
+}
+
+// EXAMPLE: describe_bootstraps_desired_manifest -- describe output is accepted
+// unchanged by load-desired-manifest. We capture a describe JSON document and
+// feed it back to diff as manifest-path against an empty applied record. The
+// load must succeed (not a manifest-domain error).
+func TestDescribeOutputAcceptedAsManifest(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "desired.json")
+	d := run(t, "describe", "root="+fakeRoot(t), "out="+out)
+	assertExit(t, d, 0)
+	assertFileIsJSON(t, out)
+
+	emptyRoot := t.TempDir()
+	r, timedOut := runWithTimeout(t, liveReadBudget, "", "diff", "manifest-path="+out, "applied-root="+emptyRoot)
+	if timedOut {
+		t.Skip("diff live read of / exceeded the budget on this host; the load-desired-manifest acceptance is exercised by the diff exit/stderr path")
+	}
+	if r.exitCode == 1 && strings.Contains(r.stderr, "manifest") {
+		t.Errorf("describe output was rejected as a manifest error by load-desired-manifest\nstderr:\n%s", r.stderr)
+	}
+}
+
+// EXAMPLE: describe_omits_genuinely_empty_scope -- a readable but empty
+// repos.d yields no repositories scope (not an empty one). Described root has
+// an empty etc/zypp/repos.d directory.
+func TestDescribeOmitsGenuinelyEmptyRepositories(t *testing.T) {
+	root := fakeRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, "etc", "zypp", "repos.d"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "state.json")
+	r := run(t, "describe", "root="+root, "out="+out)
+	assertExit(t, r, 0)
+	body := readNonEmpty(t, out)
+	// The emitted document must not carry a repositories scope with empty
+	// _elements; the omitted-scope rule means the key is absent entirely.
+	if strings.Contains(body, "repository_system") {
+		t.Errorf("describe emitted a repositories scope for an empty repos.d\noutput:\n%s", body)
+	}
+}
+
+// EXAMPLE: describe_scope_full_emits_observational_scopes (partial) -- a plain
+// describe (scope=etc, the default) of a root emits neither observational
+// scope.
+func TestDescribeDefaultScopeOmitsObservational(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.json")
+	r := run(t, "describe", "root="+fakeRoot(t), "out="+out)
+	assertExit(t, r, 0)
+	body := readNonEmpty(t, out)
+	if strings.Contains(body, "changed_managed_files") || strings.Contains(body, "unmanaged_files") {
+		t.Errorf("scope=etc describe emitted an observational scope\noutput:\n%s", body)
+	}
+}
+
+func readNonEmpty(t *testing.T, path string) string {
 	t.Helper()
-	b := readFile(t, path)
-	return strings.TrimSpace(string(b))
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	s := strings.TrimLeft(string(b), " \t\r\n")
+	if s == "" {
+		t.Fatalf("file %s is empty", path)
+	}
+	return s
+}
+
+func assertFileIsJSON(t *testing.T, path string) {
+	t.Helper()
+	s := readNonEmpty(t, path)
+	if !strings.HasPrefix(s, "{") {
+		t.Errorf("file %s does not begin with a JSON object: first bytes %q", path, head(s))
+	}
+}
+
+func assertFileIsYAML(t *testing.T, path string) {
+	t.Helper()
+	s := readNonEmpty(t, path)
+	if strings.HasPrefix(s, "{") {
+		t.Errorf("file %s looks like JSON, expected YAML: first bytes %q", path, head(s))
+	}
+}
+
+func head(s string) string {
+	if len(s) > 40 {
+		return s[:40]
+	}
+	return s
 }
