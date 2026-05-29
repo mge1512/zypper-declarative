@@ -1,0 +1,292 @@
+# zypper-declarative: translation decisions hints (Go)
+
+This is the decisions hints file from PCD section 13 ("When the Specification
+Changes"). It is read by a translator during **guided regeneration**: a clean
+rebuild from the specification that nonetheless honours the worth-keeping
+architectural decisions of the prior implementation. It is NOT a specification
+artifact: it does not affect `pcd-lint`, and it is disposable.
+
+## Naming and language
+
+This file is the Go instance, named `zypper-declarative.go.decisions.hints.md`.
+The generic name is `zypper-declarative.<lang>.decisions.hints.md`; the qualifier
+is the implementation language and the file is discarded when the language
+changes. If the language is later chosen to be Rust or C++, rename the qualifier
+(`.rust.`, `.cpp.`) and re-read the language-specific sections below, which are
+written for Go with substitution notes. The specification itself stays
+language-neutral; this file is where the language-specific decisions live.
+
+## Provenance of the entries below
+
+Normally this file is produced by the translator (via `assess_change_impact` or
+`prompts/change-impact.md`) by reading the existing code. This copy is
+hand-authored as a starting point, so each entry is tagged:
+
+- `[spec]` decided by `zypper-declarative.spec.md` v0.5.0; authoritative here.
+- `[pcd]` a documented PCD finding or environment constraint; authoritative here.
+- `[recommended]` a sound default to apply unless the existing code already does
+  something equally good; reconcile against `/tmp/pcd-original/code/`.
+- `[extract]` must be read from the existing code; left as a slot to fill, since
+  the existing implementation is not visible to the author of this file.
+- `[changed-0.5.0]` the v0.5.0 spec changed this; do NOT carry the old code's
+  behaviour over, follow the new spec.
+
+## How KIT should consume this (important)
+
+This file supports **guided regeneration**, which is the middle of the PCD
+three-state model. The translator must read the spec, the template, and this
+file, and must NOT read the old code (so the prior bugs cannot be carried over).
+That means:
+
+- Use your "normal" translator prompt (input `/tmp/pcd-input/`, output
+  `/tmp/pcd-output/`), NOT the existing-code prompt that mounts
+  `/tmp/pcd-original/code/`. The existing-code prompt is for incremental update,
+  which is the mode we deliberately did not choose for v0.5.0.
+- Place into `/tmp/pcd-input/` alongside the v0.5.0 spec and the cli-tool
+  template: this file, `ROLE.md` declaring translator mode, and `prompt.md`.
+- Ensure the translator flow in `prompt.md` reads `*.decisions.hints.md` from the
+  input directory. If `prompt.md` only supports clean-from-scratch, either add a
+  step that reads this file, or accept clean-from-scratch (in which case this file
+  is human onboarding, not a translator input; PCD says it is ignored on clean
+  full regeneration).
+- After generation, fix the Go module path by hand (see Module path below); the
+  PCD record notes this is a systematic translator gap.
+
+---
+
+## Decisions to preserve
+
+### Module and toolchain
+
+- `[spec]` Go module path is `github.com/mge1512/zypper-declarative` (META
+  `Module`). Set the `go.mod` `module` line to exactly this.
+- `[pcd]` Module path is a systematic translator gap and cannot be inferred from
+  the spec by the translator reliably. Verify and fix it post-generation before
+  any push.
+- `[extract]` Go language version floor for `go.mod`. Use what the existing code
+  used, or, if starting clean, the Go available on the SLES 16.1 / OBS build host;
+  pin it in `go.mod`. Do not invent a version.
+- `[pcd]` No root at build time. Module downloads run as the current user with
+  `GOPATH`/`GOCACHE` under the home directory. Vendor dependencies with
+  `go mod vendor`. Do not install system packages.
+
+### Source layout
+
+- `[recommended]` Group code to mirror the spec's behaviour grouping, one internal
+  package per concern, so each spec behaviour maps to an obvious home. Reconcile
+  with the layout already in `/tmp/pcd-original/code/` and prefer the existing one
+  where it is at least as clear:
+
+  ```
+  cmd/zypper-declarative/main.go     thin entry: build args, call internal/cli
+  internal/cli/                      dispatch, key=value parsing, global contract
+  internal/manifest/                 data-model types; json+yaml (de)serialise;
+                                     resolve-format; canonical-model hashing
+  internal/state/                    describe-actual-state: the single live reader
+  internal/diff/                     compute-intent-diff, compute-drift (pure)
+  internal/converge/                 converge-packages, -files, -units
+  internal/txn/                      acquire-transaction-context + bindings
+  internal/record/                   load/write applied record
+  internal/meta/                     embedded spec SHA256 and version
+  ```
+
+- `[spec]` `describe-actual-state` is the single live-state reader: it is the only
+  code that reads live system state. `describe`, `diff`, `verify`, `status`, and
+  the post-converge check in `apply` all obtain actual state through it (or a
+  supplied dump). Keep it in one package (`internal/state`) and do not let any
+  other package read the rpmdb, repos.d, systemd, or `/etc` directly.
+- `[spec]` `compute-drift` performs no I/O; it compares two in-memory `Manifest`
+  documents. Keep `internal/diff` free of filesystem, rpmdb, and process calls.
+- `[changed-0.5.0]` `resolve-format` is a new shared behaviour and the single
+  authority for choosing a serialisation. Put it in `internal/manifest` and route
+  every read and write through it. Remove any per-call-site inline format logic
+  the old code had in the manifest loader.
+
+### Argument parsing and the global contract
+
+- `[spec]` Options are `key=value`, parsed by the tool itself; bare words are
+  verbs. Options precede bare-word arguments. Control via environment variables is
+  forbidden.
+- `[spec]` All CONFIG knobs are also accepted as `key=value` options
+  (`manifest-format`, `repo-lock`, `content-store`, `keep-list`,
+  `signature-verification`, `keyring`, `activation-policy`, `applied-root`), with
+  a command-line option overriding the corresponding preset value. The prior help
+  text already exposed these; keep them.
+- `[changed-0.5.0]` Global behaviour, do NOT reuse the old "no verb -> exit 2":
+  - bare invocation (no verb) prints usage to stdout and exits 0 (discovery, never
+    runs a default verb, never converges);
+  - `--help` and `-h` print usage to stdout, exit 0;
+  - `--version` prints program name, version, and embedded spec hash to stdout,
+    exit 0;
+  - unknown verb, unknown option, unknown value, or missing required value prints
+    usage to stderr, exits 2.
+
+### Error and exit-code convention
+
+- `[spec]` Internal behaviours return errors to their caller; they do not exit.
+  Exit-code mapping lives only in the verb layer (`internal/cli`). In Go terms:
+  internal packages return `error` (or a typed `Diagnostic`), and only
+  `internal/cli`/`main` translate that to an exit code.
+- `[spec]` Diagnostics carry `severity`, `domain`
+  (`packages|repositories|files|units|manifest|transaction|invocation`), and
+  `message`. Write them to stderr, one per line. Normal output (summaries, the
+  diff plan, the status report, the describe document) goes to stdout.
+- `[spec]` Exit codes: 0 success (converged, no-op, matches declaration, or
+  describe emitted); 1 logical failure (convergence failed and discarded; verify
+  drift; invalid, unsafe-YAML, or unverified manifest; state collection failed);
+  2 invocation error (bad args; unknown format value; manifest unreadable;
+  insufficient privilege; transaction mechanism unavailable; output path
+  unwritable; malformed state dump).
+- `[extract]` The concrete Go error type or sentinel-error pattern the existing
+  code used for carrying `domain`. Preserve it if it was clean.
+
+### Manifest data model and serialisation
+
+- `[spec]` The manifest is a typed data model (the declarable Machinery subset:
+  packages, repositories, services, config_files, with the `ScopeWrapper`
+  `{_attributes, _elements}` idiom and underscore_style field names). JSON and
+  YAML are serialisations of that model. Keep the Go structs as the single model
+  and treat json/yaml strictly as edges.
+- `[spec]` Canonical serialisation is JSON (`format_version` 1). The applied
+  record is ALWAYS written as canonical JSON regardless of the desired manifest's
+  input format.
+- `[spec]` `resolve-format` precedence: explicit `format=` option, else the
+  operative file extension (`.json` -> json; `.yaml`/`.yml` -> yaml), else the
+  `manifest-format` default. The operative path is `manifest-path` on load,
+  `state-path` on verify, and `out` on describe. stdin/stdout with no explicit
+  format use the default.
+- `[changed-0.5.0]` `describe` output format follows `resolve-format(out)`. Do NOT
+  hardcode JSON output. `describe out=...yaml` must write YAML; `out=...json` must
+  write JSON; an explicit `format=` overrides the extension.
+- `[spec]` Manifest identity `desired_sha256` is the SHA256 of a canonical
+  serialisation of the parsed data model, format-independent, so JSON and YAML of
+  the same manifest hash identically.
+- `[recommended]` Define "canonical" concretely for the hash and apply it
+  consistently: object keys sorted, compact separators, UTF-8, scope `_elements`
+  sorted by their identity key (packages by name+arch, repositories by alias,
+  services by name, config_files by path). The on-disk `applied.json` may be
+  pretty-printed for readability, but the HASH is taken over the canonical compact
+  form. Sorting `_elements` before both serialising and hashing also makes
+  describe output deterministic and diffable.
+- `[spec]` YAML safe profile (only when YAML is enabled): a non-code-executing
+  loader, no arbitrary or executable tags, bounded or disabled anchor/alias
+  expansion, single-document streams only, explicit typing per the schema (no
+  implicit YAML coercion such as `NO` -> false or `1.10` -> float). A YAML input
+  needing any disabled feature is rejected with a manifest error.
+- `[recommended]` In Go, the translator selects a YAML approach that satisfies the
+  safe profile and records the exact library and configuration in
+  `TRANSLATION_REPORT.md`. One robust route is to convert YAML to JSON and decode
+  with `encoding/json` using `DisallowUnknownFields`, which rejects YAML-only
+  constructs and uses JSON typing; whichever route is chosen, it must demonstrably
+  meet every safe-profile constraint above. Do not pick a loader that executes
+  tags or expands aliases without a bound.
+
+### Reading actual state and the empty-scope rule
+
+- `[changed-0.5.0]` Repositories actual state is read from the on-disk
+  `<root>/etc/zypp/repos.d/*.repo` files (INI sections: alias, name, baseurl
+  mapped to `RepositoryRecord.url`, type, enabled, gpgcheck, autorefresh,
+  priority). Do NOT read repositories via a network refresh or a privileged cache.
+  This is what fixed the empty-`repositories` bug: those files are world-readable
+  in the normal case.
+- `[changed-0.5.0]` A scope source that cannot be read is NEVER represented as an
+  empty `_elements`. Under `on-unreadable=error` (default) return an error naming
+  the source; under `on-unreadable=warn` omit the affected scope and emit a
+  diagnostic. A genuinely-empty readable scope is OMITTED from describe output, so
+  a bootstrapped manifest leaves it unmanaged rather than asserting deletion.
+- `[spec]` The `describe` verb passes `on_unreadable` through from its option;
+  every other caller (apply, diff, status, verify reading live state) passes
+  `on_unreadable=error`.
+- `[spec]` `config_files` actual state is the changed-from-package and unpackaged
+  `/etc` files, excluding package-pristine files, the keep-list, and
+  `/etc/etc.syncpoint`. `package_name` is populated from rpm; `content_ref` is
+  empty in actual state.
+
+### Integration with the system (Go-specific)
+
+- `[recommended]` Drive `zypper`, `snapper`, `systemctl`, and `rpm` by executing
+  their command-line interfaces (`os/exec`) and parsing their output, rather than
+  binding libzypp via cgo. This keeps `CGO_ENABLED=0` and yields the single static
+  binary the spec calls for, and matches "no runtime deps of its own beyond the
+  tools it drives". Repositories are read as files directly (no exec needed).
+  `[extract]` Confirm what the existing code did; if it used cgo/libzypp, that is a
+  decision to revisit against the static-binary goal, not to preserve by default.
+- `[spec]` The transaction binding is abstract: `acquire-transaction-context`
+  resolves `auto|external|internal` and returns a context with a writable `root`
+  and `opened_here`. The convergence code path is identical regardless of binding.
+  Keep the binding isolated in `internal/txn` so the rest of the code is unaware
+  of which mechanism opened the snapshot.
+- `[spec]` Unit enablement under a root uses offline enablement (e.g.
+  `systemctl --root <ctx.root> ...` semantics) for `converge-units`, and a query
+  for `describe-actual-state`; do not rely on first-boot preset evaluation.
+
+### Spec-hash embedding and provenance
+
+- `[spec]` Embed the SHA256 of `zypper-declarative.spec.md` in every produced
+  artifact: source headers, the `--version` output, `TRANSLATION_REPORT.md`
+  (`Spec-SHA256:`), the RPM spec comment, the DEB control `X-PCD-Spec-SHA256:`,
+  the Containerfile label, and the Makefile variable.
+- `[recommended]` In Go, keep the hash and version in `internal/meta`, injected at
+  build via `-ldflags -X` or as a generated file consumed by `go:embed`. `--version`
+  prints `zypper-declarative <version> spec:<sha256>`.
+
+### Build and packaging
+
+- `[spec]` Deliverable is a single static binary, no runtime deps of its own,
+  surfaced as a zypper subcommand (an executable in `/usr/lib/zypper/commands`)
+  and invocable directly. Final container stage is `FROM scratch`.
+- `[spec]` Installation is via an OBS package on build.opensuse.org. No
+  curl-based installation.
+- `[spec]` Signal handling: clean exit on SIGTERM and SIGINT; an interrupted
+  `apply` discards the transaction and leaves no new snapshot as the default boot
+  target. Document the approach in `TRANSLATION_REPORT.md`.
+- `[extract]` The existing `Makefile`/packaging targets and any OBS `.spec`
+  scaffolding worth keeping.
+
+### Testing boundary (aligns with your test-author methodology)
+
+- `[pcd]` Tests are black-box: they invoke the built binary through the DEPLOYMENT
+  interface using `os/exec` (`exec.Command`) and assert on stdout, stderr, and
+  exit code. Tests must NOT call internal Go functions or simulate the binary's
+  behaviour through wrapper code. The new v0.5.0 examples (bare invocation,
+  unknown verb, `describe out=...yaml`, `verify state-path=...yaml`, unreadable
+  and genuinely-empty repositories) are black-box assertions of exactly this kind.
+
+---
+
+## Do NOT carry these over from the existing code (v0.5.0 changes)
+
+1. `describe` writing JSON regardless of the `out` extension. Output now follows
+   `resolve-format`.
+2. `repositories` read via a method that returns empty for an unprivileged or
+   uncached run, and any code path that emits an empty scope on a read failure.
+   Read repos.d files; never emit empty for unreadable; omit genuine-empty.
+3. Bare `zypper declarative` exiting 2. It now prints usage to stdout and exits 0.
+4. Any inline, per-call-site format selection in the manifest loader. It now goes
+   through the shared `resolve-format`.
+
+## Slots to fill from /tmp/pcd-original/code/
+
+- `[extract]` Actual package names and file split, if they differ from the
+  recommended layout and are at least as clear.
+- `[extract]` The Go version floor and any direct dependencies already vendored.
+- `[extract]` The error-carrying type or pattern used for `domain`.
+- `[extract]` The YAML library already chosen, if any, and whether it meets the
+  safe profile (replace it if it does not).
+- `[extract]` Existing Makefile/OBS packaging targets, container build, and the
+  spec-hash injection mechanism.
+- `[extract]` Whether system integration was exec-based or cgo/libzypp, and the
+  decision to keep or revisit it against the static-binary goal.
+
+---
+
+## Changelog
+
+- 2026-05-29: Initial Go decisions hints for the v0.5.0 guided regeneration.
+  Captures the spec-determined architecture (single live-state reader,
+  pure compute-drift, shared resolve-format, abstract transaction binding,
+  applied-record-always-JSON, canonical-model hashing), the Go-specific defaults
+  (exec-based integration for a static CGO_ENABLED=0 binary, internal package
+  layout, spec-hash in internal/meta), the v0.5.0 behaviours that must not be
+  inherited from the prior buggy code, and the slots to extract from the existing
+  implementation.
