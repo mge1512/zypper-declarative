@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.4.0)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.5.0)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -255,6 +255,28 @@ format, so it is interchangeable with `describe` output and may feed `verify` vi
 observational scopes a full sitar dump carries (cpu, pci, dmi, processes, storage,
 network, and the rest) are not needed by a converger and are ignored when present.
 
+The reader works at the file-and-database level: the rpmdb, the `/etc/zypp/repos.d`
+files for repositories, `systemctl` for unit state, and the `/etc` files
+themselves. It performs no network refresh and reads no privileged cache, which
+keeps it deterministic and lets a normal user read whatever is world-readable
+(repository definitions and most of `/etc` are). A complete description still wants
+root, because some `/etc` files are root-only, so `describe` run unprivileged may
+not see everything.
+
+That last point hides a footgun that the absent-versus-empty contract makes sharp,
+and the design closes it deliberately. An empty scope in a desired manifest means
+"reconcile this scope to empty," that is, remove everything in it. So a reader that
+emitted an empty `repositories` scope merely because it could not read
+`repos.d` would, if that output were used to bootstrap a manifest, instruct the
+converger to delete every repository. The rule is therefore absolute: the reader
+never represents an unreadable source as an empty scope. An unreadable source is an
+error by default (the description fails, naming the source), or, in a best-effort
+mode for unprivileged capture, the scope is omitted with a diagnostic, never
+emitted empty. And a scope that is genuinely empty is omitted from `describe`
+output rather than written as empty, so a bootstrapped manifest leaves it unmanaged
+instead of asserting deletion. Emptiness as an instruction is only ever something a
+human writes on purpose, never an artifact of a failed read.
+
 ### 5.6 Serialisation: JSON canonical, YAML optional
 
 The manifest is a typed data model, and a serialisation renders it to bytes.
@@ -292,6 +314,13 @@ document streams, and explicit typing per the schema instead of YAML implicit
 typing (so `NO` does not become false and a version like `1.10` does not become a
 float). These are stated as constraints, not as a named library, so they bind Go,
 Rust, or C++ equally.
+
+Format selection is centralised in one rule, applied identically to every read and
+every write: an explicit `format=` option wins, else the operative file extension
+decides (`.json` versus `.yaml` / `.yml`), else the configured default. Routing
+input and output through the same rule is what keeps them symmetric, so describing
+to `out=state.yaml` yields YAML for the same reason that loading `desired.yaml`
+parses YAML, and neither depends on the other having been set.
 
 ---
 
@@ -486,6 +515,18 @@ objective.
 
 ## Changelog
 
+- 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.5.0 (three
+  implementation-surfaced fixes). Section 5.5 gained the privilege and
+  empty-scope-safety discussion: the reader works at the file-and-database level
+  (repos.d for repositories, no network refresh or privileged cache), root is
+  recommended for a complete description, and crucially an unreadable source is
+  never represented as an empty scope (which would falsely instruct deletion under
+  the absent-versus-empty contract), with genuine-empty scopes omitted from
+  `describe` output. Section 5.6 gained the note that format selection is
+  centralised in one rule applied symmetrically to input and output (explicit
+  option, else operative file extension, else default), so `describe out=...yaml`
+  yields YAML. The top-level CLI contract (bare invocation and help exit 0;
+  unknown verb or option exits 2) is captured in the spec.
 - 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.4.0. Added Section 5.6
   on serialisation: the manifest is a typed data model with JSON as the canonical
   serialisation and YAML as an opt-in alternative (for YAML-centric and ZARF

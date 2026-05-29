@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.4.0
+Version:     0.5.0
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -63,7 +63,7 @@ ScopeWrapper<T> := {
 
 ManifestMeta := {
   format_version: integer,   // always 1 (Machinery JSON format)
-  generator:      string,    // e.g. "zypper-declarative 0.4.0"
+  generator:      string,    // e.g. "zypper-declarative 0.5.0"
   created_at:     string,    // RFC3339, informational only, not compared
   desired_sha256: Sha256     // canonical-model hash of the desired manifest
                              // (hash of the canonical JSON serialisation of the
@@ -220,6 +220,9 @@ ManifestFormat := json | yaml
 // a yaml-capable parser still ingests json (json is valid yaml 1.2), but describe
 // output written as yaml is not Machinery and strict Machinery or sitar consumers
 // will not read it. The yaml safety profile is defined in load-desired-manifest.
+// Format selection for every read and write goes through resolve-format
+// (explicit option, else operative file extension, else the manifest-format
+// default), so input and output behave symmetrically.
 ```
 
 Example desired manifest in the canonical JSON serialisation (illustration;
@@ -229,7 +232,7 @@ fenced and excluded from structural parsing):
 {
   "meta": {
     "format_version": 1,
-    "generator": "zypper-declarative 0.4.0",
+    "generator": "zypper-declarative 0.5.0",
     "created_at": "2026-05-29T08:30:00Z",
     "desired_sha256": ""
   },
@@ -427,8 +430,9 @@ format.
 
 INPUTS:
 ```
-state_path: AbsolutePath    // optional state dump in the shared schema;
-                            // default = read live via describe-actual-state
+state_path: AbsolutePath          // optional state dump in the shared schema;
+                                  // default = read live via describe-actual-state
+format:     ManifestFormat | none // optional; resolved via resolve-format against state_path
 ```
 
 OUTPUTS:
@@ -444,9 +448,13 @@ PRECONDITIONS:
 STEPS:
 1. Load the applied record via `load-applied-record`. If none exists, emit
    "no declaration applied" to stderr and exit 2 (nothing to verify against).
-2. Obtain the actual state: if `state_path` is given, load and schema-validate
-   that dump as a Manifest; otherwise obtain it via `describe-actual-state` on
-   "/". On a malformed dump exit 2.
+2. Obtain the actual state. If `state_path` is given, resolve its format via
+   `resolve-format(format, state_path)` (explicit option, else the dump's file
+   extension, else the default), load it under that serialisation, and
+   schema-validate it as a Manifest; a YAML dump is parsed under the same safe
+   profile as a desired manifest. Otherwise obtain the actual state via
+   `describe-actual-state` on "/" with `on_unreadable=error`. On a malformed dump
+   exit 2.
 3. Compute the drift report via `compute-drift` from the actual state and the
    applied record.
 4. If the drift report is empty (excluding the keep-list), emit "system matches
@@ -517,15 +525,16 @@ capture a state dump for offline or remote `verify`, and audit. Read-only.
 
 INPUTS:
 ```
-root:   AbsolutePath    // root to describe; default "/"
-out:    AbsolutePath    // output file; default = stdout
-format: ManifestFormat  // output serialisation; default json
+root:          AbsolutePath          // root to describe; default "/"
+out:           AbsolutePath          // output file; default = stdout
+format:        ManifestFormat | none // optional; resolved via resolve-format against out
+on_unreadable: one_of("error" | "warn")  // default "error" from CONFIG
 ```
 
 OUTPUTS:
 ```
 exit:     ExitCode
-document: string   // Manifest of the actual state, in `format`, to out or stdout
+document: string   // Manifest of the actual state, in the resolved format, to out or stdout
 ```
 
 PRECONDITIONS:
@@ -534,23 +543,37 @@ PRECONDITIONS:
 STEPS:
 1. Reject any unrecognised argument or an unknown `format` value: emit usage to
    stderr and exit 2.
-2. Obtain the actual state via `describe-actual-state` on `root`. On a state
-   collection failure emit a diagnostic to stderr and exit 1.
-3. Serialise the resulting Manifest in `format`: canonical JSON (Machinery
-   `format_version` 1, ScopeWrapper idiom, underscore_style), or, when
-   `format=yaml`, the same data model rendered as YAML. JSON output remains
+2. Obtain the actual state via `describe-actual-state` on `root` with
+   `on_unreadable`. If a scope source is unreadable and `on_unreadable` is error,
+   emit a diagnostic naming the source to stderr and exit 1. If warn, the
+   unreadable scopes are omitted and a diagnostic is emitted to stderr for each,
+   and processing continues.
+3. Resolve the output format via `resolve-format(format, out)`: an explicit
+   `format=` wins, else the `out` file extension decides (`.json` -> json,
+   `.yaml`/`.yml` -> yaml), else the `manifest-format` default (stdout has no
+   extension, so it uses the default unless `format=` is given).
+4. Serialise the resulting Manifest in the resolved format: canonical JSON
+   (Machinery `format_version` 1, ScopeWrapper idiom, underscore_style), or, when
+   yaml, the same data model rendered as YAML. JSON output remains
    Machinery-compatible; YAML output does not.
-4. Write it to `out` if given, else to stdout. On write failure exit 2. Exit 0.
+5. Write it to `out` if given, else to stdout. On write failure exit 2. Exit 0.
 
 POSTCONDITIONS:
 - The system is not modified.
 - The emitted document is a schema-valid Manifest (the declarable subset) in the
-  requested format, and is accepted unchanged by `load-desired-manifest` as a
+  resolved format, and is accepted unchanged by `load-desired-manifest` as a
   starting desired manifest.
+- The output format follows `resolve-format`: when no `format=` is given, the
+  `out` extension determines it, so `out=...yaml` yields YAML and `out=...json`
+  yields JSON.
+- No scope is emitted with empty `_elements` because its source was unreadable;
+  under error an unreadable source fails the run, under warn it is omitted with a
+  diagnostic.
 
 ERRORS:
 - unrecognised argument or unknown format value -> exit 2, domain=invocation
-- state collection failed -> exit 1, domain=packages or units or files
+- unreadable scope source under on_unreadable=error -> exit 1, domain=packages or
+  repositories or units or files
 - output path unwritable -> exit 2, domain=invocation
 
 ---
@@ -562,48 +585,110 @@ The single live-state reader. Reads the actual state of the four declarable
 scopes under a given root and returns a Manifest in the shared schema. Every
 verb that needs actual state obtains it through this behaviour (or through a
 supplied dump in the same format); no other code reads live system state.
+Reads are file-and-database level (no network refresh, no daemon, no privileged
+cache), so a normal user can read what is world-readable and the result is
+deterministic. The `describe` verb passes `on_unreadable` through from its option;
+every other caller (`apply`, `diff`, `status`, `verify` reading live state) passes
+`on_unreadable=error`, because convergence and verification require complete
+state.
 
 INPUTS:
 ```
-root: AbsolutePath   // tree to read; "/" for the running system, or a snapshot mount
+root:          AbsolutePath              // tree to read; "/" or a snapshot mount
+on_unreadable: one_of("error" | "warn")  // how to treat a source that cannot be read
 ```
 
 OUTPUTS:
 ```
-manifest: Manifest      // the actual state (declarable scopes)
-error:    Diagnostic    // on failure (returned to caller)
+manifest:    Manifest        // the actual state (declarable scopes)
+diagnostics: []Diagnostic    // under warn: one per omitted unreadable scope
+error:       Diagnostic      // under error: on the first unreadable source
 ```
 
 STEPS:
-1. packages: query the rpmdb under `root`; emit a PackagesScope
+1. packages: query the rpmdb under `root`; build a PackagesScope
    (`_attributes.package_system = "rpm"`) with every record's name, version,
-   release, and arch populated. On query failure return a packages error.
-2. repositories: read the zypp repository configuration under `root`; emit a
-   RepositoriesScope (`_attributes.repository_system = "zypp"`).
-3. services: query unit enablement under `root`; emit a ServicesScope
+   release, and arch populated. If the rpmdb cannot be read, treat per
+   `on_unreadable` (step 6).
+2. repositories: read the on-disk zypp repository configuration under `root`,
+   namely the `.repo` files in `<root>/etc/zypp/repos.d/` (INI sections: alias,
+   name, baseurl mapped to RepositoryRecord.url, type, enabled, gpgcheck,
+   autorefresh, priority); build a RepositoriesScope
+   (`_attributes.repository_system = "zypp"`). This reads declared repository
+   files directly, which are world-readable in the normal case, rather than
+   refreshing metadata or reading a privileged cache. If `repos.d` cannot be read,
+   treat per `on_unreadable` (step 6).
+3. services: query unit enablement under `root`; build a ServicesScope
    (`_attributes.init_system = "systemd"`) with each unit's state normalised to
    enabled, disabled, or masked. Purely-static units are omitted (not
-   declarable). On query failure return a units error.
+   declarable). If enablement cannot be read, treat per `on_unreadable` (step 6).
 4. config_files: enumerate `/etc` under `root`; for each file determine its
-   owning package. Emit a ManagedFileRecord with actual sha256, mode, user,
+   owning package. Build a ManagedFileRecord with actual sha256, mode, user,
    group, type, and package_name for every file that is either changed from its
    package default or unpackaged. Skip files that are package-pristine, the
-   keep-list, and `/etc/etc.syncpoint`. content_ref is "". On read failure return
-   a files error.
+   keep-list, and `/etc/etc.syncpoint`. content_ref is "". If a file that must be
+   inspected cannot be read (for example a root-only file under a non-root run),
+   treat per `on_unreadable` (step 6).
 5. Assemble the Manifest with meta.format_version = 1, generator, created_at, and
-   empty desired_sha256. Return it.
+   empty desired_sha256. Omit any scope whose readable content is genuinely empty
+   (so a bootstrapped manifest leaves that scope unmanaged rather than asserting
+   deletion). Return it, with any warn diagnostics.
+6. Unreadable-source handling: a scope or item whose source cannot be read is
+   never represented as an empty scope. Under `on_unreadable=error`, return an
+   error naming the unreadable source (the caller fails the run). Under
+   `on_unreadable=warn`, omit the affected scope (or the affected items), append a
+   diagnostic naming the source, and continue.
 
 POSTCONDITIONS:
 - The described root is not modified.
 - The returned Manifest is schema-valid and contains only the four declarable
   scopes.
 - config_files contains exactly the changed-from-package and unpackaged /etc
-  files (minus keep-list and syncpoint); package-pristine files are absent.
+  files it could read (minus keep-list and syncpoint); package-pristine files are
+  absent.
+- No scope is emitted with empty `_elements` because its source was unreadable; an
+  unreadable source is an error (strict) or an omission with a diagnostic (warn).
+- A scope that is readable and genuinely empty is omitted, not emitted empty.
 
 ERRORS:
-- rpmdb query failed -> packages error returned to caller
-- unit query failed -> units error returned to caller
-- /etc enumeration failed -> files error returned to caller
+- under on_unreadable=error, the first unreadable source (rpmdb, repos.d, unit
+  enablement, or a required /etc file) -> packages, repositories, units, or files
+  error returned to caller
+
+---
+
+## BEHAVIOR/INTERNAL: resolve-format
+Constraint: required
+
+The single authority for choosing a manifest serialisation. Every read that parses
+a manifest and every write that serialises one resolves its format here, so input
+and output behave symmetrically and the rule cannot drift between call sites.
+
+INPUTS:
+```
+explicit: ManifestFormat | none   // the format= option, or none if not given
+path:     AbsolutePath | none     // the operative file path, or none for stdin/stdout
+```
+
+OUTPUTS:
+```
+format: ManifestFormat
+```
+
+STEPS:
+1. If `explicit` is given, return it (an explicit `format=` always wins).
+2. Else if `path` is given and its file extension is recognised, return json for
+   `.json` and yaml for `.yaml` or `.yml`.
+3. Else (no explicit format, and no path or an unrecognised extension) return the
+   `manifest-format` CONFIG default.
+
+POSTCONDITIONS:
+- An explicit format option always wins over the extension and the default.
+- The file extension is consulted only when no explicit format is given.
+- stdin or stdout (no path), and any unrecognised extension, fall back to the
+  CONFIG default.
+- The same resolution applies whether the path is an input (manifest-path,
+  state-path) or an output (describe out).
 
 ---
 
@@ -611,14 +696,14 @@ ERRORS:
 Constraint: required
 
 Reads and validates the desired manifest into the shared data model, selecting
-the input serialisation, applying a safe YAML profile when the input is YAML, and
-verifying the signature when signature verification is enabled. Also computes the
-manifest's canonical-model identity hash.
+the input serialisation via `resolve-format`, applying a safe YAML profile when
+the input is YAML, and verifying the signature when signature verification is
+enabled. Also computes the manifest's canonical-model identity hash.
 
 INPUTS:
 ```
 manifest_path: AbsolutePath
-format:        ManifestFormat   // optional; default resolved by extension then CONFIG
+format:        ManifestFormat | none   // optional; passed to resolve-format
 ```
 
 OUTPUTS:
@@ -630,10 +715,8 @@ error:          Diagnostic    // on failure (returned to caller, no exit)
 
 STEPS:
 1. Read the file at `manifest_path`. On read failure return an invocation error.
-2. Determine the input format: use an explicit `format` if given; else infer from
-   the file extension (`.json` -> json; `.yaml` or `.yml` -> yaml); else use the
-   `manifest-format` CONFIG default. On an unknown format value return an
-   invocation error.
+2. Resolve the input format via `resolve-format(format, manifest_path)`. On an
+   explicit but unknown format value return an invocation error.
 3. Parse into the data model. For json, parse JSON. For yaml, parse under a safe
    profile: a non-code-executing loader only (no arbitrary or executable tags),
    alias expansion bounded or disabled (reject unbounded anchor/alias expansion),
@@ -1033,9 +1116,15 @@ layering). Control via environment variables is forbidden.
 - `transaction-mode` = auto | external | internal. Default auto.
 - `manifest-path` = path to the desired manifest. Default a fixed staging path
   supplied by the delivery layer.
-- `manifest-format` = json | yaml. Default json. The default input serialisation
-  when neither an explicit `format=` option nor a recognised file extension
-  determines it. The applied record is canonical JSON irrespective of this knob.
+- `manifest-format` = json | yaml. Default json. The fallback serialisation used
+  by `resolve-format` when neither an explicit `format=` option nor a recognised
+  file extension determines it (for example stdin or stdout). The applied record
+  is canonical JSON irrespective of this knob.
+- `on-unreadable` = error | warn. Default error. How `describe` (and the
+  `describe-actual-state` reader) treats a scope source it cannot read: error
+  fails the run naming the source; warn omits the affected scope, emits a
+  diagnostic, and continues. A source that cannot be read is never represented as
+  an empty scope. Internal callers (apply, diff, status, verify) always use error.
 - `repo-lock` = fallback pinned repository or channel used only when the manifest
   declares no `repositories` scope. The primary, declarative source of the pin is
   the manifest's repositories scope.
@@ -1048,6 +1137,9 @@ layering). Control via environment variables is forbidden.
 - `signature-verification` = on | off, plus the keyring path when on. Default on.
 - `activation-policy` = reboot | soft-reboot | none. How `apply` schedules
   activation of a freshly sealed snapshot.
+- `applied-root` = generation root from which `load-applied-record` reads the
+  applied record. Default "/". Set it to a mounted snapshot to inspect that
+  generation's record.
 
 Reserved for a later Version, explicitly out of scope for v1: secret material in
 the declaration (resolved at apply time from an external store, never stored in
@@ -1148,6 +1240,19 @@ resolver fills in the transitive set.
 - [observable] A YAML manifest requiring a disabled (unsafe) loader feature (an
   executable or arbitrary tag, unbounded alias expansion, or multiple documents)
   is rejected with a manifest error rather than parsed.
+- [observable] Every manifest read and write resolves its serialisation through
+  `resolve-format`: an explicit `format=` wins, else the operative file extension
+  (`.json` / `.yaml` / `.yml`) decides, else the `manifest-format` default; so
+  `describe out=...yaml` writes YAML and `out=...json` writes JSON.
+- [observable] `describe-actual-state` never emits a scope with empty `_elements`
+  because its source could not be read; an unreadable source is an error (strict)
+  or an omission with a diagnostic (warn).
+- [observable] A genuinely empty actual scope is omitted from `describe` output,
+  so a bootstrapped manifest leaves that scope unmanaged rather than asserting
+  deletion.
+- [observable] Repositories actual state is read from the on-disk zypp
+  configuration (`/etc/zypp/repos.d`), not from a network refresh or a privileged
+  cache.
 - [observable] Drift and diff comparison uses only the declarable identity fields
   of each scope; observational extension fields in a supplied dump are ignored.
 - [implementation] The intent diff is computed without reading the filesystem.
@@ -1487,6 +1592,113 @@ THEN:
   stderr contains usage with domain=invocation
   exit_code = 2
 
+### EXAMPLE: bare_invocation_shows_help
+GIVEN:
+  invocation: zypper declarative          (no verb)
+WHEN:
+  the tool is invoked
+THEN:
+  usage is printed to stdout
+  exit_code = 0
+
+### EXAMPLE: unknown_verb_rejected
+GIVEN:
+  invocation: zypper declarative frobnicate
+WHEN:
+  the tool is invoked
+THEN:
+  usage is printed to stderr with domain=invocation
+  exit_code = 2
+
+### EXAMPLE: describe_out_extension_yaml
+GIVEN:
+  no format option is given
+  invocation: zypper declarative describe out=/tmp/state.yaml
+WHEN:
+  describe runs
+THEN:
+  resolve-format selects yaml from the .yaml extension
+  /tmp/state.yaml contains a YAML document
+  exit_code = 0
+
+### EXAMPLE: describe_out_extension_json
+GIVEN:
+  no format option is given
+  invocation: zypper declarative describe out=/tmp/state.json
+WHEN:
+  describe runs
+THEN:
+  resolve-format selects json from the .json extension
+  /tmp/state.json contains a JSON document
+  exit_code = 0
+
+### EXAMPLE: describe_format_overrides_extension
+GIVEN:
+  invocation: zypper declarative describe format=json out=/tmp/state.yaml
+WHEN:
+  describe runs
+THEN:
+  resolve-format returns json because the explicit option wins over the extension
+  /tmp/state.yaml contains a JSON document
+  exit_code = 0
+
+### EXAMPLE: verify_state_path_extension_yaml
+GIVEN:
+  a YAML state dump is at /tmp/state.yaml and no format option is given
+  the dump matches the applied record
+  invocation: zypper declarative verify state-path=/tmp/state.yaml
+WHEN:
+  verify runs
+THEN:
+  resolve-format selects yaml from the .yaml extension and the dump is parsed
+  stdout contains "system matches declaration"
+  exit_code = 0
+
+### EXAMPLE: describe_repositories_from_reposd
+GIVEN:
+  /etc/zypp/repos.d contains two readable .repo files
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the repositories scope _elements contains two RepositoryRecord entries
+  the scope is not empty
+  exit_code = 0
+
+### EXAMPLE: describe_unreadable_scope_strict
+GIVEN:
+  /etc/zypp/repos.d cannot be read by the current user
+  on-unreadable defaults to error
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  stderr contains a diagnostic naming the unreadable source with domain=repositories
+  no document with an empty repositories scope is emitted
+  exit_code = 1
+
+### EXAMPLE: describe_unreadable_scope_warn
+GIVEN:
+  /etc/zypp/repos.d cannot be read by the current user
+  invocation: zypper declarative describe on-unreadable=warn
+WHEN:
+  describe runs
+THEN:
+  the repositories scope is omitted from the output, not emitted empty
+  stderr contains a diagnostic naming the unreadable source
+  exit_code = 0
+
+### EXAMPLE: describe_omits_genuinely_empty_scope
+GIVEN:
+  /etc/zypp/repos.d is readable and contains no .repo files
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the output omits the repositories scope rather than emitting empty _elements
+  a manifest bootstrapped from this output leaves repositories unmanaged
+  exit_code = 0
+
 ### EXAMPLE: idempotent_second_apply
 GIVEN:
   apply has just succeeded for a manifest M
@@ -1534,14 +1746,34 @@ Key=value options (precede any bare-word argument):
 ```
 mode=auto|external|internal       transaction binding; default auto
 manifest-path=<path>              desired manifest; default from CONFIG
-format=json|yaml                  manifest input format (load) and describe output
-                                  format; default json, else by file extension
+format=json|yaml                  serialisation for this invocation's manifest I/O
+                                  (manifest-path on load, state-path on verify,
+                                  out on describe); when omitted, the operative
+                                  file extension decides, else manifest-format
 state-path=<path>                 state dump as actual-state source for verify
 root=<path>                       root to describe; default "/"
 out=<path>                        describe output file; default stdout
+on-unreadable=error|warn          describe: fail (default) or omit+warn on an
+                                  unreadable scope source; never emit empty
 ```
+All CONFIG knobs are also accepted as key=value options (the same key as in
+CONFIG): `manifest-format`, `repo-lock`, `content-store`, `keep-list`,
+`signature-verification`, `keyring`, `activation-policy`, `applied-root`. A
+command-line option overrides the corresponding preset value.
 
 Verbs (bare words): `apply`, `diff`, `verify`, `status`, `describe`.
+
+Global behaviour (no verb, or a global flag):
+- `--version` prints the program name, version, and embedded spec hash to stdout,
+  then exits 0.
+- `--help` and `-h` print usage to stdout, then exit 0.
+- Bare invocation (`zypper declarative` with no verb) prints usage to stdout and
+  exits 0; it is treated as a discovery action, not an error, and it never runs a
+  default verb (in particular it never converges). When dispatched as a zypper
+  subcommand, exit 0 avoids zypper reporting a non-zero subcommand status for a
+  plain discovery call.
+- An unknown verb, an unknown option, an unknown option value, or a missing
+  required value prints usage to stderr and exits 2.
 
 Output streams:
 - stderr: diagnostics (errors and warnings), one per line
@@ -1618,8 +1850,8 @@ Hints-file: cli-tool.go.milestones.hints.md
 Included BEHAVIORs:
   apply, diff, verify, status, describe, load-desired-manifest,
   load-applied-record, compute-intent-diff, compute-drift, describe-actual-state,
-  acquire-transaction-context, converge-packages, converge-files, converge-units,
-  write-applied-record
+  resolve-format, acquire-transaction-context, converge-packages, converge-files,
+  converge-units, write-applied-record
 
 Acceptance criteria:
   ./zypper-declarative --version | grep -q "^zypper-declarative "
@@ -1630,7 +1862,7 @@ Status: pending
 
 Included BEHAVIORs:
   status, describe, load-applied-record, load-desired-manifest,
-  describe-actual-state
+  describe-actual-state, resolve-format
 
 Deferred BEHAVIORs:
   apply, diff, verify, compute-intent-diff, compute-drift,
@@ -1638,7 +1870,9 @@ Deferred BEHAVIORs:
   converge-units, write-applied-record
 
 Acceptance criteria:
-  ./zypper-declarative describe | grep -q "\"package_system\""
+  ./zypper-declarative | grep -q "usage:"                        # bare invocation
+  test $( ./zypper-declarative >/dev/null 2>&1; echo $? ) -eq 0  # bare exits 0
+  ./zypper-declarative describe out=/tmp/d.yaml && head -1 /tmp/d.yaml | grep -vq "^{"  # yaml by extension
   ./zypper-declarative status | grep -q "no declaration applied"
 
 ## MILESTONE: 0.2.0
@@ -1707,6 +1941,26 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-05-29: Version 0.5.0. Three fixes surfaced by a first implementation, all
+  closed in the spec rather than the code. (1) Defined the top-level CLI contract:
+  bare invocation and `--help` print usage to stdout and exit 0 (discovery, not an
+  error; never runs a default verb), `--version` exits 0, and an unknown verb,
+  option, value, or missing value exits 2 to stderr; documented that all CONFIG
+  knobs are also accepted as key=value options. (2) Centralised serialisation
+  choice in a new internal behaviour `resolve-format` (explicit `format=` option,
+  else the operative file extension, else the `manifest-format` default) and
+  routed every manifest read and write through it, so output now honours the `out`
+  extension (`describe out=...yaml` writes YAML) symmetrically with input, on
+  manifest-path, state-path, and describe out alike; `verify` gained a `format`
+  option for the state dump. (3) Pinned the repositories actual-state source to
+  the on-disk `/etc/zypp/repos.d` files (readable without elevated privilege, no
+  network refresh or privileged cache), and fixed a latent footgun: a scope source
+  that cannot be read is never represented as an empty scope. `describe-actual-state`
+  now errors on an unreadable source by default, or omits it with a diagnostic
+  under `on-unreadable=warn`, and omits genuinely-empty scopes so a bootstrapped
+  manifest leaves them unmanaged rather than asserting deletion. Internal callers
+  (apply, diff, status, verify) always use the strict reader. Added `on-unreadable`
+  and `applied-root` CONFIG knobs.
 - 2026-05-29: Version 0.4.0. Added YAML as an opt-in serialisation of the manifest
   alongside the canonical JSON, on a `format=` switch (and `manifest-format` CONFIG
   default, and file-extension inference), for environments that author OS state in
