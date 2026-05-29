@@ -1,48 +1,66 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 //
-// Format resolution: the single authority for choosing a serialisation. Used
-// by load-desired-manifest (manifest-path), verify (state-path), and describe
-// (out). Precedence: explicit format=, else operative file extension, else the
-// manifest-format CONFIG default.
+// resolve-format: the single authority for choosing a manifest serialisation.
+// Every read that parses a manifest and every write that serialises one resolves
+// its format here, so input and output behave symmetrically.
 package manifest
 
 import (
-	"fmt"
+	"path/filepath"
 	"strings"
 )
 
-// ResolveFormat applies the format-selection precedence (load-desired-manifest
-// STEP 2 / decisions hints resolve-format): explicit value first, then the
-// operative path extension, then the configured default.
+// Format is the serialisation of the manifest data model.
+type Format string
+
+const (
+	FormatJSON Format = "json"
+	FormatYAML Format = "yaml"
+)
+
+// ErrUnknownFormat is returned for an explicit format value that is not
+// recognised.
+type ErrUnknownFormat struct{ Value string }
+
+func (e *ErrUnknownFormat) Error() string {
+	return "unknown format value: " + e.Value
+}
+
+// ParseFormat validates an explicit format string. The empty string means "no
+// explicit format". An unrecognised non-empty value is an error.
+func ParseFormat(s string) (Format, bool, error) {
+	if s == "" {
+		return "", false, nil
+	}
+	switch strings.ToLower(s) {
+	case "json":
+		return FormatJSON, true, nil
+	case "yaml":
+		return FormatYAML, true, nil
+	default:
+		return "", false, &ErrUnknownFormat{Value: s}
+	}
+}
+
+// ResolveFormat chooses a serialisation per the spec resolve-format behaviour:
+//  1. an explicit format always wins;
+//  2. else the operative file extension decides (.json -> json, .yaml/.yml -> yaml);
+//  3. else the manifest-format CONFIG default.
 //
-// explicit is the value of the format= option ("" when unset). path is the
-// operative path (manifest-path, state-path, or out); "" for stdin/stdout.
-// def is the manifest-format CONFIG default.
-//
-// An explicit format that is neither json nor yaml is an error (unknown format
-// value). The returned error is non-nil only for an unknown explicit value.
-func ResolveFormat(explicit, path string, def Format) (Format, error) {
-	if explicit != "" {
-		switch Format(strings.ToLower(explicit)) {
-		case FormatJSON:
-			return FormatJSON, nil
-		case FormatYAML:
-			return FormatYAML, nil
-		default:
-			return "", fmt.Errorf("unknown format value %q", explicit)
-		}
+// explicitGiven indicates whether an explicit format= was supplied; explicit is
+// the resolved explicit value. path is the operative file path ("" for
+// stdin/stdout). def is the manifest-format default.
+func ResolveFormat(explicit Format, explicitGiven bool, path string, def Format) Format {
+	if explicitGiven {
+		return explicit
 	}
 	if path != "" {
-		lower := strings.ToLower(path)
-		switch {
-		case strings.HasSuffix(lower, ".json"):
-			return FormatJSON, nil
-		case strings.HasSuffix(lower, ".yaml"), strings.HasSuffix(lower, ".yml"):
-			return FormatYAML, nil
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".json":
+			return FormatJSON
+		case ".yaml", ".yml":
+			return FormatYAML
 		}
 	}
-	if def == "" {
-		return FormatJSON, nil
-	}
-	return def, nil
+	return def
 }

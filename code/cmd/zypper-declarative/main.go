@@ -1,34 +1,16 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 //
-// Entry point for zypper-declarative. Thin CLI dispatch only: signal handling,
-// argument hand-off to internal/cli, and exit-code propagation. No behaviour is
-// implemented here (SOURCE-PARTITIONING: one-entry-one-implementation).
+// Command zypper-declarative is the entry point. It contains only CLI dispatch:
+// it builds the argument list and calls into internal/cli, then exits with the
+// returned code. All behaviour lives in the internal packages.
 package main
 
 import (
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/mge1512/zypper-declarative/internal/cli"
-	"github.com/mge1512/zypper-declarative/internal/sysiface"
 )
 
 func main() {
-	// Clean exit on SIGTERM and SIGINT with no partial output: an interrupted
-	// apply discards its transaction (the snapshot is never sealed/activated),
-	// so exiting non-zero leaves the running system unchanged.
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigChan
-		os.Exit(cli.ExitInvocation)
-	}()
-
-	app := &cli.App{
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		Runner: &sysiface.OSCommandRunner{},
-	}
-	os.Exit(app.Run(os.Args[1:]))
+	os.Exit(cli.New().Run(os.Args[1:]))
 }

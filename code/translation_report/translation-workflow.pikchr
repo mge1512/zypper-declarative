@@ -1,18 +1,19 @@
-# generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
-# Translation workflow for zypper-declarative (cli-tool, Go, dual-LLM run).
+# generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+# Translation workflow for zypper-declarative (cli-tool, Go).
 
-box "spec + template" "+ hints" fit
+down
+box "Read spec," "template," "hints files" fit
 arrow
-box "resolve" "module identity" "+ language (Go)" fit
+box "Phase 1:" "write tests" "(Tests First)" fit
 arrow
-box "continuity check" "(test-author" "TEST_REPORT.md)" fit
+box "Tests-First" "guard" fit
 arrow
-box "Phase 1" "translator tests" "(Tests First)" fit
+box "Phase 2:" "implementation" "(internal/* + cmd)" fit
 arrow
-box "Phase 2" "core impl" "internal/* + cmd" fit
+box "Phase 3:" "Makefile, RPM," "debian/*, LICENSE," "man page" fit
 arrow
-box "Phase 3" "Makefile, RPM," "DEB, LICENSE, man" fit
+box "Phase 5:" "README.md" fit
 arrow
-box "Phase 6" "compile gate" "+ test runs" fit
+box "Phase 6:" "compile gate" "go build + go test" fit
 arrow
-box "Phase 7" "TRANSLATION_" "REPORT.md" fit
+box "Phase 7:" "TRANSLATION_REPORT.md" fit

@@ -1,22 +1,21 @@
 #!/usr/bin/make -f
-# generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+# generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+# debian/rules for zypper-declarative
 
-export CGO_ENABLED=0
-export GOFLAGS=-mod=vendor
-
-BINARY := zypper-declarative
+export DH_GOPKG := github.com/mge1512/zypper-declarative
+export CGO_ENABLED := 0
 
 %:
 	dh $@
 
 override_dh_auto_build:
-	go build -o $(BINARY) ./cmd/$(BINARY)
-	pandoc $(BINARY).1.md -s -t man -o $(BINARY).1
+	go build -o zypper-declarative ./cmd/zypper-declarative
+	pandoc zypper-declarative.1.md -s -t man -o zypper-declarative.1
 
 override_dh_auto_install:
-	install -D -m 0755 $(BINARY) debian/$(BINARY)/usr/bin/$(BINARY)
-	install -D -m 0755 $(BINARY) debian/$(BINARY)/usr/lib/zypper/commands/zypper-declarative
-	install -D -m 0644 $(BINARY).1 debian/$(BINARY)/usr/share/man/man1/$(BINARY).1
+	install -D -m 0755 zypper-declarative debian/zypper-declarative/usr/bin/zypper-declarative
+	install -D -m 0755 zypper-declarative debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
+	install -D -m 0644 zypper-declarative.1 debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
 
 override_dh_auto_test:
-	cd independent_tests/claude-opus-4-8 && go test ./...
+	go test ./independent_tests/claude-opus-4-8/...

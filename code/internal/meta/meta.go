@@ -1,17 +1,16 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 //
-// Package meta carries build-time provenance: the component version and the
-// SHA256 of the specification this binary was generated from. The values are
-// embedded as constants so that `--version` and the generator metadata can
-// report them without external state.
+// Package meta carries the program identity: its version and the SHA256 of the
+// specification it was generated from. The spec hash is embedded so that
+// --version output is cryptographically tied to the spec the binary implements.
 package meta
 
-// Version is the component version, tracking the spec META Version field.
-const Version = "0.4.0"
+// Version is the program version, tracking the spec META Version field.
+const Version = "0.5.0"
 
-// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as provided to the
-// translator. It is embedded in every artifact for cryptographic provenance.
-const SpecSHA256 = "714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014"
+// Name is the program / binary name.
+const Name = "zypper-declarative"
 
-// Generator is the generator identity stamped into produced manifests.
-const Generator = "zypper-declarative " + Version
+// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as provided at
+// translation time. Embedded per the spec hash invariant.
+const SpecSHA256 = "58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4"

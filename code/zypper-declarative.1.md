@@ -1,12 +1,10 @@
-% ZYPPER-DECLARATIVE(1) zypper-declarative 0.4.0 | User Commands
-%
-% 2026-05-29
-
-<!-- generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014 -->
+% ZYPPER-DECLARATIVE(1) zypper-declarative 0.5.0 | User Commands
+% Matthias G. Eckermann
+% May 2026
 
 # NAME
 
-zypper-declarative - reconciling converger for declarative SUSE system state
+zypper-declarative - declarative, reconciling converger surfaced as a zypper subcommand
 
 # SYNOPSIS
 
@@ -17,110 +15,101 @@ zypper-declarative - reconciling converger for declarative SUSE system state
 # DESCRIPTION
 
 **zypper-declarative** converges a SUSE system to a desired manifest inside a
-single snapshot transaction and records what was applied. The desired manifest
-is the declarable subset of the SUSE Machinery system description (packages,
-repositories, services, config_files), serialised as canonical JSON
-(format_version 1) or, optionally, YAML.
+single snapshot transaction, recording what was applied. The manifest is the
+declarable subset of the SUSE Machinery system description: **packages**,
+**repositories**, **services**, and **config_files**, using the
+`{_attributes, _elements}` ScopeWrapper idiom and `underscore_style` field
+names. Its canonical serialisation is JSON (Machinery `format_version` 1); YAML
+is an opt-in serialisation of the identical data model.
 
-It is surfaced as a **zypper** subcommand (an executable in
-*/usr/lib/zypper/commands*) and is also invokable directly.
+The tool reads the live system into this same model itself (see **describe**),
+so no separate collector program is required.
 
 # VERBS
 
 **apply**
-: Converge the system to the desired manifest in a snapshot transaction.
-  Idempotent.
+: Converge the system to the desired manifest inside a single snapshot
+transaction, recording what was applied. Idempotent. Requires privilege and an
+available transaction mechanism.
 
 **diff**
-: Dry run. Compute and print what **apply** would change. Makes no
-  modification and opens no transaction.
+: Dry run. Compute and print what **apply** would change, making no
+modification and opening no transaction.
 
 **verify**
-: Check whether the actual state equals the applied declaration, modulo the
-  keep-list.
+: Check whether the actual state equals the declaration recorded in the current
+generation, modulo the keep-list. Exit 0 if and only if it matches.
 
 **status**
-: Print the current declarative state and a one-line drift summary.
+: Print the current declarative state: the applied manifest hash, the
+generation, the resolved package count, and a one-line drift summary.
 
 **describe**
-: Read the actual state of the declarable scopes and emit it as JSON (default)
-  or YAML.
+: Read the actual state of the declarable scopes and emit it in the selected
+serialisation (JSON by default, YAML on request). Read-only.
 
 # OPTIONS
 
-Options use *key=value* syntax and must precede any bare-word argument.
-Behaviour is never controlled via environment variables.
+Options are *key=value* pairs and precede any bare-word argument. Control via
+environment variables is not supported.
 
 **mode=auto|external|internal**
-: Transaction binding. Default *auto*.
+: Transaction binding. Default **auto**.
 
 **manifest-path=**\<path>
 : Desired manifest. Default from CONFIG.
 
-**manifest-format=json|yaml**
-: Default input serialisation. Default *json*.
-
 **format=json|yaml**
-: Explicit input format (load) and **describe** output format.
+: Serialisation for this invocation's manifest I/O. When omitted, the operative
+file extension decides, else the **manifest-format** default.
 
 **state-path=**\<path>
 : State dump used as the actual-state source for **verify**.
 
 **root=**\<path>
-: Root to **describe**. Default */*.
+: Root to describe. Default "/".
 
 **out=**\<path>
-: **describe** output file. Default standard output.
+: **describe** output file. Default stdout.
 
-**repo-lock=**\<repo>
-: Fallback pinned repository when the manifest declares none.
+**on-unreadable=error|warn**
+: **describe**: fail (default) or omit-and-warn on an unreadable scope source.
+A source that cannot be read is never emitted as an empty scope.
 
-**content-store=**\<path>
-: Base path against which content_ref values are resolved.
+Additional CONFIG knobs accepted as options: **manifest-format**, **repo-lock**,
+**content-store**, **keep-list**, **signature-verification**, **keyring**,
+**activation-policy**, **applied-root**.
 
-**keep-list=**\<path>
-: Allowlist of persistent-but-undeclared paths never reported or deleted.
+# GLOBAL
 
-**signature-verification=on|off**
-: Manifest signature check. Default *on*.
+**--version**
+: Print the program name, version, and embedded spec hash; exit 0.
 
-**keyring=**\<path>
-: Keyring path used when verification is on.
+**--help**, **-h**
+: Print usage; exit 0.
 
-**activation-policy=reboot|soft-reboot|none**
-: How **apply** schedules activation of a freshly sealed snapshot.
-
-**applied-root=**\<path>
-: Generation root the applied record is read from or written to.
+A bare invocation prints usage to stdout and exits 0 (discovery; it never runs a
+default verb).
 
 # EXIT STATUS
 
 **0**
-: Success: convergence complete or no-op, system matches declaration, or
-  describe produced output.
+: Success (converged, no-op, system matches declaration, or describe emitted).
 
 **1**
-: Logical failure: convergence failed and discarded; verify found drift;
-  manifest invalid, unsafe-YAML, or unverified; state collection failed.
+: Logical failure (convergence failed and discarded; verify drift; invalid,
+unsafe-YAML, or unverified manifest; state collection failed).
 
 **2**
-: Invocation error: bad arguments; unknown format value; manifest unreadable;
-  insufficient privilege; transaction mechanism unavailable; output path
-  unwritable; malformed state dump.
+: Invocation error (bad arguments; unknown format value; manifest unreadable;
+insufficient privilege; transaction mechanism unavailable; output path
+unwritable; malformed state dump).
 
 # FILES
 
 */usr/lib/zypper-declarative/applied.json*
-: The applied record of the current generation.
-
-*/etc/etc.syncpoint*
-: Never written to or deleted.
-
-# INSTALLATION
-
-Installed from an OBS package via build.opensuse.org (zypper, apt, or dnf
-depending on distribution). curl-based installation is not supported.
+: The applied record of a generation, stored within the snapshot it describes.
 
 # SEE ALSO
 
-**zypper**(8), **transactional-update**(8), **snapper**(8), **systemctl**(1)
+**zypper**(8), **snapper**(8), **transactional-update**(8), **systemctl**(1)

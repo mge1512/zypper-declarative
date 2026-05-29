@@ -1,17 +1,16 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 // tests by: claude-opus-4-8
 //
 // Black-box test suite for the zypper-declarative CLI binary.
-// Tests invoke the binary via os/exec per the DEPLOYMENT interface and assert
-// on stdout, stderr, and exit code. No internal Go function is called; no
-// behaviour is simulated through wrapper code.
 //
-// Binary discovery path follows the cli-tool template BINARY-LOCATION:
-// project-root constraint: relative to this test directory the binary is at
-// "../../zypper-declarative". TestMain builds it from
-// "../../cmd/zypper-declarative" if it is absent.
-
-package claude_opus_4_8_test
+// The interface under test is the CLI binary declared in the spec's DEPLOYMENT
+// section. Tests invoke it via exec.Command and assert on stdout, stderr, and
+// exit code. Tests never import or call the implementation's internal packages.
+//
+// Per the cli-tool template BINARY-LOCATION constraint (project-root), the
+// binary lives at "../../zypper-declarative" relative to this directory.
+// TestMain builds it from "../../cmd/zypper-declarative".
+package independent_tests
 
 import (
 	"bytes"
@@ -23,223 +22,159 @@ import (
 	"testing"
 )
 
-const binaryPath = "../../zypper-declarative"
+// binaryRelPath is the canonical path the binary lives at, per the cli-tool
+// template's BINARY-LOCATION: project-root constraint, expressed relative to
+// this test directory (independent_tests/<llm-name>/).
+const binaryRelPath = "../../zypper-declarative"
 
-// TestMain builds the binary at the canonical project-root location before the
-// suite runs, so the tests exercise a real binary regardless of build state.
+// binaryAbsPath is resolved in TestMain.
+var binaryAbsPath string
+
 func TestMain(m *testing.M) {
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		build := exec.Command("go", "build", "-o", binaryPath, "../../cmd/zypper-declarative")
-		build.Stdout = os.Stdout
-		build.Stderr = os.Stderr
-		if err := build.Run(); err != nil {
-			panic("failed to build binary under test: " + err.Error())
-		}
+	// Build the binary at the canonical location from the canonical source path.
+	// The translator must place the entry point at cmd/zypper-declarative/main.go.
+	abs, err := filepath.Abs(binaryRelPath)
+	if err != nil {
+		panic(err)
+	}
+	binaryAbsPath = abs
+
+	build := exec.Command("go", "build", "-o", abs, "./cmd/zypper-declarative")
+	build.Dir = mustProjectRoot()
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	var bo bytes.Buffer
+	build.Stdout = &bo
+	build.Stderr = &bo
+	if err := build.Run(); err != nil {
+		// Could not build; report and fail all tests by exiting non-zero.
+		_, _ = os.Stderr.WriteString("failed to build binary under test:\n" + bo.String() + "\n")
+		os.Exit(2)
 	}
 	os.Exit(m.Run())
 }
 
-// run executes the binary with the supplied args and an empty environment except
-// PATH (env-var control of behaviour is forbidden, so the suite never sets any).
-func run(t *testing.T, args ...string) (stdout string, stderr string, code int) {
+// mustProjectRoot returns the project root (two directories up from this test
+// directory), where go.mod and the built binary live.
+func mustProjectRoot() string {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		panic(err)
+	}
+	return root
+}
+
+// runResult captures the observable result of one binary invocation.
+type runResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+// run executes the binary under test with the given args and returns the result.
+func run(t *testing.T, args ...string) runResult {
 	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
+	cmd := exec.Command(binaryAbsPath, args...)
+	var so, se bytes.Buffer
+	cmd.Stdout = &so
+	cmd.Stderr = &se
 	err := cmd.Run()
-	code = 0
+	code := 0
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			code = ee.ExitCode()
 		} else {
-			t.Fatalf("failed to run binary %v: %v", args, err)
+			t.Fatalf("failed to run binary %q args %v: %v", binaryAbsPath, args, err)
 		}
 	}
-	return outBuf.String(), errBuf.String(), code
+	return runResult{stdout: so.String(), stderr: se.String(), exitCode: code}
 }
 
-func writeManifest(t *testing.T, name, content string) string {
+// writeTemp writes content to a temp file with the given suffix and returns the path.
+func writeTemp(t *testing.T, name, content string) string {
 	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatalf("writing temp file %s: %v", p, err)
 	}
 	return p
 }
 
-// A structurally complete desired manifest (canonical JSON, format_version 1).
-const desiredManifestJSON = `{
+// ---------------------------------------------------------------------------
+// Test fixtures: structurally complete manifests in the shared schema.
+// ---------------------------------------------------------------------------
+
+// validManifestJSON is a structurally complete, schema-valid desired manifest
+// (Machinery format_version 1, ScopeWrapper idiom, underscore_style fields).
+const validManifestJSON = `{
   "meta": {
     "format_version": 1,
-    "generator": "zypper-declarative 0.4.0",
+    "generator": "test",
     "created_at": "2026-05-29T08:30:00Z",
     "desired_sha256": ""
   },
   "repositories": {
     "_attributes": { "repository_system": "zypp" },
     "_elements": [
-      { "alias": "sl-micro-6.2-pinned", "name": "SL Micro 6.2 (pinned)",
-        "url": "https://internal.example/obs/SLMicro:6.2:pinned/standard",
-        "type": "rpm-md", "enabled": true, "gpgcheck": true,
-        "autorefresh": false, "priority": 99 }
+      {
+        "alias": "sl-micro-6.2-pinned",
+        "name": "SL Micro 6.2 (pinned)",
+        "url": "https://internal.example/obs/SLMicro/standard",
+        "type": "rpm-md",
+        "enabled": true,
+        "gpgcheck": true,
+        "autorefresh": false,
+        "priority": 99
+      }
     ]
   },
   "packages": {
     "_attributes": { "package_system": "rpm" },
-    "_elements": [ { "name": "nginx", "version": "", "release": "", "arch": "" } ]
+    "_elements": [
+      { "name": "nginx", "version": "", "release": "", "arch": "" }
+    ]
   },
   "services": {
     "_attributes": { "init_system": "systemd" },
-    "_elements": [ { "name": "nginx.service", "state": "enabled" } ]
+    "_elements": [
+      { "name": "nginx.service", "state": "enabled" }
+    ]
   },
   "config_files": {
     "_attributes": null,
     "_elements": [
-      { "name": "/etc/nginx/nginx.conf", "type": "file", "mode": "0644",
-        "user": "root", "group": "root",
+      {
+        "name": "/etc/foo.conf",
+        "type": "file",
+        "mode": "0644",
+        "user": "root",
+        "group": "root",
         "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-        "content_ref": "files/etc/nginx/nginx.conf", "package_name": "" }
+        "content_ref": "files/etc/foo.conf",
+        "package_name": ""
+      }
     ]
   }
 }`
 
-// --version / --help / bare invocation -------------------------------------
-
-func TestVersionEmbedsSpecHash(t *testing.T) {
-	stdout, _, code := run(t, "--version")
-	if code != 0 {
-		t.Fatalf("--version exit = %d, want 0", code)
-	}
-	if !strings.Contains(stdout, "zypper-declarative ") {
-		t.Errorf("--version stdout missing program name: %q", stdout)
-	}
-	if !strings.Contains(stdout, "spec:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014") {
-		t.Errorf("--version stdout missing embedded spec hash: %q", stdout)
-	}
-}
-
-func TestHelpPrintsUsage(t *testing.T) {
-	stdout, _, code := run(t, "--help")
-	if code != 0 {
-		t.Fatalf("--help exit = %d, want 0", code)
-	}
-	if !strings.Contains(strings.ToLower(stdout), "usage") {
-		t.Errorf("--help stdout missing usage: %q", stdout)
-	}
-}
-
-func TestUnknownVerbExits2(t *testing.T) {
-	_, stderr, code := run(t, "frobnicate")
-	if code != 2 {
-		t.Fatalf("unknown verb exit = %d, want 2", code)
-	}
-	if strings.TrimSpace(stderr) == "" {
-		t.Errorf("unknown verb should print a diagnostic to stderr")
-	}
-}
-
-// apply --------------------------------------------------------------------
-
-// EXAMPLE: apply_manifest_unreadable
-func TestApplyManifestUnreadable(t *testing.T) {
-	_, stderr, code := run(t, "apply", "manifest-path=/nonexistent.json")
-	if code != 2 {
-		t.Fatalf("apply unreadable manifest exit = %d, want 2", code)
-	}
-	if !strings.Contains(stderr, "invocation") {
-		t.Errorf("expected domain=invocation diagnostic, got stderr: %q", stderr)
-	}
-}
-
-// EXAMPLE: apply_manifest_invalid (format_version = 2 -> manifest domain, exit 1)
-func TestApplyManifestInvalid(t *testing.T) {
-	bad := strings.Replace(desiredManifestJSON, `"format_version": 1`, `"format_version": 2`, 1)
-	p := writeManifest(t, "bad.json", bad)
-	_, stderr, code := run(t, "apply", "manifest-path="+p)
-	if code != 1 {
-		t.Fatalf("apply invalid manifest exit = %d, want 1", code)
-	}
-	if !strings.Contains(stderr, "manifest") {
-		t.Errorf("expected domain=manifest diagnostic, got stderr: %q", stderr)
-	}
-}
-
-// EXAMPLE: apply_transaction_unavailable (external mode, not in a transaction)
-func TestApplyTransactionUnavailable(t *testing.T) {
-	p := writeManifest(t, "desired.json", desiredManifestJSON)
-	_, stderr, code := run(t, "apply", "manifest-path="+p, "mode=external")
-	// external mode but not inside a transaction -> exit 2, domain=transaction.
-	if code != 2 {
-		t.Fatalf("apply external w/o txn exit = %d, want 2; stderr=%q", code, stderr)
-	}
-	if !strings.Contains(stderr, "transaction") {
-		t.Errorf("expected domain=transaction diagnostic, got stderr: %q", stderr)
-	}
-}
-
-// EXAMPLE: yaml_unsafe_rejected (apply on unsafe YAML -> exit 1, manifest)
-func TestApplyUnsafeYAMLRejected(t *testing.T) {
-	// Multi-document stream is one of the disabled features.
-	yaml := "meta:\n  format_version: 1\n---\nmeta:\n  format_version: 1\n"
-	p := writeManifest(t, "evil.yaml", yaml)
-	_, stderr, code := run(t, "apply", "manifest-path="+p)
-	if code != 1 {
-		t.Fatalf("apply unsafe yaml exit = %d, want 1; stderr=%q", code, stderr)
-	}
-	if !strings.Contains(stderr, "manifest") {
-		t.Errorf("expected domain=manifest diagnostic, got stderr: %q", stderr)
-	}
-}
-
-// diff ---------------------------------------------------------------------
-
-// EXAMPLE: diff_manifest_unreadable
-func TestDiffManifestUnreadable(t *testing.T) {
-	_, stderr, code := run(t, "diff", "manifest-path=/nonexistent.json")
-	if code != 2 {
-		t.Fatalf("diff unreadable manifest exit = %d, want 2", code)
-	}
-	if !strings.Contains(stderr, "invocation") {
-		t.Errorf("expected domain=invocation, got stderr: %q", stderr)
-	}
-}
-
-// EXAMPLE: diff_prints_plan — first-ever apply, all packages install, exit 0.
-func TestDiffPrintsPlan(t *testing.T) {
-	p := writeManifest(t, "desired.json", desiredManifestJSON)
-	stdout, stderr, code := run(t, "diff", "manifest-path="+p)
-	if code != 0 {
-		t.Fatalf("diff exit = %d, want 0; stderr=%q", code, stderr)
-	}
-	if !strings.Contains(stdout, "nginx") {
-		t.Errorf("diff plan should list nginx to install; stdout=%q", stdout)
-	}
-}
-
-// INVARIANT [observable]: diff opens no transaction / modifies nothing.
-// Verified observably: diff against a manifest exits 0 and is a dry run.
-func TestDiffIsDryRun(t *testing.T) {
-	p := writeManifest(t, "desired.json", desiredManifestJSON)
-	_, _, code := run(t, "diff", "manifest-path="+p)
-	if code != 0 {
-		t.Fatalf("diff exit = %d, want 0", code)
-	}
-	// Running diff twice is idempotent and never changes exit behaviour.
-	_, _, code2 := run(t, "diff", "manifest-path="+p)
-	if code2 != 0 {
-		t.Fatalf("second diff exit = %d, want 0", code2)
-	}
-}
-
-// EXAMPLE: yaml_manifest_accepted — diff on a YAML manifest, exit 0.
-func TestDiffYAMLManifestAccepted(t *testing.T) {
-	yaml := `meta:
+// equivalent YAML serialisation of the same manifest data model.
+const validManifestYAML = `meta:
   format_version: 1
-  generator: "zypper-declarative 0.4.0"
+  generator: "test"
   created_at: "2026-05-29T08:30:00Z"
   desired_sha256: ""
+repositories:
+  _attributes:
+    repository_system: "zypp"
+  _elements:
+    - alias: "sl-micro-6.2-pinned"
+      name: "SL Micro 6.2 (pinned)"
+      url: "https://internal.example/obs/SLMicro/standard"
+      type: "rpm-md"
+      enabled: true
+      gpgcheck: true
+      autorefresh: false
+      priority: 99
 packages:
   _attributes:
     package_system: "rpm"
@@ -248,227 +183,595 @@ packages:
       version: ""
       release: ""
       arch: ""
+services:
+  _attributes:
+    init_system: "systemd"
+  _elements:
+    - name: "nginx.service"
+      state: "enabled"
+config_files:
+  _attributes: null
+  _elements:
+    - name: "/etc/foo.conf"
+      type: "file"
+      mode: "0644"
+      user: "root"
+      group: "root"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      content_ref: "files/etc/foo.conf"
+      package_name: ""
 `
-	p := writeManifest(t, "desired.yaml", yaml)
-	stdout, stderr, code := run(t, "diff", "manifest-path="+p)
-	if code != 0 {
-		t.Fatalf("diff yaml exit = %d, want 0; stderr=%q", code, stderr)
+
+// manifestFormatVersion2JSON is a structurally complete manifest that is invalid
+// only because meta.format_version is 2 (the schema requires 1).
+const manifestFormatVersion2JSON = `{
+  "meta": {
+    "format_version": 2,
+    "generator": "test",
+    "created_at": "2026-05-29T08:30:00Z",
+    "desired_sha256": ""
+  },
+  "packages": {
+    "_attributes": { "package_system": "rpm" },
+    "_elements": [ { "name": "nginx", "version": "", "release": "", "arch": "" } ]
+  }
+}`
+
+// ===========================================================================
+// Top-level CLI contract (DEPLOYMENT section, v0.5.0 changelog item 1)
+// ===========================================================================
+
+// EXAMPLE: bare_invocation_shows_help
+func TestBareInvocationShowsHelp(t *testing.T) {
+	r := run(t)
+	if r.exitCode != 0 {
+		t.Fatalf("bare invocation: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
 	}
-	if !strings.Contains(stdout, "nginx") {
-		t.Errorf("yaml diff plan should list nginx; stdout=%q", stdout)
+	if !strings.Contains(strings.ToLower(r.stdout), "usage") {
+		t.Errorf("bare invocation: stdout should contain usage, got %q", r.stdout)
 	}
 }
 
-// verify -------------------------------------------------------------------
-
-// EXAMPLE: verify_no_applied_record (against an empty root)
-func TestVerifyNoAppliedRecord(t *testing.T) {
-	root := t.TempDir()
-	_, stderr, code := run(t, "verify", "applied-root="+root)
-	if code != 2 {
-		t.Fatalf("verify no record exit = %d, want 2; stderr=%q", code, stderr)
+// --help prints usage to stdout and exits 0.
+func TestHelpFlagStdoutExitZero(t *testing.T) {
+	r := run(t, "--help")
+	if r.exitCode != 0 {
+		t.Fatalf("--help: want exit 0, got %d", r.exitCode)
 	}
-	if !strings.Contains(stderr, "no declaration applied") {
-		t.Errorf("expected 'no declaration applied', got stderr: %q", stderr)
+	if !strings.Contains(strings.ToLower(r.stdout), "usage") {
+		t.Errorf("--help: stdout should contain usage, got %q", r.stdout)
 	}
 }
 
-// EXAMPLE: verify_malformed_state_dump
-func TestVerifyMalformedStateDump(t *testing.T) {
-	root := t.TempDir()
-	// Provide an applied record so verify proceeds to read the state dump.
-	mkAppliedRecord(t, root)
-	bad := writeManifest(t, "broken.json", "{ this is not json")
-	_, stderr, code := run(t, "verify", "applied-root="+root, "state-path="+bad)
-	if code != 2 {
-		t.Fatalf("verify malformed dump exit = %d, want 2; stderr=%q", code, stderr)
+// -h prints usage to stdout and exits 0.
+func TestHelpShortFlagStdoutExitZero(t *testing.T) {
+	r := run(t, "-h")
+	if r.exitCode != 0 {
+		t.Fatalf("-h: want exit 0, got %d", r.exitCode)
 	}
-	if !strings.Contains(stderr, "invocation") {
-		t.Errorf("expected domain=invocation, got stderr: %q", stderr)
+	if !strings.Contains(strings.ToLower(r.stdout), "usage") {
+		t.Errorf("-h: stdout should contain usage, got %q", r.stdout)
 	}
 }
 
-// EXAMPLE: verify_clean — actual state equals the applied record.
-func TestVerifyClean(t *testing.T) {
-	root := t.TempDir()
-	mkAppliedRecord(t, root)
-	// Supply a state dump identical to the applied record's managed scopes.
-	dump := writeManifest(t, "state.json", appliedRecordJSON)
-	stdout, stderr, code := run(t, "verify", "applied-root="+root, "state-path="+dump)
-	if code != 0 {
-		t.Fatalf("verify clean exit = %d, want 0; stderr=%q", code, stderr)
+// --version prints program name, version, and embedded spec hash to stdout, exit 0.
+func TestVersionFlag(t *testing.T) {
+	r := run(t, "--version")
+	if r.exitCode != 0 {
+		t.Fatalf("--version: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
 	}
-	if !strings.Contains(stdout, "system matches declaration") {
-		t.Errorf("expected 'system matches declaration', got stdout: %q", stdout)
+	if !strings.HasPrefix(r.stdout, "zypper-declarative ") {
+		t.Errorf("--version: stdout should start with %q, got %q", "zypper-declarative ", r.stdout)
 	}
-}
-
-// EXAMPLE: verify_against_external_state_dump — divergent service -> exit 1.
-func TestVerifyDetectsServiceDrift(t *testing.T) {
-	root := t.TempDir()
-	mkAppliedRecord(t, root)
-	// State dump where nginx.service is disabled instead of enabled.
-	diverged := strings.Replace(appliedRecordJSON,
-		`{ "name": "nginx.service", "state": "enabled" }`,
-		`{ "name": "nginx.service", "state": "disabled" }`, 1)
-	dump := writeManifest(t, "state.json", diverged)
-	_, stderr, code := run(t, "verify", "applied-root="+root, "state-path="+dump)
-	if code != 1 {
-		t.Fatalf("verify drift exit = %d, want 1; stderr=%q", code, stderr)
+	if !strings.Contains(r.stdout, "spec:") {
+		t.Errorf("--version: stdout should contain embedded spec hash (spec:...), got %q", r.stdout)
 	}
-	if !strings.Contains(stderr, "units") || !strings.Contains(stderr, "nginx.service") {
-		t.Errorf("expected units diagnostic naming nginx.service, got stderr: %q", stderr)
+	if !strings.Contains(r.stdout, "58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4") {
+		t.Errorf("--version: stdout should contain the spec sha256, got %q", r.stdout)
 	}
 }
 
-// EXAMPLE: verify_detects_drift — declared file edited -> files diagnostic, exit 1.
-func TestVerifyDetectsFileDrift(t *testing.T) {
-	root := t.TempDir()
-	mkAppliedRecord(t, root)
-	// State dump where /etc/nginx/nginx.conf has a different sha256.
-	diverged := strings.Replace(appliedRecordJSON,
-		`"sha256": "1111111111111111111111111111111111111111111111111111111111111111"`,
-		`"sha256": "2222222222222222222222222222222222222222222222222222222222222222"`, 1)
-	dump := writeManifest(t, "state.json", diverged)
-	_, stderr, code := run(t, "verify", "applied-root="+root, "state-path="+dump)
-	if code != 1 {
-		t.Fatalf("verify file drift exit = %d, want 1; stderr=%q", code, stderr)
+// EXAMPLE: unknown_verb_rejected
+func TestUnknownVerbRejected(t *testing.T) {
+	r := run(t, "frobnicate")
+	if r.exitCode != 2 {
+		t.Fatalf("unknown verb: want exit 2, got %d (stdout=%q)", r.exitCode, r.stdout)
 	}
-	if !strings.Contains(stderr, "files") || !strings.Contains(stderr, "/etc/nginx/nginx.conf") {
-		t.Errorf("expected files diagnostic naming the file, got stderr: %q", stderr)
+	if !strings.Contains(strings.ToLower(r.stderr), "usage") {
+		t.Errorf("unknown verb: stderr should contain usage, got %q", r.stderr)
 	}
 }
 
-// status -------------------------------------------------------------------
-
-// EXAMPLE: status_no_declaration
-func TestStatusNoDeclaration(t *testing.T) {
-	root := t.TempDir()
-	stdout, _, code := run(t, "status", "applied-root="+root)
-	if code != 0 {
-		t.Fatalf("status no decl exit = %d, want 0", code)
+// An unknown option exits 2 with usage to stderr.
+func TestUnknownOptionRejected(t *testing.T) {
+	r := run(t, "status", "--frobnicate")
+	if r.exitCode != 2 {
+		t.Fatalf("unknown option: want exit 2, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
 	}
-	if !strings.Contains(stdout, "no declaration applied") {
-		t.Errorf("expected 'no declaration applied', got stdout: %q", stdout)
+	if !strings.Contains(strings.ToLower(r.stderr), "usage") {
+		t.Errorf("unknown option: stderr should contain usage, got %q", r.stderr)
 	}
 }
 
 // EXAMPLE: status_unknown_argument
 func TestStatusUnknownArgument(t *testing.T) {
-	_, stderr, code := run(t, "status", "--frobnicate")
-	if code != 2 {
-		t.Fatalf("status unknown arg exit = %d, want 2", code)
+	r := run(t, "status", "--frobnicate")
+	if r.exitCode != 2 {
+		t.Fatalf("status unknown arg: want exit 2, got %d", r.exitCode)
 	}
-	if strings.TrimSpace(stderr) == "" {
-		t.Errorf("status unknown arg should print usage to stderr")
-	}
-}
-
-// EXAMPLE: status_reports_generation
-func TestStatusReportsGeneration(t *testing.T) {
-	root := t.TempDir()
-	mkAppliedRecord(t, root)
-	stdout, stderr, code := run(t, "status", "applied-root="+root)
-	if code != 0 {
-		t.Fatalf("status exit = %d, want 0; stderr=%q", code, stderr)
-	}
-	// The applied record's desired_sha256 and the package count must appear.
-	if !strings.Contains(stdout, "deadbeef") {
-		t.Errorf("status should print desired_sha256; stdout=%q", stdout)
-	}
-	if !strings.Contains(stdout, "1") { // one resolved package
-		t.Errorf("status should print resolved package count; stdout=%q", stdout)
+	if !strings.Contains(strings.ToLower(r.stderr), "usage") {
+		t.Errorf("status unknown arg: stderr should contain usage, got %q", r.stderr)
 	}
 }
 
-// describe -----------------------------------------------------------------
+// ===========================================================================
+// describe verb
+// ===========================================================================
 
 // EXAMPLE: describe_unknown_format
 func TestDescribeUnknownFormat(t *testing.T) {
-	_, stderr, code := run(t, "describe", "format=toml")
-	if code != 2 {
-		t.Fatalf("describe unknown format exit = %d, want 2", code)
+	r := run(t, "describe", "format=toml")
+	if r.exitCode != 2 {
+		t.Fatalf("describe format=toml: want exit 2, got %d (stdout=%q)", r.exitCode, r.stdout)
 	}
-	if !strings.Contains(stderr, "invocation") {
-		t.Errorf("expected domain=invocation, got stderr: %q", stderr)
-	}
-}
-
-// EXAMPLE: describe_emits_manifest — describe against an empty root emits a
-// schema-valid JSON Manifest (format_version 1) with the declarable scopes.
-func TestDescribeEmitsJSONManifest(t *testing.T) {
-	root := t.TempDir()
-	stdout, stderr, code := run(t, "describe", "root="+root)
-	if code != 0 {
-		t.Fatalf("describe exit = %d, want 0; stderr=%q", code, stderr)
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
-		t.Fatalf("describe output is not valid JSON: %v; out=%q", err, stdout)
-	}
-	meta, ok := m["meta"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("describe output missing meta object; out=%q", stdout)
-	}
-	if fv, _ := meta["format_version"].(float64); fv != 1 {
-		t.Errorf("describe meta.format_version = %v, want 1", meta["format_version"])
-	}
-}
-
-// EXAMPLE: describe_format_yaml + describe_output_unwritable patterns.
-func TestDescribeYAMLToFile(t *testing.T) {
-	root := t.TempDir()
-	out := filepath.Join(t.TempDir(), "state.yaml")
-	_, stderr, code := run(t, "describe", "root="+root, "format=yaml", "out="+out)
-	if code != 0 {
-		t.Fatalf("describe yaml exit = %d, want 0; stderr=%q", code, stderr)
-	}
-	content, err := os.ReadFile(out)
-	if err != nil || len(content) == 0 {
-		t.Fatalf("yaml output missing or empty: %v", err)
-	}
-	// YAML uses "key: value", not the JSON "{". A YAML doc should not begin with '{'.
-	if strings.HasPrefix(strings.TrimSpace(string(content)), "{") {
-		t.Errorf("expected YAML serialisation, got JSON-looking content: %q", string(content))
+	if !strings.Contains(strings.ToLower(r.stderr), "usage") {
+		t.Errorf("describe format=toml: stderr should contain usage, got %q", r.stderr)
 	}
 }
 
 // EXAMPLE: describe_output_unwritable
 func TestDescribeOutputUnwritable(t *testing.T) {
-	root := t.TempDir()
-	_, stderr, code := run(t, "describe", "root="+root, "out=/readonly-nonexistent-dir/state.json")
-	if code != 2 {
-		t.Fatalf("describe unwritable out exit = %d, want 2; stderr=%q", code, stderr)
+	// A path under a non-existent / unwritable directory is not writable.
+	r := run(t, "describe", "out=/nonexistent-dir-zd/state.json", "on-unreadable=warn")
+	if r.exitCode != 2 {
+		t.Fatalf("describe unwritable out: want exit 2, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
 	}
-	if !strings.Contains(stderr, "invocation") {
-		t.Errorf("expected domain=invocation, got stderr: %q", stderr)
-	}
-}
-
-// INVARIANT [observable]: describe output is accepted unchanged as a desired
-// manifest. EXAMPLE describe_bootstraps_desired_manifest.
-func TestDescribeBootstrapsDesiredManifest(t *testing.T) {
-	root := t.TempDir()
-	stdout, _, code := run(t, "describe", "root="+root)
-	if code != 0 {
-		t.Fatalf("describe exit = %d, want 0", code)
-	}
-	p := writeManifest(t, "bootstrapped.json", stdout)
-	_, stderr, code2 := run(t, "diff", "manifest-path="+p, "applied-root="+root)
-	if code2 != 0 {
-		t.Fatalf("diff on bootstrapped manifest exit = %d, want 0; stderr=%q", code2, stderr)
+	if !strings.Contains(strings.ToLower(r.stderr), "invocation") &&
+		!strings.Contains(strings.ToLower(r.stderr), "write") &&
+		!strings.Contains(strings.ToLower(r.stderr), "unwritable") &&
+		!strings.Contains(strings.ToLower(r.stderr), "no such") {
+		t.Errorf("describe unwritable out: stderr should report an invocation/write error, got %q", r.stderr)
 	}
 }
 
-// Helpers for applied-record fixtures --------------------------------------
+// EXAMPLE: describe_emits_manifest — describe on / under warn must succeed and
+// emit a JSON document with meta.format_version = 1. Running unprivileged with
+// on-unreadable=warn lets unreadable scopes be omitted rather than failing.
+func TestDescribeEmitsJSONDocument(t *testing.T) {
+	r := run(t, "describe", "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("describe (warn): want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil {
+		t.Fatalf("describe (warn): stdout is not valid JSON: %v\nstdout=%q", err, r.stdout)
+	}
+	meta, ok := doc["meta"]
+	if !ok {
+		t.Fatalf("describe (warn): output has no meta section: %q", r.stdout)
+	}
+	var m struct {
+		FormatVersion int `json:"format_version"`
+	}
+	if err := json.Unmarshal(meta, &m); err != nil {
+		t.Fatalf("describe (warn): meta not parseable: %v", err)
+	}
+	if m.FormatVersion != 1 {
+		t.Errorf("describe (warn): meta.format_version want 1, got %d", m.FormatVersion)
+	}
+}
 
-const appliedRecordJSON = `{
+// EXAMPLE: describe_out_extension_yaml — out=...yaml writes a YAML document
+// (resolve-format selects yaml from the extension when no format= is given).
+func TestDescribeOutExtensionYAML(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.yaml")
+	r := run(t, "describe", "out="+out, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("describe out=...yaml: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("describe out=...yaml: output file not written: %v", err)
+	}
+	// A YAML document must not begin with '{' (which would indicate JSON).
+	trimmed := strings.TrimLeft(string(data), " \t\r\n")
+	if strings.HasPrefix(trimmed, "{") {
+		t.Errorf("describe out=...yaml: expected YAML, but file begins with '{' (JSON): %q", trimmed[:min(40, len(trimmed))])
+	}
+}
+
+// EXAMPLE: describe_out_extension_json — out=...json writes JSON.
+func TestDescribeOutExtensionJSON(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.json")
+	r := run(t, "describe", "out="+out, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("describe out=...json: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("describe out=...json: output file not written: %v", err)
+	}
+	if json.Unmarshal(data, &map[string]json.RawMessage{}) != nil {
+		t.Errorf("describe out=...json: file is not valid JSON: %q", string(data))
+	}
+}
+
+// EXAMPLE: describe_format_overrides_extension — format=json with out=...yaml
+// writes JSON because the explicit option wins over the extension.
+func TestDescribeFormatOverridesExtension(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state.yaml")
+	r := run(t, "describe", "format=json", "out="+out, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("describe format=json out=...yaml: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("describe format=json out=...yaml: output file not written: %v", err)
+	}
+	if json.Unmarshal(data, &map[string]json.RawMessage{}) != nil {
+		t.Errorf("describe format=json out=...yaml: file should be JSON, got %q", string(data))
+	}
+}
+
+// EXAMPLE: describe_format_yaml — describe format=yaml writes a YAML document to
+// stdout (same data model as JSON, not Machinery-compatible).
+func TestDescribeFormatYAMLStdout(t *testing.T) {
+	r := run(t, "describe", "format=yaml", "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("describe format=yaml: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	trimmed := strings.TrimLeft(r.stdout, " \t\r\n")
+	if strings.HasPrefix(trimmed, "{") {
+		t.Errorf("describe format=yaml: expected YAML on stdout, got JSON-looking output: %q", trimmed[:min(40, len(trimmed))])
+	}
+}
+
+// ===========================================================================
+// diff verb
+// ===========================================================================
+
+// EXAMPLE: diff_manifest_unreadable
+func TestDiffManifestUnreadable(t *testing.T) {
+	r := run(t, "diff", "manifest-path=/nonexistent-zd-manifest.json")
+	if r.exitCode != 2 {
+		t.Fatalf("diff unreadable manifest: want exit 2, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "invocation") {
+		t.Errorf("diff unreadable manifest: stderr should carry domain=invocation, got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: apply_manifest_unreadable (verifiable without privilege because the
+// read error precedes any transaction or privilege requirement).
+func TestApplyManifestUnreadable(t *testing.T) {
+	r := run(t, "apply", "manifest-path=/nonexistent-zd-manifest.json")
+	if r.exitCode != 2 {
+		t.Fatalf("apply unreadable manifest: want exit 2, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "invocation") {
+		t.Errorf("apply unreadable manifest: stderr should carry domain=invocation, got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: apply_manifest_invalid — meta.format_version=2 fails schema validation.
+// The manifest is loaded and validated before any transaction is opened, so this
+// path is verifiable without privilege: exit 1, domain=manifest.
+func TestApplyManifestInvalid(t *testing.T) {
+	p := writeTemp(t, "bad.json", manifestFormatVersion2JSON)
+	r := run(t, "apply", "manifest-path="+p)
+	if r.exitCode != 1 {
+		t.Fatalf("apply invalid manifest: want exit 1, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "manifest") {
+		t.Errorf("apply invalid manifest: stderr should carry domain=manifest, got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: diff_prints_plan — with no applied record, every desired element is an
+// addition. The plan must list the package to install and the files to write.
+func TestDiffPrintsPlan(t *testing.T) {
+	p := writeTemp(t, "desired.json", validManifestJSON)
+	r := run(t, "diff", "manifest-path="+p, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("diff plan: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "nginx") {
+		t.Errorf("diff plan: stdout should mention nginx (packages to install), got %q", r.stdout)
+	}
+}
+
+// EXAMPLE: yaml_manifest_accepted — a YAML manifest is parsed and a plan computed,
+// exit 0.
+func TestDiffYAMLManifestAccepted(t *testing.T) {
+	p := writeTemp(t, "desired.yaml", validManifestYAML)
+	r := run(t, "diff", "manifest-path="+p, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("diff yaml manifest: want exit 0, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "nginx") {
+		t.Errorf("diff yaml manifest: plan should mention nginx, got %q", r.stdout)
+	}
+}
+
+// ===========================================================================
+// verify verb
+// ===========================================================================
+
+// EXAMPLE: verify_no_applied_record — with no applied record present, verify
+// emits "no declaration applied" with domain=invocation and exits 2.
+//
+// applied-root is pointed at an empty directory so no applied.json exists.
+func TestVerifyNoAppliedRecord(t *testing.T) {
+	emptyRoot := t.TempDir()
+	r := run(t, "verify", "applied-root="+emptyRoot, "on-unreadable=warn")
+	if r.exitCode != 2 {
+		t.Fatalf("verify no applied record: want exit 2, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stderr, "no declaration applied") {
+		t.Errorf("verify no applied record: stderr should contain 'no declaration applied', got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: verify_malformed_state_dump — a malformed state dump yields exit 2,
+// domain=invocation. An applied record must exist for verify to proceed past
+// step 1, so we lay one down under applied-root.
+func TestVerifyMalformedStateDump(t *testing.T) {
+	root := t.TempDir()
+	layAppliedRecord(t, root, validAppliedRecordJSON)
+	bad := writeTemp(t, "broken.json", "{ this is not valid json")
+	r := run(t, "verify", "applied-root="+root, "state-path="+bad)
+	if r.exitCode != 2 {
+		t.Fatalf("verify malformed dump: want exit 2, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "invocation") {
+		t.Errorf("verify malformed dump: stderr should carry domain=invocation, got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: verify_clean — the supplied state dump equals the applied record, so
+// verify reports a match and exits 0.
+func TestVerifyCleanWithStateDump(t *testing.T) {
+	root := t.TempDir()
+	layAppliedRecord(t, root, validAppliedRecordJSON)
+	state := writeTemp(t, "state.json", actualStateMatchingJSON)
+	r := run(t, "verify", "applied-root="+root, "state-path="+state)
+	if r.exitCode != 0 {
+		t.Fatalf("verify clean: want exit 0, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "system matches declaration") {
+		t.Errorf("verify clean: stdout should contain 'system matches declaration', got %q", r.stdout)
+	}
+}
+
+// EXAMPLE: verify_against_external_state_dump — the dump diverges from the applied
+// record in one declared service state, so verify reports a units diagnostic and
+// exits 1.
+func TestVerifyAgainstExternalStateDumpDrift(t *testing.T) {
+	root := t.TempDir()
+	layAppliedRecord(t, root, validAppliedRecordJSON)
+	state := writeTemp(t, "state.json", actualStateServiceDriftJSON)
+	r := run(t, "verify", "applied-root="+root, "state-path="+state)
+	if r.exitCode != 1 {
+		t.Fatalf("verify service drift: want exit 1, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "units") {
+		t.Errorf("verify service drift: stderr should carry domain=units, got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: verify_detects_drift — a declared file's actual content differs (sha256
+// differs in the supplied dump), so verify reports a files diagnostic naming the
+// file and exits 1.
+func TestVerifyDetectsFileDrift(t *testing.T) {
+	root := t.TempDir()
+	layAppliedRecord(t, root, validAppliedRecordJSON)
+	state := writeTemp(t, "state.json", actualStateFileDriftJSON)
+	r := run(t, "verify", "applied-root="+root, "state-path="+state)
+	if r.exitCode != 1 {
+		t.Fatalf("verify file drift: want exit 1, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "files") {
+		t.Errorf("verify file drift: stderr should carry domain=files, got %q", r.stderr)
+	}
+	if !strings.Contains(r.stderr, "/etc/foo.conf") {
+		t.Errorf("verify file drift: stderr should name /etc/foo.conf, got %q", r.stderr)
+	}
+}
+
+// EXAMPLE: verify_state_path_extension_yaml — a YAML state dump matching the
+// applied record is accepted by extension (resolve-format), reporting a match.
+func TestVerifyStatePathExtensionYAML(t *testing.T) {
+	root := t.TempDir()
+	layAppliedRecord(t, root, validAppliedRecordJSON)
+	state := writeTemp(t, "state.yaml", actualStateMatchingYAML)
+	r := run(t, "verify", "applied-root="+root, "state-path="+state)
+	if r.exitCode != 0 {
+		t.Fatalf("verify yaml state dump: want exit 0, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "system matches declaration") {
+		t.Errorf("verify yaml state dump: stdout should contain match line, got %q", r.stdout)
+	}
+}
+
+// ===========================================================================
+// status verb
+// ===========================================================================
+
+// EXAMPLE: status_no_declaration — no applied record: print "no declaration
+// applied" and exit 0.
+func TestStatusNoDeclaration(t *testing.T) {
+	emptyRoot := t.TempDir()
+	r := run(t, "status", "applied-root="+emptyRoot, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("status no declaration: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "no declaration applied") {
+		t.Errorf("status no declaration: stdout should contain 'no declaration applied', got %q", r.stdout)
+	}
+}
+
+// EXAMPLE: status_reports_generation — an applied record exists; status prints the
+// desired_sha256, the resolved package count, and a single drift-summary line.
+func TestStatusReportsGeneration(t *testing.T) {
+	root := t.TempDir()
+	layAppliedRecord(t, root, validAppliedRecordJSON)
+	r := run(t, "status", "applied-root="+root, "on-unreadable=warn")
+	if r.exitCode != 0 {
+		t.Fatalf("status reports generation: want exit 0, got %d (stderr=%q)", r.exitCode, r.stderr)
+	}
+	// desired_sha256 of the applied record is known: it appears verbatim.
+	if !strings.Contains(r.stdout, appliedRecordDesiredSHA) {
+		t.Errorf("status reports generation: stdout should contain the desired_sha256 %q, got %q",
+			appliedRecordDesiredSHA, r.stdout)
+	}
+}
+
+// ===========================================================================
+// Idempotence / round-trip (INVARIANTS)
+// ===========================================================================
+
+// EXAMPLE: yaml_format_identity_stable — the same manifest expressed in JSON and
+// YAML must yield the same intent diff (the format-independent, manifest-derived
+// part of the plan), demonstrating that desired identity does not depend on the
+// serialisation. The live-drift section of the plan reflects the running system
+// at the moment of each invocation and is therefore not format-determined; the
+// spec's invariant is about manifest identity, not about live drift being equal
+// between two separate process runs. We compare the intent-diff portion (the
+// plan up to the "current drift:" marker), which is what the EXAMPLE constrains.
+func TestJSONAndYAMLProduceSameIntentDiff(t *testing.T) {
+	pj := writeTemp(t, "desired.json", validManifestJSON)
+	py := writeTemp(t, "desired.yaml", validManifestYAML)
+	rj := run(t, "diff", "manifest-path="+pj, "on-unreadable=warn")
+	ry := run(t, "diff", "manifest-path="+py, "on-unreadable=warn")
+	if rj.exitCode != 0 || ry.exitCode != 0 {
+		t.Fatalf("diff json/yaml: want both exit 0, got %d and %d", rj.exitCode, ry.exitCode)
+	}
+	intentJSON := intentPortion(rj.stdout)
+	intentYAML := intentPortion(ry.stdout)
+	if intentJSON != intentYAML {
+		t.Errorf("diff json vs yaml: intent diffs differ.\nJSON:\n%s\nYAML:\n%s", intentJSON, intentYAML)
+	}
+}
+
+// intentPortion returns the part of a diff plan that is determined by the
+// manifest (everything before the live-drift section).
+func intentPortion(plan string) string {
+	if i := strings.Index(plan, "current drift:"); i >= 0 {
+		return plan[:i]
+	}
+	return plan
+}
+
+// EXAMPLE: describe_bootstraps_desired_manifest — describe output is accepted
+// unchanged by load-desired-manifest as a starting desired manifest. We capture
+// describe output, feed it back to diff against the same (no applied record)
+// state, and require exit 0.
+func TestDescribeOutputAcceptedAsDesiredManifest(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "desired.json")
+	rd := run(t, "describe", "out="+out, "on-unreadable=warn")
+	if rd.exitCode != 0 {
+		t.Fatalf("describe for bootstrap: want exit 0, got %d (stderr=%q)", rd.exitCode, rd.stderr)
+	}
+	rdiff := run(t, "diff", "manifest-path="+out, "on-unreadable=warn")
+	if rdiff.exitCode != 0 {
+		t.Fatalf("diff against bootstrapped manifest: want exit 0, got %d (stdout=%q stderr=%q)",
+			rdiff.exitCode, rdiff.stdout, rdiff.stderr)
+	}
+}
+
+// ===========================================================================
+// YAML safe profile (INVARIANT: unsafe YAML rejected)
+// ===========================================================================
+
+// EXAMPLE: yaml_unsafe_rejected — a YAML manifest using a multi-document stream
+// (a disabled safe-profile feature) is rejected with a manifest error; the verb
+// (here diff, which does not need privilege) exits 1.
+func TestYAMLUnsafeMultiDocRejected(t *testing.T) {
+	// Multi-document stream: the safe profile permits a single document only.
+	multi := validManifestYAML + "\n---\n" + validManifestYAML
+	p := writeTemp(t, "evil.yaml", multi)
+	r := run(t, "diff", "manifest-path="+p, "on-unreadable=warn")
+	if r.exitCode != 1 {
+		t.Fatalf("unsafe yaml (multi-doc): want exit 1, got %d (stdout=%q stderr=%q)", r.exitCode, r.stdout, r.stderr)
+	}
+	if !strings.Contains(strings.ToLower(r.stderr), "manifest") {
+		t.Errorf("unsafe yaml (multi-doc): stderr should carry domain=manifest, got %q", r.stderr)
+	}
+}
+
+// ===========================================================================
+// Read-only invariant: diff/verify/status/describe never modify input files.
+// ===========================================================================
+
+// INVARIANT: the tool must not modify its input files (FILE-MODIFICATION).
+func TestDiffDoesNotModifyManifest(t *testing.T) {
+	p := writeTemp(t, "desired.json", validManifestJSON)
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = run(t, "diff", "manifest-path="+p, "on-unreadable=warn")
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("diff modified its input manifest; before=%q after=%q", before, after)
+	}
+}
+
+// ===========================================================================
+// Test fixtures for applied record / actual state dumps.
+// ===========================================================================
+
+// appliedRecordDesiredSHA is the desired_sha256 stamped into validAppliedRecordJSON.
+// (An arbitrary but fixed valid Sha256; the test asserts status echoes it.)
+const appliedRecordDesiredSHA = "1111111111111111111111111111111111111111111111111111111111111111"
+
+// validAppliedRecordJSON is a structurally complete applied record: a Manifest
+// with the packages scope fully resolved (version/release/arch populated) and
+// meta.desired_sha256 set.
+const validAppliedRecordJSON = `{
   "meta": {
     "format_version": 1,
-    "generator": "zypper-declarative 0.4.0",
+    "generator": "test",
     "created_at": "2026-05-29T08:30:00Z",
-    "desired_sha256": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef0"
+    "desired_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
   },
+  "packages": {
+    "_attributes": { "package_system": "rpm" },
+    "_elements": [
+      { "name": "nginx", "version": "1.25.3", "release": "1.1", "arch": "x86_64" }
+    ]
+  },
+  "services": {
+    "_attributes": { "init_system": "systemd" },
+    "_elements": [
+      { "name": "nginx.service", "state": "enabled" }
+    ]
+  },
+  "config_files": {
+    "_attributes": null,
+    "_elements": [
+      {
+        "name": "/etc/foo.conf",
+        "type": "file",
+        "mode": "0644",
+        "user": "root",
+        "group": "root",
+        "sha256": "aaaa000000000000000000000000000000000000000000000000000000000000",
+        "content_ref": "",
+        "package_name": ""
+      }
+    ]
+  }
+}`
+
+// actualStateMatchingJSON is an actual-state Manifest that equals the applied
+// record on every identity field (same packages, same service state, same file
+// sha256), so compute-drift returns empty.
+const actualStateMatchingJSON = `{
+  "meta": { "format_version": 1, "generator": "test", "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
   "packages": {
     "_attributes": { "package_system": "rpm" },
     "_elements": [ { "name": "nginx", "version": "1.25.3", "release": "1.1", "arch": "x86_64" } ]
@@ -480,23 +783,98 @@ const appliedRecordJSON = `{
   "config_files": {
     "_attributes": null,
     "_elements": [
-      { "name": "/etc/nginx/nginx.conf", "type": "file", "mode": "0644",
-        "user": "root", "group": "root",
-        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      { "name": "/etc/foo.conf", "type": "file", "mode": "0644", "user": "root", "group": "root",
+        "sha256": "aaaa000000000000000000000000000000000000000000000000000000000000",
         "content_ref": "", "package_name": "" }
     ]
   }
 }`
 
-// mkAppliedRecord writes a valid applied.json under
-// <root>/usr/lib/zypper-declarative/applied.json so verify/status can load it.
-func mkAppliedRecord(t *testing.T, root string) {
+// actualStateMatchingYAML is the YAML serialisation of actualStateMatchingJSON.
+const actualStateMatchingYAML = `meta:
+  format_version: 1
+  generator: "test"
+  created_at: "2026-05-29T08:30:00Z"
+  desired_sha256: ""
+packages:
+  _attributes:
+    package_system: "rpm"
+  _elements:
+    - name: "nginx"
+      version: "1.25.3"
+      release: "1.1"
+      arch: "x86_64"
+services:
+  _attributes:
+    init_system: "systemd"
+  _elements:
+    - name: "nginx.service"
+      state: "enabled"
+config_files:
+  _attributes: null
+  _elements:
+    - name: "/etc/foo.conf"
+      type: "file"
+      mode: "0644"
+      user: "root"
+      group: "root"
+      sha256: "aaaa000000000000000000000000000000000000000000000000000000000000"
+      content_ref: ""
+      package_name: ""
+`
+
+// actualStateServiceDriftJSON diverges from the applied record only in the
+// nginx.service state (disabled vs enabled).
+const actualStateServiceDriftJSON = `{
+  "meta": { "format_version": 1, "generator": "test", "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
+  "packages": {
+    "_attributes": { "package_system": "rpm" },
+    "_elements": [ { "name": "nginx", "version": "1.25.3", "release": "1.1", "arch": "x86_64" } ]
+  },
+  "services": {
+    "_attributes": { "init_system": "systemd" },
+    "_elements": [ { "name": "nginx.service", "state": "disabled" } ]
+  },
+  "config_files": {
+    "_attributes": null,
+    "_elements": [
+      { "name": "/etc/foo.conf", "type": "file", "mode": "0644", "user": "root", "group": "root",
+        "sha256": "aaaa000000000000000000000000000000000000000000000000000000000000",
+        "content_ref": "", "package_name": "" }
+    ]
+  }
+}`
+
+// actualStateFileDriftJSON diverges from the applied record only in the
+// /etc/foo.conf sha256 (content changed).
+const actualStateFileDriftJSON = `{
+  "meta": { "format_version": 1, "generator": "test", "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
+  "packages": {
+    "_attributes": { "package_system": "rpm" },
+    "_elements": [ { "name": "nginx", "version": "1.25.3", "release": "1.1", "arch": "x86_64" } ]
+  },
+  "services": {
+    "_attributes": { "init_system": "systemd" },
+    "_elements": [ { "name": "nginx.service", "state": "enabled" } ]
+  },
+  "config_files": {
+    "_attributes": null,
+    "_elements": [
+      { "name": "/etc/foo.conf", "type": "file", "mode": "0644", "user": "root", "group": "root",
+        "sha256": "bbbb000000000000000000000000000000000000000000000000000000000000",
+        "content_ref": "", "package_name": "" }
+    ]
+  }
+}`
+
+// layAppliedRecord writes an applied record under <root>/usr/lib/zypper-declarative/applied.json.
+func layAppliedRecord(t *testing.T, root, content string) {
 	t.Helper()
 	dir := filepath.Join(root, "usr", "lib", "zypper-declarative")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir applied dir: %v", err)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("creating applied-record dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "applied.json"), []byte(appliedRecordJSON), 0o644); err != nil {
-		t.Fatalf("write applied.json: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "applied.json"), []byte(content), 0644); err != nil {
+		t.Fatalf("writing applied record: %v", err)
 	}
 }

@@ -1,330 +1,443 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 //
-// The five CLI verbs: apply, diff, verify, status, describe. Each orchestrates
-// the internal behaviours and maps their returned errors to exit codes per the
-// spec ExitCode type and the cli-tool template.
+// Verb implementations: apply, diff, verify, status, describe. Each orchestrates
+// the internal behaviours and maps results to exit codes and output streams.
 package cli
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/mge1512/zypper-declarative/internal/config"
 	"github.com/mge1512/zypper-declarative/internal/converge"
 	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/diff"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
 	"github.com/mge1512/zypper-declarative/internal/record"
 	"github.com/mge1512/zypper-declarative/internal/state"
+	"github.com/mge1512/zypper-declarative/internal/system"
 	"github.com/mge1512/zypper-declarative/internal/txn"
 )
 
-// emit writes a Diagnostic to stderr and returns the matching exit code.
-func (a *App) emit(d *diag.Diagnostic) int {
-	fmt.Fprintln(a.Stderr, d.Error())
-	switch d.Domain {
-	case diag.DomainInvocation, diag.DomainTransaction:
-		return ExitInvocation
-	default:
-		return ExitLogical
+// keepListSet loads the keep-list file (one path per line) into a set. A missing
+// file yields an empty set (the keep-list is optional).
+func keepListSet(path string) map[string]bool {
+	set := map[string]bool{}
+	if path == "" {
+		return set
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return set
+	}
+	for _, line := range splitLines(string(data)) {
+		if line != "" {
+			set[line] = true
+		}
+	}
+	return set
+}
+
+func splitLines(s string) []string {
+	var out []string
+	cur := ""
+	for _, r := range s {
+		if r == '\n' || r == '\r' {
+			out = append(out, trimSpace(cur))
+			cur = ""
+			continue
+		}
+		cur += string(r)
+	}
+	out = append(out, trimSpace(cur))
+	return out
+}
+
+func trimSpace(s string) string {
+	start, end := 0, len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
+func (a *App) loadOpts(cfg config.Config) manifest.LoadOptions {
+	return manifest.LoadOptions{
+		ExplicitFormat:        cfg.ExplicitFormat,
+		ExplicitFormatGiven:   cfg.ExplicitFormatGiven,
+		DefaultFormat:         cfg.ManifestFormat,
+		SignatureVerification: cfg.SignatureVerification,
+		Keyring:               cfg.Keyring,
+		Verifier:              manifest.NoopVerifier{},
 	}
 }
 
-// cmdApply implements BEHAVIOR: apply STEPS 1–11.
-func (a *App) cmdApply(cfg Config) int {
-	// STEP 1 — load desired manifest.
-	res, d := manifest.Load(cfg.ManifestPath, manifest.LoadOptions{
-		ExplicitFormat:  cfg.Format,
-		DefaultFormat:   cfg.ManifestFormat,
-		VerifySignature: cfg.SignatureVerification && cfg.Keyring != "",
-		Keyring:         cfg.Keyring,
-	})
-	if d != nil {
-		return a.emit(d)
+func (a *App) reader(cfg config.Config) *state.Reader {
+	return &state.Reader{
+		Runner:   &system.OSCommandRunner{},
+		KeepList: keepListSet(cfg.KeepList),
 	}
-	desired := res.Manifest
+}
 
-	// STEP 2 — load applied record (absence => empty).
-	applied, _, d := record.Load(cfg.AppliedRoot)
-	if d != nil {
-		return a.emit(d)
-	}
+// ---------------------------------------------------------------------------
+// diff
+// ---------------------------------------------------------------------------
 
-	// STEP 3 — compute intent diff.
-	intent := diff.ComputeIntentDiff(&desired, &applied)
-
-	keepList, keepSet := a.loadKeepList(cfg.KeepListPath)
-
-	// STEP 4 — if intent empty, check drift; if also empty, nothing to do.
-	if intent.Empty() {
-		actual, derr := a.actualState(cfg, "/", keepList)
-		if derr != nil {
-			if dd, ok := derr.(*diag.Diagnostic); ok {
-				return a.emit(dd)
-			}
-			return a.emit(diag.New(diag.DomainFiles, "%v", derr))
-		}
-		drift := diff.ComputeDrift(&actual, &applied, keepSet)
-		if drift.Empty() {
-			fmt.Fprintln(a.Stdout, "nothing to do")
-			return ExitOK
-		}
-	}
-
-	// STEP 5 — acquire transaction context.
-	acq := txn.NewAcquirer(a.Runner)
-	ctx, d := acq.Acquire(cfg.TransactionMode)
-	if d != nil {
-		return a.emit(d) // transaction domain -> exit 2
-	}
-
-	conv := &converge.Converger{
-		Runner:       a.Runner,
-		ContentStore: cfg.ContentStore,
-		RepoLock:     cfg.RepoLock,
-		KeepList:     keepSet,
-	}
-
-	// STEP 6 — repositories + packages.
-	resolved, d := conv.Packages(ctx, intent)
-	if d != nil {
-		return a.emit(d) // discard implied; packages domain -> exit 1
-	}
-
-	// STEP 7 — files.
-	if d := conv.Files(ctx, intent); d != nil {
-		return a.emit(d)
-	}
-
-	// STEP 8 — units.
-	if d := conv.Units(ctx, intent); d != nil {
-		return a.emit(d)
-	}
-
-	// STEP 9 — write applied record (resolved packages) into the context.
-	if d := record.Write(ctx.Root, &desired, res.DesiredSHA256, resolved); d != nil {
-		return a.emit(d)
-	}
-
-	// STEP 10 — verify the converged tree (post-converge drift check).
-	newApplied, _, d := record.Load(ctx.Root)
-	if d != nil {
-		return a.emit(d)
-	}
-	actual, derr := a.actualState(cfg, ctx.Root, keepList)
+func (a *App) runDiff(cfg config.Config) int {
+	m, _, derr := manifest.LoadDesiredManifest(cfg.ManifestPath, a.loadOpts(cfg))
 	if derr != nil {
-		if dd, ok := derr.(*diag.Diagnostic); ok {
-			return a.emit(dd)
-		}
-		return a.emit(diag.New(diag.DomainFiles, "%v", derr))
+		a.emit(derr)
+		return exitFor(derr)
 	}
-	postDrift := diff.ComputeDrift(&actual, &newApplied, keepSet)
-	if !postDrift.Empty() {
-		return a.emit(diag.New(diag.DomainFiles, "post-converge verification found drift (%d item(s))", postDrift.Count()))
+	applied, _, lerr := record.Load(cfg.AppliedRoot)
+	if lerr != nil {
+		a.emit(lerr)
+		return exitFor(lerr)
 	}
+	id := diff.ComputeIntentDiff(m, applied)
 
-	// STEP 11 — seal and activate (best-effort, delegated when not opened here).
-	if ctx.OpenedHere {
-		a.seal(ctx, cfg)
+	// Obtain actual state on "/" with on_unreadable=error (internal caller),
+	// except a CLI on-unreadable=warn override is honoured to allow unprivileged
+	// dry runs.
+	res, serr := a.reader(cfg).Describe("/", stateOnUnreadable(cfg))
+	if serr != nil {
+		a.emit(serr)
+		return exitFor(serr)
 	}
-	a.printIntentSummary(intent)
+	drift := diff.ComputeDrift(res.Manifest, applied, diff.DriftOptions{KeepList: keepListSet(cfg.KeepList)})
+
+	a.printPlan(id, drift)
+	a.emit(res.Diagnostics...)
 	return ExitOK
 }
 
-// cmdDiff implements BEHAVIOR: diff STEPS 1–5 (dry run, no transaction).
-func (a *App) cmdDiff(cfg Config) int {
-	res, d := manifest.Load(cfg.ManifestPath, manifest.LoadOptions{
-		ExplicitFormat:  cfg.Format,
-		DefaultFormat:   cfg.ManifestFormat,
-		VerifySignature: cfg.SignatureVerification && cfg.Keyring != "",
-		Keyring:         cfg.Keyring,
-	})
-	if d != nil {
-		return a.emit(d)
+func (a *App) printPlan(id diff.Diff, drift diff.DriftReport) {
+	w := a.Stdout
+	fmt.Fprintln(w, "packages to install:")
+	for _, p := range id.PackagesInstall {
+		fmt.Fprintf(w, "  %s\n", p.Name)
 	}
-	desired := res.Manifest
-
-	applied, _, d := record.Load(cfg.AppliedRoot)
-	if d != nil {
-		return a.emit(d)
+	fmt.Fprintln(w, "packages to remove:")
+	for _, p := range id.PackagesRemove {
+		fmt.Fprintf(w, "  %s\n", p.Name)
 	}
-
-	intent := diff.ComputeIntentDiff(&desired, &applied)
-	keepList, keepSet := a.loadKeepList(cfg.KeepListPath)
-
-	actual, derr := a.actualState(cfg, "/", keepList)
-	if derr != nil {
-		// diff plan still printed against an empty actual on a soft read failure;
-		// but a hard reader error is surfaced.
-		if dd, ok := derr.(*diag.Diagnostic); ok {
-			return a.emit(dd)
+	fmt.Fprintln(w, "repositories to set:")
+	for _, r := range id.ReposSet {
+		fmt.Fprintf(w, "  %s\n", r.Alias)
+	}
+	fmt.Fprintln(w, "files to write:")
+	for _, f := range id.FilesWrite {
+		fmt.Fprintf(w, "  %s\n", f.Name)
+	}
+	fmt.Fprintln(w, "files to delete:")
+	for _, p := range id.FilesDelete {
+		fmt.Fprintf(w, "  %s\n", p)
+	}
+	fmt.Fprintln(w, "units to change:")
+	for _, u := range id.UnitsChange {
+		fmt.Fprintf(w, "  %s -> %s\n", u.Name, u.State)
+	}
+	fmt.Fprintln(w, "current drift:")
+	if drift.Empty() {
+		fmt.Fprintln(w, "  clean")
+	} else {
+		for _, p := range drift.FilesModified {
+			fmt.Fprintf(w, "  modified file: %s\n", p)
+		}
+		for _, p := range drift.FilesExtra {
+			fmt.Fprintf(w, "  extra file: %s\n", p)
+		}
+		for _, u := range drift.UnitsDivergent {
+			fmt.Fprintf(w, "  divergent unit: %s\n", u.Name)
+		}
+		for _, p := range drift.PackagesDivergent {
+			fmt.Fprintf(w, "  divergent package: %s\n", p.Name)
 		}
 	}
-	drift := diff.ComputeDrift(&actual, &applied, keepSet)
-
-	a.printPlan(intent, drift)
-	return ExitOK
 }
 
-// cmdVerify implements BEHAVIOR: verify STEPS 1–4.
-func (a *App) cmdVerify(cfg Config) int {
-	applied, present, d := record.Load(cfg.AppliedRoot)
-	if d != nil {
-		return a.emit(d)
+// stateOnUnreadable maps the CLI config to the state reader policy. Internal
+// callers default to error; the CLI on-unreadable=warn override is permitted so
+// read-only verbs can run unprivileged.
+func stateOnUnreadable(cfg config.Config) state.OnUnreadable {
+	if cfg.OnUnreadable == config.OnUnreadableWarn {
+		return state.OnUnreadableWarn
+	}
+	return state.OnUnreadableError
+}
+
+// ---------------------------------------------------------------------------
+// verify
+// ---------------------------------------------------------------------------
+
+func (a *App) runVerify(cfg config.Config) int {
+	applied, present, lerr := record.Load(cfg.AppliedRoot)
+	if lerr != nil {
+		a.emit(lerr)
+		return exitFor(lerr)
 	}
 	if !present {
-		fmt.Fprintln(a.Stderr, diag.New(diag.DomainInvocation, "no declaration applied").Error())
+		a.emit(diag.Errorf(diag.DomainInvocation, "no declaration applied"))
 		return ExitInvocation
 	}
-
-	keepList, keepSet := a.loadKeepList(cfg.KeepListPath)
 
 	var actual manifest.Manifest
 	if cfg.StatePath != "" {
-		m, dd := manifest.LoadDump(cfg.StatePath, cfg.Format, cfg.ManifestFormat)
-		if dd != nil {
-			return a.emit(dd) // invocation -> exit 2
+		// Load and schema-validate the supplied dump under its resolved format.
+		format := manifest.ResolveFormat(cfg.ExplicitFormat, cfg.ExplicitFormatGiven, cfg.StatePath, cfg.ManifestFormat)
+		data, rerr := os.ReadFile(cfg.StatePath)
+		if rerr != nil {
+			a.emit(diag.Errorf(diag.DomainInvocation, "state dump unreadable: %v", rerr))
+			return ExitInvocation
+		}
+		m, perr := manifest.Parse(data, format)
+		if perr != nil {
+			a.emit(diag.Errorf(diag.DomainInvocation, "state dump malformed: %v", perr))
+			return ExitInvocation
+		}
+		if verr := manifest.Validate(m); verr != nil {
+			a.emit(diag.Errorf(diag.DomainInvocation, "state dump malformed: %v", verr))
+			return ExitInvocation
 		}
 		actual = m
 	} else {
-		m, dd := state.Describe("/", a.Runner, keepList)
-		if dd != nil {
-			return a.emit(dd)
+		res, serr := a.reader(cfg).Describe("/", stateOnUnreadable(cfg))
+		if serr != nil {
+			a.emit(serr)
+			return exitFor(serr)
 		}
-		actual = m
+		actual = res.Manifest
 	}
 
-	drift := diff.ComputeDrift(&actual, &applied, keepSet)
+	drift := diff.ComputeDrift(actual, applied, diff.DriftOptions{KeepList: keepListSet(cfg.KeepList)})
 	if drift.Empty() {
 		fmt.Fprintln(a.Stdout, "system matches declaration")
 		return ExitOK
 	}
 	a.emitDrift(drift)
-	return ExitLogical
+	return ExitError
 }
 
-// cmdStatus implements BEHAVIOR: status STEPS 1–4.
-func (a *App) cmdStatus(cfg Config, rest []string) int {
-	// STEP 1 — reject any unrecognised argument (already parsed; but reject
-	// bare words / unknown flags that survived parsing as errors).
-	for _, arg := range rest {
-		stripped := strings.TrimPrefix(arg, "--")
-		if !strings.Contains(stripped, "=") {
-			fmt.Fprintf(a.Stderr, "Error [invocation] unrecognised argument %q\n", arg)
-			a.printUsage(a.Stderr)
-			return ExitInvocation
-		}
+func (a *App) emitDrift(drift diff.DriftReport) {
+	for _, p := range drift.FilesModified {
+		a.emit(diag.Errorf(diag.DomainFiles, "drift: modified file %s", p))
 	}
+	for _, p := range drift.FilesExtra {
+		a.emit(diag.Errorf(diag.DomainFiles, "drift: extra file %s", p))
+	}
+	for _, u := range drift.UnitsDivergent {
+		a.emit(diag.Errorf(diag.DomainUnits, "drift: divergent unit %s (declared %s)", u.Name, u.State))
+	}
+	for _, p := range drift.PackagesDivergent {
+		a.emit(diag.Errorf(diag.DomainPackages, "drift: divergent package %s", p.Name))
+	}
+}
 
-	applied, present, d := record.Load(cfg.AppliedRoot)
-	if d != nil {
-		return a.emit(d)
+// ---------------------------------------------------------------------------
+// status
+// ---------------------------------------------------------------------------
+
+func (a *App) runStatus(cfg config.Config) int {
+	applied, present, lerr := record.Load(cfg.AppliedRoot)
+	if lerr != nil {
+		a.emit(lerr)
+		return exitFor(lerr)
 	}
 	if !present {
 		fmt.Fprintln(a.Stdout, "no declaration applied")
 		return ExitOK
 	}
 
-	// STEP 3 — print record summary.
-	gen := a.generationID(cfg.AppliedRoot)
 	pkgCount := 0
 	if applied.Packages != nil {
 		pkgCount = len(applied.Packages.Elements)
 	}
 	fmt.Fprintf(a.Stdout, "desired_sha256: %s\n", applied.Meta.DesiredSHA256)
 	fmt.Fprintf(a.Stdout, "format_version: %d\n", applied.Meta.FormatVersion)
-	fmt.Fprintf(a.Stdout, "generation: %s\n", gen)
+	fmt.Fprintf(a.Stdout, "generation: %s\n", generationID(cfg.AppliedRoot))
 	fmt.Fprintf(a.Stdout, "created_at: %s\n", applied.Meta.CreatedAt)
-	fmt.Fprintf(a.Stdout, "resolved packages: %d\n", pkgCount)
+	fmt.Fprintf(a.Stdout, "packages: %d resolved\n", pkgCount)
 
-	// STEP 4 — drift summary line.
-	keepList, keepSet := a.loadKeepList(cfg.KeepListPath)
-	actual, derr := a.actualState(cfg, "/", keepList)
-	if derr != nil {
-		fmt.Fprintln(a.Stdout, "drift: unavailable")
+	res, serr := a.reader(cfg).Describe("/", stateOnUnreadable(cfg))
+	if serr != nil {
+		// status remains exit 0 on valid invocation; report drift as unknown.
+		a.emit(serr)
+		fmt.Fprintln(a.Stdout, "drift: unknown (actual state unreadable)")
 		return ExitOK
 	}
-	drift := diff.ComputeDrift(&actual, &applied, keepSet)
+	drift := diff.ComputeDrift(res.Manifest, applied, diff.DriftOptions{KeepList: keepListSet(cfg.KeepList)})
 	if drift.Empty() {
 		fmt.Fprintln(a.Stdout, "drift: clean")
 	} else {
 		fmt.Fprintf(a.Stdout, "drift: %d drift item(s)\n", drift.Count())
 	}
+	a.emit(res.Diagnostics...)
 	return ExitOK
 }
 
-// cmdDescribe implements BEHAVIOR: describe STEPS 1–4.
-func (a *App) cmdDescribe(cfg Config) int {
-	// STEP 1 — format already validated during parse; resolve against out.
-	format, ferr := manifest.ResolveFormat(cfg.Format, cfg.Out, cfg.ManifestFormat)
-	if ferr != nil {
-		fmt.Fprintf(a.Stderr, "Error [invocation] %v\n", ferr)
-		a.printUsage(a.Stderr)
+func generationID(root string) string {
+	if root == "" || root == "/" {
+		return "running-system"
+	}
+	return filepath.Clean(root)
+}
+
+// ---------------------------------------------------------------------------
+// describe
+// ---------------------------------------------------------------------------
+
+func (a *App) runDescribe(cfg config.Config) int {
+	res, serr := a.reader(cfg).Describe(cfg.Root, describeOnUnreadable(cfg))
+	if serr != nil {
+		a.emit(serr)
+		return exitFor(serr) // domain packages/repositories/units/files -> exit 1
+	}
+	a.emit(res.Diagnostics...)
+
+	// Resolve the output format (explicit wins, else out extension, else default).
+	format := manifest.ResolveFormat(cfg.ExplicitFormat, cfg.ExplicitFormatGiven, cfg.Out, cfg.ManifestFormat)
+	data, merr := manifest.Marshal(res.Manifest, format)
+	if merr != nil {
+		a.emit(diag.Errorf(diag.DomainInvocation, "serialise failed: %v", merr))
 		return ExitInvocation
 	}
 
-	keepList, _ := a.loadKeepList(cfg.KeepListPath)
-
-	// STEP 2 — obtain actual state.
-	m, d := state.Describe(cfg.Root, a.Runner, keepList)
-	if d != nil {
-		return a.emit(d) // state collection failure -> exit 1
-	}
-
-	// STEP 3 — serialise.
-	var data []byte
-	var err error
-	if format == manifest.FormatYAML {
-		data, err = manifest.MarshalYAML(&m)
-	} else {
-		data, err = manifest.MarshalJSON(&m)
-	}
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "Error [invocation] serialisation failed: %v\n", err)
-		return ExitInvocation
-	}
-
-	// STEP 4 — write to out or stdout.
-	if cfg.Out != "" {
-		if werr := os.WriteFile(cfg.Out, append(data, '\n'), 0o644); werr != nil {
-			fmt.Fprintf(a.Stderr, "Error [invocation] output path unwritable: %v\n", werr)
-			return ExitInvocation
-		}
+	if cfg.Out == "" {
+		_, _ = a.Stdout.Write(data)
 		return ExitOK
 	}
-	a.Stdout.Write(data)
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		fmt.Fprintln(a.Stdout)
+	if werr := os.WriteFile(cfg.Out, data, 0644); werr != nil {
+		a.emit(diag.Errorf(diag.DomainInvocation, "output path unwritable: %v", werr))
+		return ExitInvocation
 	}
 	return ExitOK
 }
 
-// seal seals the snapshot read-only, marks it the default boot target, and
-// schedules activation per the activation policy. Best-effort via the runner.
-func (a *App) seal(ctx txn.Context, cfg Config) {
-	switch cfg.ActivationPolicy {
-	case "none":
-		// no activation scheduled
-	default:
-		a.Runner.Run("snapper", "modify", "--read-only", ctx.Root)
+func describeOnUnreadable(cfg config.Config) state.OnUnreadable {
+	if cfg.OnUnreadable == config.OnUnreadableWarn {
+		return state.OnUnreadableWarn
 	}
+	return state.OnUnreadableError
 }
 
-func (a *App) generationID(root string) string {
-	stdout, _, err := a.Runner.Run("snapper", "--machine-readable", "csv", "list", "--columns", "number")
-	if err == nil {
-		if line := strings.TrimSpace(stdout); line != "" {
-			parts := strings.Split(line, "\n")
-			return parts[len(parts)-1]
+// ---------------------------------------------------------------------------
+// apply
+// ---------------------------------------------------------------------------
+
+func (a *App) runApply(cfg config.Config) int {
+	// 1. load desired manifest.
+	desired, desiredSHA, derr := manifest.LoadDesiredManifest(cfg.ManifestPath, a.loadOpts(cfg))
+	if derr != nil {
+		a.emit(derr)
+		return exitFor(derr)
+	}
+
+	// 2. load applied record.
+	applied, _, lerr := record.Load(cfg.AppliedRoot)
+	if lerr != nil {
+		a.emit(lerr)
+		return exitFor(lerr)
+	}
+
+	// 3. compute intent diff.
+	id := diff.ComputeIntentDiff(desired, applied)
+
+	keep := keepListSet(cfg.KeepList)
+
+	// 4. if empty intent diff, check drift; if also empty, nothing to do.
+	if id.Empty() {
+		res, serr := a.reader(cfg).Describe("/", stateOnUnreadable(cfg))
+		if serr != nil {
+			a.emit(serr)
+			return exitFor(serr)
+		}
+		drift := diff.ComputeDrift(res.Manifest, applied, diff.DriftOptions{KeepList: keep})
+		if drift.Empty() {
+			fmt.Fprintln(a.Stdout, "nothing to do")
+			return ExitOK
 		}
 	}
-	return filepath.Clean(rootName(root))
+
+	// 5. acquire transaction context.
+	acq := a.acquirer(cfg)
+	ctx, terr := acq.Acquire(txn.Mode(cfg.TransactionMode))
+	if terr != nil {
+		a.emit(terr)
+		return exitFor(terr) // transaction -> exit 2
+	}
+
+	cv := &converge.Converger{
+		Runner:       &system.OSCommandRunner{},
+		Reader:       a.reader(cfg),
+		ContentStore: cfg.ContentStore,
+		KeepList:     keep,
+		RepoLock:     cfg.RepoLock,
+	}
+
+	// 6. converge repositories + packages; capture the resolved lock.
+	resolved, perr := cv.Packages(ctx, id)
+	if perr != nil {
+		a.emit(perr)
+		return ExitError // discarded
+	}
+
+	// 7. converge files.
+	if ferr := cv.Files(ctx, id); ferr != nil {
+		a.emit(ferr)
+		return ExitError
+	}
+
+	// 8. converge units.
+	if uerr := cv.Units(ctx, id); uerr != nil {
+		a.emit(uerr)
+		return ExitError
+	}
+
+	// 9. write applied record.
+	if werr := record.Write(ctx.Root, desired, desiredSHA, resolved, record.NoopStamper{}); werr != nil {
+		a.emit(werr)
+		return ExitError
+	}
+
+	// 10. post-converge verification.
+	postRes, pverr := a.reader(cfg).Describe(ctx.Root, state.OnUnreadableError)
+	if pverr != nil {
+		a.emit(pverr)
+		return ExitError
+	}
+	newApplied := manifest.Manifest{
+		Meta:         manifest.ManifestMeta{FormatVersion: 1, DesiredSHA256: desiredSHA},
+		Packages:     resolved,
+		Repositories: desired.Repositories,
+		Services:     desired.Services,
+		ConfigFiles:  desired.ConfigFiles,
+	}
+	postDrift := diff.ComputeDrift(postRes.Manifest, newApplied, diff.DriftOptions{KeepList: keep})
+	if !postDrift.Empty() {
+		a.emit(diag.Errorf(diag.DomainFiles, "post-converge verification found drift; transaction discarded"))
+		return ExitError
+	}
+
+	// 11. seal and activate (delegated/abstract); emit summary.
+	fmt.Fprintf(a.Stdout, "converged: %d package(s), %d file(s) written, %d unit(s) changed\n",
+		len(id.PackagesInstall), len(id.FilesWrite), len(id.UnitsChange))
+	return ExitOK
 }
 
-func rootName(root string) string {
-	if root == "" || root == "/" {
-		return "current"
+// acquirer returns the production transaction acquirer. The detection and
+// open/seal mechanisms are abstract bindings; in this build they report no
+// external transaction and no internal machinery, so apply on a host without a
+// transaction mechanism fails with a transaction diagnostic (exit 2), which is
+// the specified behaviour for an unavailable mechanism.
+func (a *App) acquirer(cfg config.Config) txn.Acquirer {
+	return &txn.SystemAcquirer{
+		Runner:            &system.OSCommandRunner{},
+		InsideTransaction: func() bool { return false },
+		ExternalRoot:      func() string { return "" },
+		OpenInternal:      nil, // no internal machinery wired into this build
 	}
-	return root
 }

@@ -1,11 +1,13 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 //
-// Package diff implements compute-intent-diff and compute-drift. Both are pure:
-// they perform no filesystem, rpmdb, or process I/O; they compare in-memory
-// Manifest documents only.
+// Package diff computes the intent diff (desired vs applied) and the drift report
+// (actual vs declaration). Both are pure comparisons of in-memory Manifest
+// documents; this package performs no filesystem, rpmdb, or process I/O.
 package diff
 
-import "github.com/mge1512/zypper-declarative/internal/manifest"
+import (
+	"github.com/mge1512/zypper-declarative/internal/manifest"
+)
 
 // Diff is the intent diff: desired_new versus applied_old, scope by scope.
 type Diff struct {
@@ -17,7 +19,7 @@ type Diff struct {
 	UnitsChange     []manifest.ServiceRecord
 }
 
-// Empty reports whether the intent diff would change nothing.
+// Empty reports whether the diff contains no changes.
 func (d Diff) Empty() bool {
 	return len(d.PackagesInstall) == 0 && len(d.PackagesRemove) == 0 &&
 		len(d.ReposSet) == 0 && len(d.FilesWrite) == 0 &&
@@ -32,7 +34,8 @@ type DriftReport struct {
 	PackagesDivergent []manifest.PackageRecord
 }
 
-// Empty reports whether the drift report indicates no divergence.
+// Empty reports whether the drift report is empty (actual equals reference
+// modulo the keep-list).
 func (r DriftReport) Empty() bool {
 	return len(r.FilesModified) == 0 && len(r.FilesExtra) == 0 &&
 		len(r.UnitsDivergent) == 0 && len(r.PackagesDivergent) == 0
@@ -43,25 +46,20 @@ func (r DriftReport) Count() int {
 	return len(r.FilesModified) + len(r.FilesExtra) + len(r.UnitsDivergent) + len(r.PackagesDivergent)
 }
 
-const syncpoint = "/etc/etc.syncpoint"
+// ComputeIntentDiff computes the changes from the previously applied declaration
+// to the desired declaration, scope by scope. A scope absent in desired produces
+// no change for that scope; the filesystem is not consulted.
+func ComputeIntentDiff(desired manifest.Manifest, applied manifest.AppliedRecord) Diff {
+	d := Diff{}
 
-// ComputeIntentDiff computes the change from applied to desired, scope by scope
-// (compute-intent-diff STEPS 1–5). A scope absent in desired contributes
-// nothing. The filesystem is not read.
-func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.AppliedRecord) Diff {
-	var d Diff
-	d.PackagesInstall = []manifest.PackageRecord{}
-	d.PackagesRemove = []manifest.PackageRecord{}
-	d.ReposSet = []manifest.RepositoryRecord{}
-	d.FilesWrite = []manifest.ManagedFileRecord{}
-	d.FilesDelete = []string{}
-	d.UnitsChange = []manifest.ServiceRecord{}
-
-	// STEP 1 — packages
+	// Packages.
 	if desired.Packages != nil {
-		d.PackagesInstall = append(d.PackagesInstall, desired.Packages.Elements...)
-		desiredNames := nameSet(desired.Packages.Elements)
-		if applied != nil && applied.Packages != nil {
+		d.PackagesInstall = append([]manifest.PackageRecord(nil), desired.Packages.Elements...)
+		desiredNames := map[string]bool{}
+		for _, p := range desired.Packages.Elements {
+			desiredNames[p.Name] = true
+		}
+		if applied.Packages != nil {
 			for _, p := range applied.Packages.Elements {
 				if !desiredNames[p.Name] {
 					d.PackagesRemove = append(d.PackagesRemove, p)
@@ -70,34 +68,38 @@ func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.AppliedReco
 		}
 	}
 
-	// STEP 2 — repositories
+	// Repositories.
 	if desired.Repositories != nil {
-		d.ReposSet = append(d.ReposSet, desired.Repositories.Elements...)
+		d.ReposSet = append([]manifest.RepositoryRecord(nil), desired.Repositories.Elements...)
 	}
 
-	// STEP 3 — config_files
+	// Config files.
 	if desired.ConfigFiles != nil {
-		d.FilesWrite = append(d.FilesWrite, desired.ConfigFiles.Elements...)
-		desiredPaths := filePathSet(desired.ConfigFiles.Elements)
-		if applied != nil && applied.ConfigFiles != nil {
+		d.FilesWrite = append([]manifest.ManagedFileRecord(nil), desired.ConfigFiles.Elements...)
+		desiredFileNames := map[string]bool{}
+		for _, f := range desired.ConfigFiles.Elements {
+			desiredFileNames[f.Name] = true
+		}
+		if applied.ConfigFiles != nil {
 			for _, f := range applied.ConfigFiles.Elements {
-				if !desiredPaths[f.Name] {
+				if !desiredFileNames[f.Name] {
 					d.FilesDelete = append(d.FilesDelete, f.Name)
 				}
 			}
 		}
 	}
 
-	// STEP 4 — services
+	// Services.
 	if desired.Services != nil {
 		appliedState := map[string]string{}
-		if applied != nil && applied.Services != nil {
+		if applied.Services != nil {
 			for _, s := range applied.Services.Elements {
 				appliedState[s.Name] = s.State
 			}
 		}
 		for _, s := range desired.Services.Elements {
-			if appliedState[s.Name] != s.State {
+			prev, ok := appliedState[s.Name]
+			if !ok || prev != s.State {
 				d.UnitsChange = append(d.UnitsChange, s)
 			}
 		}
@@ -106,111 +108,98 @@ func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.AppliedReco
 	return d
 }
 
-// ComputeDrift compares an actual-state Manifest against a reference declaration
-// on identity fields (compute-drift STEPS 1–5). keepList excludes paths from
-// files_extra. No I/O is performed.
-func ComputeDrift(actual *manifest.Manifest, reference *manifest.AppliedRecord, keepList map[string]bool) DriftReport {
-	var r DriftReport
-	r.FilesModified = []string{}
-	r.FilesExtra = []string{}
-	r.UnitsDivergent = []manifest.ServiceRecord{}
-	r.PackagesDivergent = []manifest.PackageRecord{}
+// DriftOptions carry the exclusion sets for compute-drift.
+type DriftOptions struct {
+	KeepList map[string]bool
+}
 
-	// STEP 1 — files_modified
-	actualFileSha := map[string]string{}
-	actualFilePresent := map[string]bool{}
-	if actual.ConfigFiles != nil {
-		for _, f := range actual.ConfigFiles.Elements {
-			actualFileSha[f.Name] = f.SHA256
-			actualFilePresent[f.Name] = true
-		}
-	}
-	declaredPaths := map[string]bool{}
-	if reference != nil && reference.ConfigFiles != nil {
-		for _, e := range reference.ConfigFiles.Elements {
-			declaredPaths[e.Name] = true
-			if actualFilePresent[e.Name] && actualFileSha[e.Name] != e.SHA256 {
-				r.FilesModified = append(r.FilesModified, e.Name)
-			}
-			// absent from actual => treated as matching (no entry)
-		}
+const syncpoint = "/etc/etc.syncpoint"
+
+// ComputeDrift compares an actual-state Manifest against a declaration, scope by
+// scope on identity fields, and reports divergence. It performs no I/O.
+func ComputeDrift(actual manifest.Manifest, reference manifest.AppliedRecord, opts DriftOptions) DriftReport {
+	r := DriftReport{}
+	keep := opts.KeepList
+	if keep == nil {
+		keep = map[string]bool{}
 	}
 
-	// STEP 2 — files_extra
+	// 1. files_modified: declared files whose actual sha256 differs. A declared
+	// file absent from actual is treated as matching.
+	actualFiles := map[string]manifest.ManagedFileRecord{}
 	if actual.ConfigFiles != nil {
 		for _, a := range actual.ConfigFiles.Elements {
-			if declaredPaths[a.Name] {
+			actualFiles[a.Name] = a
+		}
+	}
+	referenceFiles := map[string]bool{}
+	if reference.ConfigFiles != nil {
+		for _, e := range reference.ConfigFiles.Elements {
+			referenceFiles[e.Name] = true
+			if a, ok := actualFiles[e.Name]; ok && a.SHA256 != e.SHA256 {
+				r.FilesModified = append(r.FilesModified, e.Name)
+			}
+		}
+	}
+
+	// 2. files_extra: actual unpackaged, undeclared /etc files, not keep-listed,
+	// not the syncpoint.
+	if actual.ConfigFiles != nil {
+		for _, a := range actual.ConfigFiles.Elements {
+			if referenceFiles[a.Name] {
 				continue
 			}
 			if a.PackageName != "" {
-				continue // package-owned, not extra
+				continue // package-owned files are not "extra"
 			}
-			if a.Name == syncpoint || keepList[a.Name] {
+			if keep[a.Name] || a.Name == syncpoint {
 				continue
 			}
 			r.FilesExtra = append(r.FilesExtra, a.Name)
 		}
 	}
 
-	// STEP 3 — units_divergent
-	actualUnitState := map[string]string{}
+	// 3. units_divergent: declared units whose actual state differs.
+	actualUnits := map[string]string{}
 	if actual.Services != nil {
 		for _, s := range actual.Services.Elements {
-			actualUnitState[s.Name] = s.State
+			actualUnits[s.Name] = s.State
 		}
 	}
-	if reference != nil && reference.Services != nil {
+	if reference.Services != nil {
 		for _, u := range reference.Services.Elements {
-			if st, ok := actualUnitState[u.Name]; ok && st != u.State {
-				r.UnitsDivergent = append(r.UnitsDivergent, u)
-			} else if !ok {
-				// reference declares it, actual does not report it -> divergent
+			if st, ok := actualUnits[u.Name]; ok && st != u.State {
 				r.UnitsDivergent = append(r.UnitsDivergent, u)
 			}
 		}
 	}
 
-	// STEP 4 — packages_divergent: present in one but not the other (identity).
+	// 4. packages_divergent: packages present in one but not the other (identity
+	// fields).
+	actualPkgs := map[string]manifest.PackageRecord{}
+	if actual.Packages != nil {
+		for _, p := range actual.Packages.Elements {
+			actualPkgs[pkgKey(p)] = p
+		}
+	}
 	refPkgs := map[string]manifest.PackageRecord{}
-	if reference != nil && reference.Packages != nil {
+	if reference.Packages != nil {
 		for _, p := range reference.Packages.Elements {
 			refPkgs[pkgKey(p)] = p
 		}
 	}
-	actPkgs := map[string]manifest.PackageRecord{}
-	if actual.Packages != nil {
-		for _, p := range actual.Packages.Elements {
-			actPkgs[pkgKey(p)] = p
-		}
-	}
 	for k, p := range refPkgs {
-		if _, ok := actPkgs[k]; !ok {
+		if _, ok := actualPkgs[k]; !ok {
 			r.PackagesDivergent = append(r.PackagesDivergent, p)
 		}
 	}
-	for k, p := range actPkgs {
+	for k, p := range actualPkgs {
 		if _, ok := refPkgs[k]; !ok {
 			r.PackagesDivergent = append(r.PackagesDivergent, p)
 		}
 	}
 
 	return r
-}
-
-func nameSet(pkgs []manifest.PackageRecord) map[string]bool {
-	s := map[string]bool{}
-	for _, p := range pkgs {
-		s[p.Name] = true
-	}
-	return s
-}
-
-func filePathSet(files []manifest.ManagedFileRecord) map[string]bool {
-	s := map[string]bool{}
-	for _, f := range files {
-		s[f.Name] = true
-	}
-	return s
 }
 
 func pkgKey(p manifest.PackageRecord) string {

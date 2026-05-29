@@ -1,12 +1,12 @@
-// generated from spec: zypper-declarative.spec.md sha256:714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
 //
-// Package converge applies the intent diff inside a transaction context:
-// converge-packages, converge-files, converge-units. All work is performed
-// against the context root, never the running system root.
+// Package converge applies the package, file, and unit portions of the intent
+// diff inside the transaction context. converge-packages delegates to the
+// package manager and reports the resolved scope (the lock); converge-files
+// writes/deletes /etc files; converge-units applies offline enablement.
 package converge
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -17,126 +17,118 @@ import (
 	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/diff"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
-	"github.com/mge1512/zypper-declarative/internal/sysiface"
+	"github.com/mge1512/zypper-declarative/internal/state"
+	"github.com/mge1512/zypper-declarative/internal/system"
 	"github.com/mge1512/zypper-declarative/internal/txn"
 )
 
 const syncpoint = "/etc/etc.syncpoint"
 
-// Converger applies convergence against a context. ContentStore resolves
-// content_ref values; KeepList and RPM-owned paths are protected from deletion.
+// Converger applies convergence domains through a CommandRunner. ContentStore is
+// the base path against which ManagedFileRecord.content_ref values are resolved.
 type Converger struct {
-	Runner       sysiface.CommandRunner
+	Runner       system.CommandRunner
+	Reader       *state.Reader
 	ContentStore string
-	RepoLock     string
 	KeepList     map[string]bool
+	RepoLock     string
 }
 
-// Packages applies the package portion of the diff (converge-packages STEPS
-// 1–4) and returns the resolved installed set as the lock.
+// Packages applies the package portion of the intent diff inside ctx and returns
+// the fully-resolved installed set (the lock) read from the rpmdb under ctx.Root.
 func (c *Converger) Packages(ctx txn.Context, d diff.Diff) (*manifest.PackagesScope, *diag.Diagnostic) {
-	root := ctx.Root
-	// STEP 1 — configure repositories (or the CONFIG pin).
-	repos := d.ReposSet
-	if len(repos) == 0 && c.RepoLock != "" {
-		if _, _, err := c.Runner.Run("zypper", "--root", root, "addrepo", c.RepoLock, "repo-lock"); err != nil {
-			return nil, diag.New(diag.DomainRepositories, "repository configuration failed: %v", err)
+	// 1. ensure repositories are configured (or the CONFIG pin if repos_set empty).
+	if len(d.ReposSet) > 0 {
+		for _, r := range d.ReposSet {
+			if _, _, err := c.Runner.Run("zypper", []string{"--root", ctx.Root, "ar", "-f", r.URL, r.Alias}); err != nil {
+				return nil, diag.Errorf(diag.DomainRepositories, "repository configuration failed for %s: %v", r.Alias, err)
+			}
 		}
-	}
-	for _, r := range repos {
-		if _, _, err := c.Runner.Run("zypper", "--root", root, "addrepo", "--check",
-			"--priority", strconv.Itoa(r.Priority), r.URL, r.Alias); err != nil {
-			return nil, diag.New(diag.DomainRepositories, "repository configuration failed for %s: %v", r.Alias, err)
+	} else if c.RepoLock != "" {
+		if _, _, err := c.Runner.Run("zypper", []string{"--root", ctx.Root, "ar", "-f", c.RepoLock, "repo-lock"}); err != nil {
+			return nil, diag.Errorf(diag.DomainRepositories, "repository configuration failed for repo-lock: %v", err)
 		}
 	}
 
-	// STEP 2 — install.
+	// 2. install.
 	if len(d.PackagesInstall) > 0 {
-		args := []string{"--root", root, "--non-interactive", "install", "--no-recommends"}
+		args := []string{"--root", ctx.Root, "--non-interactive", "in", "--no-recommends"}
 		for _, p := range d.PackagesInstall {
 			args = append(args, p.Name)
 		}
-		if _, stderr, err := c.Runner.Run("zypper", args...); err != nil {
-			return nil, diag.New(diag.DomainPackages, "package install failed: %v (%s)", err, strings.TrimSpace(stderr))
+		if _, stderr, err := c.Runner.Run("zypper", args); err != nil {
+			return nil, diag.Errorf(diag.DomainPackages, "install failed: %v: %s", err, strings.TrimSpace(stderr))
 		}
 	}
 
-	// STEP 3 — remove.
+	// 3. remove.
 	if len(d.PackagesRemove) > 0 {
-		args := []string{"--root", root, "--non-interactive", "remove"}
+		args := []string{"--root", ctx.Root, "--non-interactive", "rm"}
 		for _, p := range d.PackagesRemove {
 			args = append(args, p.Name)
 		}
-		if _, stderr, err := c.Runner.Run("zypper", args...); err != nil {
-			return nil, diag.New(diag.DomainPackages, "package remove failed: %v (%s)", err, strings.TrimSpace(stderr))
+		if _, stderr, err := c.Runner.Run("zypper", args); err != nil {
+			return nil, diag.Errorf(diag.DomainPackages, "remove failed: %v: %s", err, strings.TrimSpace(stderr))
 		}
 	}
 
-	// STEP 4 — query the rpmdb for the full installed set (the lock).
-	scope := manifest.EmptyPackages()
-	stdout, _, err := c.Runner.Run("rpm", "--root", root, "-qa", "--qf",
-		"%{NAME} %{VERSION} %{RELEASE} %{ARCH}\\n")
-	if err != nil {
-		return nil, diag.New(diag.DomainPackages, "rpmdb query failed after convergence: %v", err)
+	// 4. query the rpmdb under ctx.Root for the full installed set (the lock).
+	res, derr := c.Reader.Describe(ctx.Root, state.OnUnreadableError)
+	if derr != nil {
+		return nil, diag.Errorf(diag.DomainPackages, "post-install rpmdb query failed: %v", derr)
 	}
-	sc := bufio.NewScanner(strings.NewReader(stdout))
-	for sc.Scan() {
-		f := strings.Fields(sc.Text())
-		if len(f) < 4 {
-			continue
-		}
-		scope.Elements = append(scope.Elements, manifest.PackageRecord{
-			Name: f[0], Version: f[1], Release: f[2], Arch: f[3],
-		})
+	if res.Manifest.Packages == nil {
+		// Never infer from file diffs; an empty installed set is an empty scope.
+		return &manifest.PackagesScope{
+			Attributes: manifest.ScopeAttributes{"package_system": "rpm"},
+			Elements:   []manifest.PackageRecord{},
+		}, nil
 	}
-	return scope, nil
+	return res.Manifest.Packages, nil
 }
 
-// Files applies the file portion of the diff (converge-files STEPS 1–3).
+// Files applies the file portion of the intent diff to <ctx.Root>/etc.
 func (c *Converger) Files(ctx txn.Context, d diff.Diff) *diag.Diagnostic {
-	root := ctx.Root
-	// STEP 1 — write declared files, verifying content hash.
+	// 1. write declared files.
 	for _, e := range d.FilesWrite {
-		content, derr := c.resolveContent(e.ContentRef)
-		if derr != nil {
-			return diag.New(diag.DomainFiles, "content resolution failed for %s: %v", e.Name, derr)
+		content, rerr := c.resolveContent(e.ContentRef)
+		if rerr != nil {
+			return diag.Errorf(diag.DomainFiles, "content resolution failed for %s: %v", e.Name, rerr)
 		}
-		target := filepath.Join(root, e.Name)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return diag.New(diag.DomainFiles, "file write failed for %s: %v", e.Name, err)
+		target := filepath.Join(ctx.Root, e.Name)
+		if mkErr := os.MkdirAll(filepath.Dir(target), 0755); mkErr != nil {
+			return diag.Errorf(diag.DomainFiles, "create dir for %s failed: %v", e.Name, mkErr)
 		}
 		mode := parseMode(e.Mode)
-		if err := os.WriteFile(target, content, mode); err != nil {
-			return diag.New(diag.DomainFiles, "file write failed for %s: %v", e.Name, err)
+		if wErr := os.WriteFile(target, content, mode); wErr != nil {
+			return diag.Errorf(diag.DomainFiles, "write %s failed: %v", e.Name, wErr)
 		}
-		if e.SHA256 != "" {
-			sum := sha256.Sum256(content)
-			if hex.EncodeToString(sum[:]) != e.SHA256 {
-				return diag.New(diag.DomainFiles, "written content hash mismatch for %s", e.Name)
-			}
+		// verify the written content hashes to e.sha256.
+		sum := sha256.Sum256(content)
+		if got := hex.EncodeToString(sum[:]); got != e.SHA256 {
+			return diag.Errorf(diag.DomainFiles, "written content hash mismatch for %s: got %s want %s", e.Name, got, e.SHA256)
 		}
 	}
 
-	// STEP 2 — delete dropped files, excluding RPM-owned, keep-listed, syncpoint.
+	// 2. delete files, excluding RPM-owned, keep-listed, and the syncpoint.
 	for _, p := range d.FilesDelete {
-		if p == syncpoint || c.KeepList[p] {
+		if p == syncpoint || (c.KeepList != nil && c.KeepList[p]) {
 			continue
 		}
-		if c.rpmOwned(root, p) {
+		if c.rpmOwned(ctx.Root, p) {
 			continue
 		}
-		target := filepath.Join(root, p)
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			return diag.New(diag.DomainFiles, "delete failed for %s: %v", p, err)
+		target := filepath.Join(ctx.Root, p)
+		if rmErr := os.Remove(target); rmErr != nil && !os.IsNotExist(rmErr) {
+			return diag.Errorf(diag.DomainFiles, "delete %s failed: %v", p, rmErr)
 		}
 	}
 	return nil
 }
 
-// Units applies the unit portion of the diff using offline enablement against
-// the context root (converge-units STEPS 1–2).
+// Units applies the unit portion of the intent diff using offline enablement
+// against ctx.Root.
 func (c *Converger) Units(ctx txn.Context, d diff.Diff) *diag.Diagnostic {
-	root := ctx.Root
 	for _, u := range d.UnitsChange {
 		var verb string
 		switch u.State {
@@ -147,10 +139,10 @@ func (c *Converger) Units(ctx txn.Context, d diff.Diff) *diag.Diagnostic {
 		case "masked":
 			verb = "mask"
 		default:
-			return diag.New(diag.DomainUnits, "unknown declared state %q for %s", u.State, u.Name)
+			return diag.Errorf(diag.DomainUnits, "unknown unit state %q for %s", u.State, u.Name)
 		}
-		if _, stderr, err := c.Runner.Run("systemctl", "--root", root, verb, u.Name); err != nil {
-			return diag.New(diag.DomainUnits, "offline enablement failed for %s: %v (%s)", u.Name, err, strings.TrimSpace(stderr))
+		if _, stderr, err := c.Runner.Run("systemctl", []string{"--root", ctx.Root, verb, u.Name}); err != nil {
+			return diag.Errorf(diag.DomainUnits, "offline %s of %s failed: %v: %s", verb, u.Name, err, strings.TrimSpace(stderr))
 		}
 	}
 	return nil
@@ -160,28 +152,34 @@ func (c *Converger) resolveContent(ref string) ([]byte, error) {
 	if ref == "" {
 		return []byte{}, nil
 	}
-	base := c.ContentStore
-	if base == "" {
-		base = "."
+	path := ref
+	if c.ContentStore != "" && !filepath.IsAbs(ref) {
+		path = filepath.Join(c.ContentStore, ref)
 	}
-	return os.ReadFile(filepath.Join(base, ref))
+	return os.ReadFile(path)
 }
 
-func (c *Converger) rpmOwned(root, p string) bool {
-	stdout, _, err := c.Runner.Run("rpm", "--root", root, "-qf", p)
+func (c *Converger) rpmOwned(root, path string) bool {
+	args := []string{}
+	if root != "" && root != "/" {
+		args = append(args, "--root", root)
+	}
+	args = append(args, "-qf", path)
+	stdout, _, err := c.Runner.Run("rpm", args)
 	if err != nil {
 		return false
 	}
-	return !strings.Contains(stdout, "not owned")
+	line := strings.TrimSpace(stdout)
+	return line != "" && !strings.Contains(line, "not owned")
 }
 
-func parseMode(mode string) os.FileMode {
-	if mode == "" {
-		return 0o644
+func parseMode(s string) os.FileMode {
+	if s == "" {
+		return 0644
 	}
-	n, err := strconv.ParseUint(mode, 8, 32)
+	v, err := strconv.ParseUint(s, 8, 32)
 	if err != nil {
-		return 0o644
+		return 0644
 	}
-	return os.FileMode(n)
+	return os.FileMode(v)
 }

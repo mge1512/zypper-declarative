@@ -1,6 +1,6 @@
-zypper-declarative (0.4.0-1) unstable; urgency=medium
+zypper-declarative (0.5.0-1) unstable; urgency=medium
 
-  * Generated from zypper-declarative.spec.md (PCD translator, full-spec build).
-    Spec-SHA256: 714e75ff672557d2c7344736a5f36b52afa37e0f565b07de83e1b18cc4492014
+  * Generated from zypper-declarative.spec.md v0.5.0
+    (spec sha256 58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4).
 
- -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 14:30:00 +0200
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Fri, 29 May 2026 15:32:07 +0200
