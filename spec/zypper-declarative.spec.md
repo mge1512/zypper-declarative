@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.5.2
+Version:     0.6.0
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -138,18 +138,71 @@ ManagedFileRecord := {
 
 ConfigFilesScope := ScopeWrapper<ManagedFileRecord>
 
+// -----------------------------------------------------------------------
+// Observational scopes (full-scan integrity, outside /etc; not declarable)
+// -----------------------------------------------------------------------
+
+ScanScope := one_of("etc" | "full")
+// etc  = inspect only /etc for config_files (the default; bounded, cheap).
+// full = additionally scan the package-managed OS trees outside /etc for
+//        integrity drift (changed packaged files and unpackaged additions).
+//        Opt-in and expensive; mirrors the old Machinery / sitar full scan.
+
+ManagedBaselineRecord := {
+  name:         AbsolutePath,   // path OUTSIDE /etc (e.g. under /usr or /boot)
+  type:         one_of("file" | "link" | "dir"),
+  mode:         Mode,
+  user:         string where non-empty,
+  group:        string where non-empty,
+  sha256:       Sha256,         // actual content digest (files); "" for dir/link
+  package_name: string where non-empty,  // owning package (always set here)
+  changes:      []string        // what differs from the package baseline,
+                                // e.g. ["sha256"], ["mode","user"]
+}
+// Machinery changed_managed_files record: a packaged file outside /etc whose
+// current content or metadata differs from the package-recorded baseline.
+
+ChangedManagedFilesScope := ScopeWrapper<ManagedBaselineRecord>
+
+UnmanagedFileRecord := {
+  name:   AbsolutePath,         // path OUTSIDE /etc that no package owns
+  type:   one_of("file" | "link" | "dir"),
+  mode:   Mode,
+  user:   string where non-empty,
+  group:  string where non-empty,
+  sha256: Sha256                // actual content digest (files); "" for dir/link
+}
+// Machinery unmanaged_files record: a file present in the scanned trees that no
+// installed package owns (an out-of-band addition). It has no package baseline.
+
+UnmanagedFilesScope := ScopeWrapper<UnmanagedFileRecord>
+
+// Scope-name note: these JSON/YAML keys use the underscore form
+// (changed_managed_files, unmanaged_files), which is both valid JSON/YAML and
+// identical to Machinery's system-description JSON keys. Machinery's hyphenated
+// forms (changed-managed-files, unmanaged-files) were its CLI scope identifiers,
+// not its data keys; the underscore form is used here for schema consistency.
+
 Manifest := {
   meta:         ManifestMeta,
   packages:     PackagesScope,       // optional; absent = scope unmanaged
   repositories: RepositoriesScope,   // optional; absent = scope unmanaged
   services:     ServicesScope,       // optional; absent = scope unmanaged
-  config_files: ConfigFilesScope     // optional; absent = scope unmanaged
+  config_files: ConfigFilesScope,    // optional; absent = scope unmanaged
+  // Observational, never declarable. Present only in describe/verify actual
+  // state read with scope=full; ignored by compute-intent-diff and convergence;
+  // never present in a desired manifest or an applied record.
+  changed_managed_files: ChangedManagedFilesScope,   // optional, observational
+  unmanaged_files:       UnmanagedFilesScope         // optional, observational
 }  where meta.format_version = 1 AND well-formed per the manifest JSON schema
-// A scope ABSENT from the document means the converger makes no assertion about
-// it (unmanaged). A scope PRESENT with empty _elements means the converger
-// asserts the scope should be exactly empty, removing what was previously
-// declared in that scope. The same Manifest shape is produced by describe (as
-// the actual state) and consumed by apply/diff/verify (as the desired state).
+// A declarable scope ABSENT from the document means the converger makes no
+// assertion about it (unmanaged). A declarable scope PRESENT with empty
+// _elements means the converger asserts the scope should be exactly empty,
+// removing what was previously declared in that scope. The observational scopes
+// above carry no such meaning: they are actual-state findings only, and a
+// desired manifest or applied record never contains them. The same Manifest
+// shape is produced by describe (as the actual state) and consumed by
+// apply/diff/verify (as the desired state, declarable scopes only).
 
 AppliedRecord := Manifest
   where (every PackageRecord in packages._elements has non-empty version,
@@ -188,13 +241,19 @@ Diff := {
 // The intent diff: desired_new versus applied_old, computed scope by scope.
 
 DriftReport := {
-  files_modified:     []AbsolutePath,   // declared files whose actual content != declared
-  files_extra:        []AbsolutePath,   // unpackaged /etc files not declared, not keep-listed
-  units_divergent:    []ServiceRecord,
-  packages_divergent: []PackageRecord
+  files_modified:        []AbsolutePath,   // declared files whose actual content != declared
+  files_extra:           []AbsolutePath,   // unpackaged /etc files not declared, not keep-listed
+  units_divergent:       []ServiceRecord,
+  packages_divergent:    []PackageRecord,
+  // full-scan integrity categories; populated only when actual state was read
+  // with scope=full, empty otherwise
+  managed_files_modified:  []AbsolutePath, // packaged files outside /etc changed from baseline
+  unmanaged_files_present: []AbsolutePath  // files outside /etc that no package owns (not keep-listed)
 }
 // The drift diff: actual versus declared. Empty == actual equals the declaration
-// (modulo the keep-list).
+// (modulo the keep-list). The two integrity categories are drift against the
+// package/substrate baseline rather than against the declaration, and are only
+// computed under scope=full.
 
 Severity := Error | Warning
 
@@ -433,6 +492,8 @@ INPUTS:
 state_path: AbsolutePath          // optional state dump in the shared schema;
                                   // default = read live via describe-actual-state
 format:     ManifestFormat | none // optional; resolved via resolve-format against state_path
+scope:      ScanScope             // etc (default) or full; full additionally
+                                  // audits the package-managed trees outside /etc
 ```
 
 OUTPUTS:
@@ -453,13 +514,18 @@ STEPS:
    extension, else the default), load it under that serialisation, and
    schema-validate it as a Manifest; a YAML dump is parsed under the same safe
    profile as a desired manifest. Otherwise obtain the actual state via
-   `describe-actual-state` on "/" with `on_unreadable=error`. On a malformed dump
-   exit 2.
+   `describe-actual-state` on "/" with `on_unreadable=error` and `scope`. Under
+   `scope=full` the actual state additionally carries the changed_managed_files
+   and unmanaged_files scopes. On a malformed dump exit 2.
 3. Compute the drift report via `compute-drift` from the actual state and the
-   applied record.
+   applied record. Under `scope=full` the report additionally carries
+   managed_files_modified and unmanaged_files_present.
 4. If the drift report is empty (excluding the keep-list), emit "system matches
    declaration" to stdout and exit 0. Otherwise emit one diagnostic per drift
-   item to stderr and exit 1.
+   item to stderr and exit 1. Under `scope=full`, a changed packaged file or an
+   unpackaged addition outside `/etc` is drift and causes exit 1, so
+   `verify scope=full` is an integrity audit of the package-managed trees in
+   addition to a declaration check.
 
 POSTCONDITIONS:
 - The system is not modified.
@@ -469,7 +535,8 @@ POSTCONDITIONS:
 ERRORS:
 - no applied record present -> exit 2, domain=invocation
 - supplied state dump malformed -> exit 2, domain=invocation
-- drift detected -> exit 1, domain=files or units or packages
+- drift detected -> exit 1, domain=files or units or packages (under scope=full,
+  also a changed packaged file or an unpackaged addition outside /etc)
 
 ---
 
@@ -527,8 +594,10 @@ INPUTS:
 ```
 root:          AbsolutePath          // root to describe; default "/"
 out:           AbsolutePath          // output file; default = stdout
-format:        ManifestFormat | none // optional; resolved via resolve-format against out
+format:        ManifestFormat | none // output serialisation; via resolve-format against out
 on_unreadable: one_of("error" | "warn")  // default "error" from CONFIG
+scope:         ScanScope             // etc (default) or full; full adds the
+                                     // out-of-/etc integrity scopes (expensive)
 ```
 
 OUTPUTS:
@@ -544,10 +613,12 @@ STEPS:
 1. Reject any unrecognised argument or an unknown `format` value: emit usage to
    stderr and exit 2.
 2. Obtain the actual state via `describe-actual-state` on `root` with
-   `on_unreadable`. If a scope source is unreadable and `on_unreadable` is error,
-   emit a diagnostic naming the source to stderr and exit 1. If warn, the
-   unreadable scopes are omitted and a diagnostic is emitted to stderr for each,
-   and processing continues.
+   `on_unreadable` and `scope`. Under `scope=full` the result also carries the
+   changed_managed_files and unmanaged_files observational scopes (when non-empty).
+   If a scope source is unreadable and `on_unreadable` is error, emit a diagnostic
+   naming the source to stderr and exit 1. If warn, the unreadable scopes are
+   omitted and a diagnostic is emitted to stderr for each, and processing
+   continues.
 3. Resolve the output format via `resolve-format(format, out)`: an explicit
    `format=` wins, else the `out` file extension decides (`.json` -> json,
    `.yaml`/`.yml` -> yaml), else the `manifest-format` default (stdout has no
@@ -587,15 +658,17 @@ verb that needs actual state obtains it through this behaviour (or through a
 supplied dump in the same format); no other code reads live system state.
 Reads are file-and-database level (no network refresh, no daemon, no privileged
 cache), so a normal user can read what is world-readable and the result is
-deterministic. The `describe` verb passes `on_unreadable` through from its option;
-every other caller (`apply`, `diff`, `status`, `verify` reading live state) passes
-`on_unreadable=error`, because convergence and verification require complete
-state.
+deterministic. The `describe` verb passes `on_unreadable` and `scope` through from
+its options; every other caller (`apply`, `diff`, `status`, `verify` reading live
+state) passes `on_unreadable=error` and `scope=etc`, because convergence and
+declaration verification act only on the declarable scopes.
 
 INPUTS:
 ```
 root:          AbsolutePath              // tree to read; "/" or a snapshot mount
 on_unreadable: one_of("error" | "warn")  // how to treat a source that cannot be read
+scope:         ScanScope                 // etc (default) or full; full adds the
+                                         // out-of-/etc integrity scan
 ```
 
 OUTPUTS:
@@ -640,10 +713,38 @@ STEPS:
      empty match, are the expected outcome that yields the changed-file set; they
      are NOT an unreadable source. Only a genuine access or I/O failure to read a
      required `/etc` file is unreadable, treated per `on_unreadable` (step 6).
+4a. full-scan integrity (only when `scope = full`; skipped entirely under
+   `scope = etc`): scan the package-managed operating-system trees OUTSIDE `/etc`
+   and emit two observational scopes.
+   - Trees scanned: `/usr` and the usr-merge compatibility roots (`/bin`, `/sbin`,
+     `/lib`, `/lib64`), and `/boot`. Excluded: `/etc` (already covered by
+     config_files), `/opt`, and the virtual, runtime, and mutable-data trees
+     (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var`, `/home`, `/root`, `/mnt`,
+     `/media`). Within the scanned trees do not descend into separate filesystem
+     mounts other than the named ones, and honour the keep-list.
+   - changed_managed_files: for each packaged file in the scanned trees whose
+     current content or metadata differs from the package-recorded baseline, emit
+     a ManagedBaselineRecord with the actual sha256, mode, user, group, type, the
+     owning package_name, and a `changes` list naming what differs. A verifier
+     reporting differences (commonly a non-zero exit) is the normal result here,
+     not an unreadable source (step 6).
+   - unmanaged_files: for each file in the scanned trees that no installed package
+     owns, and that is not keep-listed, emit an UnmanagedFileRecord with the actual
+     sha256 (files), type, mode, user, and group.
+   - This step is expensive (it stats and hashes the scanned trees and verifies
+     packaged files). It runs only under `scope=full`, which is opt-in and never
+     engaged by default. Generated artifacts under `/boot` (initramfs images, the
+     generated bootloader configuration, boot entries) are unpackaged and will
+     appear as unmanaged unless keep-listed; the keep-list is how a site suppresses
+     known-generated boot and OS artifacts.
+   - If a required path in the scanned trees cannot be read, treat per
+     `on_unreadable` (step 6).
 5. Assemble the Manifest with meta.format_version = 1, generator, created_at, and
-   empty desired_sha256. Omit any scope whose readable content is genuinely empty
-   (so a bootstrapped manifest leaves that scope unmanaged rather than asserting
-   deletion). Return it, with any warn diagnostics.
+   empty desired_sha256. Include changed_managed_files and unmanaged_files only
+   when they were produced (scope=full). Omit any scope whose readable content is
+   genuinely empty (so a bootstrapped manifest leaves that scope unmanaged rather
+   than asserting deletion, and a clean full scan simply omits the two integrity
+   scopes). Return it, with any warn diagnostics.
 6. Unreadable-source handling. "Unreadable" means a genuine access or I/O failure
    to read a source: a permission denial on a required path, a missing required
    path, or an rpmdb, repos.d, or unit-state source that cannot be opened or read.
@@ -665,6 +766,12 @@ POSTCONDITIONS:
 - config_files inspection is bounded to `/etc`: no file outside the declarable
   file domain is read, hashed, or verified, so the cost is a function of the size
   of `/etc`, not of the installed package base.
+- changed_managed_files and unmanaged_files are present only when `scope=full`;
+  under `scope=etc` they are absent and no out-of-/etc file is scanned, read, or
+  hashed.
+- The full scan covers `/usr`, the usr-merge roots, and `/boot`, and excludes
+  `/etc`, `/opt`, and the virtual, runtime, and mutable-data trees; it honours the
+  keep-list.
 - No scope is emitted with empty `_elements` because its source was unreadable; an
   unreadable source is an error (strict) or an omission with a diagnostic (warn).
 - A scope that is readable and genuinely empty is omitted, not emitted empty.
@@ -744,8 +851,11 @@ STEPS:
    version like `1.10` are not coerced). A YAML input that requires any disabled
    feature returns a manifest error rather than being parsed.
 4. Validate against the manifest schema: `meta.format_version` must be 1, and
-   every present scope must conform to its ScopeWrapper record type. On violation
-   return a manifest error naming the first violation.
+   every present scope must conform to its ScopeWrapper record type. Observational
+   scopes (changed_managed_files, unmanaged_files) are ignored if present and do
+   not contribute to the desired state, so a describe scope=full dump can be reused
+   as a desired manifest with its out-of-/etc findings simply dropped (they are not
+   declarable). On violation return a manifest error naming the first violation.
 5. If signature verification is enabled in CONFIG, verify the manifest's signature
    against the configured keyring. On failure return a manifest error.
 6. Compute desired_sha256 as the SHA256 of the canonical JSON serialisation of the
@@ -881,7 +991,15 @@ STEPS:
 4. packages_divergent: compare reference.packages._elements (identity fields)
    against actual.packages._elements; add any package present in one but not the
    other.
-5. Return the DriftReport.
+5. Integrity categories (full scan): if actual.changed_managed_files is present,
+   add each of its element names to managed_files_modified; if
+   actual.unmanaged_files is present, add each of its element names to
+   unmanaged_files_present. These two scopes carry their own baseline (they are
+   actual-state findings against the package set, computed during the full scan),
+   so there is no reference comparison: their presence is itself drift. When
+   actual was read with scope=etc, both scopes are absent and both categories are
+   empty.
+6. Return the DriftReport.
 
 POSTCONDITIONS:
 - Performs no filesystem, rpmdb, or process I/O; it is a pure comparison of two
@@ -890,7 +1008,11 @@ POSTCONDITIONS:
   unpackaged, undeclared /etc files do.
 - A declared file absent from the actual scope is treated as matching, not as
   missing.
-- An empty report means actual equals reference modulo the keep-list.
+- managed_files_modified and unmanaged_files_present are non-empty only when the
+  actual state was read with scope=full; they report integrity drift against the
+  package/substrate baseline, not against the declaration.
+- An empty report means actual equals reference modulo the keep-list, and (under
+  scope=full) that the scanned trees match the package baseline.
 
 ---
 
@@ -1073,7 +1195,10 @@ STEPS:
 1. Construct an AppliedRecord: copy desired's repositories, services, and
    config_files scopes; set the packages scope to `resolved`; set
    meta.desired_sha256 to desired_sha256, meta.created_at to now, and
-   meta.format_version to 1.
+   meta.format_version to 1. The record carries only the declarable scopes; the
+   observational scopes (changed_managed_files, unmanaged_files) are never
+   recorded, since `apply` derives the record from the desired manifest, which
+   never contains them.
 2. Serialise it as canonical JSON in the shared format, regardless of the desired
    manifest's input serialisation (the ledger is always JSON so it stays
    Machinery-readable), and write to
@@ -1144,6 +1269,15 @@ layering). Control via environment variables is forbidden.
   fails the run naming the source; warn omits the affected scope, emits a
   diagnostic, and continues. A source that cannot be read is never represented as
   an empty scope. Internal callers (apply, diff, status, verify) always use error.
+- `scope` = etc | full. Default etc. Selects the actual-state read scope for
+  `describe` and `verify`. etc inspects only `/etc` for config_files (bounded,
+  cheap). full additionally scans the package-managed trees outside `/etc`
+  (`/usr`, the usr-merge roots, and `/boot`) for changed packaged files and
+  unpackaged additions, emitting the changed_managed_files and unmanaged_files
+  observational scopes and, in `verify`, auditing them as integrity drift. full is
+  expensive and opt-in; it is never engaged by default, including on a mutable
+  `/usr`. Accepted only on `describe` and `verify` (not status, diff, or apply,
+  whose internal reads are always scope=etc).
 - `repo-lock` = fallback pinned repository or channel used only when the manifest
   declares no `repositories` scope. The primary, declarative source of the pin is
   the manifest's repositories scope.
@@ -1273,6 +1407,18 @@ resolver fills in the transitive set.
   scope; it does not read, hash, or verify files outside `/etc`, and does not run
   a whole-system package verification. Its config_files cost scales with the size
   of `/etc`, not the installed package base.
+- [observable] The out-of-/etc integrity scan runs only under `scope=full`;
+  `scope` defaults to `etc`, so by default no file outside `/etc` is scanned, read,
+  or hashed, including on a mutable `/usr`.
+- [observable] `scope` is accepted only on `describe` and `verify`; `status`,
+  `diff`, and `apply` read actual state with `scope=etc`.
+- [observable] `changed_managed_files` and `unmanaged_files` are observational:
+  they are ignored by `compute-intent-diff` and by convergence, and never appear
+  in a desired manifest or an applied record. `verify scope=full` surfaces them as
+  integrity drift against the package baseline (exit 1 when non-empty).
+- [observable] The full scan covers `/usr`, the usr-merge roots, and `/boot`, and
+  excludes `/etc`, `/opt`, and the virtual, runtime, and mutable-data trees; it
+  honours the keep-list.
 - [observable] A verification or query command exiting non-zero to report content
   differences, or returning an empty result, is a normal successful outcome and is
   never treated as an unreadable source; only a genuine access or I/O failure to
@@ -1585,6 +1731,61 @@ THEN:
   the config_files scope includes the modified /etc files
   exit_code = 0
 
+### EXAMPLE: verify_default_scope_ignores_usr
+GIVEN:
+  an unpackaged binary has been added under /usr/bin
+  /etc matches the applied record
+  invocation: zypper declarative verify          (scope defaults to etc)
+WHEN:
+  verify runs
+THEN:
+  no file outside /etc is scanned
+  stdout contains "system matches declaration"
+  exit_code = 0
+
+### EXAMPLE: verify_scope_full_detects_unmanaged_addition
+GIVEN:
+  an unpackaged binary has been added under /usr/bin, not on the keep-list
+  invocation: zypper declarative verify scope=full
+WHEN:
+  verify runs
+THEN:
+  the binary's path appears in the unmanaged_files_present drift category
+  stderr contains a diagnostic naming it
+  exit_code = 1
+
+### EXAMPLE: verify_scope_full_detects_modified_package_file
+GIVEN:
+  a packaged file under /usr has been modified in place
+  invocation: zypper declarative verify scope=full
+WHEN:
+  verify runs
+THEN:
+  the file's path appears in the managed_files_modified drift category
+  exit_code = 1
+
+### EXAMPLE: describe_scope_full_emits_observational_scopes
+GIVEN:
+  the system has an unpackaged file under /usr and a modified packaged file under /usr
+  invocation: zypper declarative describe scope=full
+WHEN:
+  describe runs
+THEN:
+  the output contains a changed_managed_files scope and an unmanaged_files scope
+  a plain describe (scope=etc) of the same system contains neither
+  exit_code = 0
+
+### EXAMPLE: describe_scope_full_boot_generated_files_unmanaged
+GIVEN:
+  /boot contains a generated initramfs image that no package owns, not keep-listed
+  invocation: zypper declarative describe scope=full
+WHEN:
+  describe runs
+THEN:
+  the initramfs path appears under unmanaged_files (it is genuinely unpackaged)
+  adding it to the keep-list removes it from a subsequent scan
+  exit_code = 0
+
 ### EXAMPLE: lock_is_fully_resolved_packages_scope
 GIVEN:
   the desired packages scope contains { name: "nginx" } with empty version
@@ -1820,6 +2021,9 @@ zypper declarative describe
 zypper declarative describe > desired.json          # bootstrap a manifest (JSON)
 zypper declarative describe format=yaml > desired.yaml
 zypper declarative describe root=/mnt out=/tmp/state.json
+zypper declarative describe scope=full out=/tmp/full-state.json   # include /usr and /boot
+zypper declarative verify                            # declaration check (/etc)
+zypper declarative verify scope=full                 # declaration + /usr,/boot integrity audit
 zypper declarative apply manifest-path=/etc/zypper-declarative/desired.yaml
 ```
 Equivalent direct form: `zypper-declarative <verb> [key=value ...]`.
@@ -1837,6 +2041,9 @@ root=<path>                       root to describe; default "/"
 out=<path>                        describe output file; default stdout
 on-unreadable=error|warn          describe: fail (default) or omit+warn on an
                                   unreadable scope source; never emit empty
+scope=etc|full                    describe/verify read scope; etc (default) is
+                                  /etc only, full also audits /usr and /boot
+                                  (expensive, opt-in)
 ```
 All CONFIG knobs are also accepted as key=value options (the same key as in
 CONFIG): `manifest-format`, `repo-lock`, `content-store`, `keep-list`,
@@ -2035,6 +2242,26 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-05-29: Version 0.6.0. Added an opt-in full-system integrity scan, mirroring
+  the old Machinery and sitar behaviour, for the case where `/usr` is not
+  guaranteed immutable. A `scope` option (`etc` default, `full`), accepted on
+  `describe` and `verify` only, controls it. Under `scope=full`,
+  `describe-actual-state` additionally scans the package-managed trees outside
+  `/etc` (`/usr`, the usr-merge roots `/bin` `/sbin` `/lib` `/lib64`, and `/boot`;
+  `/opt` and the virtual, runtime, and mutable-data trees excluded; keep-list
+  honoured) and emits two observational scopes: `changed_managed_files` (packaged
+  files changed in place) and `unmanaged_files` (out-of-band additions no package
+  owns). These are observational, not declarable: `compute-intent-diff` and
+  convergence ignore them, and they never appear in a desired manifest or applied
+  record (matching the existing rule that observational scopes are ignored).
+  `compute-drift` surfaces them under `scope=full` as two new drift categories
+  (`managed_files_modified`, `unmanaged_files_present`), so `verify scope=full` is
+  an integrity audit of the package-managed trees against the package baseline, in
+  addition to the declaration check. The full scan is expensive and never engaged
+  by default, including on a mutable `/usr`; the default `scope=etc` is unchanged
+  bounded behaviour. Scope keys use the underscore form (identical to Machinery's
+  JSON keys; the hyphenated forms were Machinery's CLI scope identifiers). Added
+  the `scope` CONFIG knob, types, invariants, and examples.
 - 2026-05-29: Version 0.5.2. Fixed a `describe` defect surfaced by the build:
   `describe` aborted with "files: unreadable scope source: rpm config-file
   verification: exit status 1". The package-verification mechanism returns

@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.5.2)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.0)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -254,6 +254,44 @@ format, so it is interchangeable with `describe` output and may feed `verify` vi
 `state-path`, but it is optional. Only the declarable scopes are read; the
 observational scopes a full sitar dump carries (cpu, pci, dmi, processes, storage,
 network, and the rest) are not needed by a converger and are ignored when present.
+
+### 5.5.1 Integrity of `/usr`: by construction, or by full scan
+
+The converger manages `/usr` only through the package layer: `apply` installs and
+removes RPMs, and the declared file domain is `/etc` only. There is no way to put
+a `/usr` file in a desired manifest. So the integrity of `/usr` is, in the default
+design, the substrate's responsibility, not the converger's. On SL Micro `/usr` is
+a read-only, transactional, package-built tree, so out-of-band additions and
+in-place modifications are prevented rather than detected. The strong form of this
+is dm-verity over `/usr`: a read-only image whose root hash is checked on every
+block read, so tampering is not merely noticed but unmountable. For that substrate,
+"covered by construction" is the complete answer, and a scan would be wasted work.
+
+That guarantee does not hold on a classic, non-transactional SLES with a writable
+`/usr`, which is also a supported target. There, two failure modes are invisible to
+a declaration check: a packaged file modified in place (the rpmdb still lists the
+package, so the packages scope is unchanged), and an unpackaged file added (no
+package owns it, so neither the rpmdb nor package verification sees it). Catching
+either requires reading the filesystem, which is exactly the cost the default
+reader avoids.
+
+For that case the tool offers an opt-in full scan, `scope=full` on `describe` and
+`verify`, which mirrors the old Machinery and sitar behaviour. It scans the
+package-managed trees outside `/etc` (`/usr`, the usr-merge roots, and `/boot`;
+`/opt` and the virtual, runtime, and mutable-data trees excluded; keep-list
+honoured) and emits two observational scopes: `changed_managed_files` (packaged
+files changed from their recorded baseline) and `unmanaged_files` (additions no
+package owns). These are exactly Machinery's two scopes, and like the other
+observational scopes they are not declarable: convergence ignores them and they
+never enter a desired manifest or the applied record. `verify scope=full` reports
+them as integrity drift against the package baseline, which is a different question
+from declaration drift (does the system match what I declared) and worth keeping
+distinct. `/boot` is included because boot-chain integrity matters, with the caveat
+that its generated artifacts (initramfs, generated bootloader configuration) are
+genuinely unpackaged and so appear as unmanaged unless keep-listed. The full scan
+is expensive and never engaged by default, including on a mutable `/usr`; it is the
+scan-based fallback for hosts that are neither verity-protected nor transactional,
+where dm-verity or a read-only `/usr` is the stronger, by-construction alternative.
 
 The reader works at the file-and-database level: the rpmdb, the `/etc/zypp/repos.d`
 files for repositories, `systemctl` for unit state, and the `/etc` files
@@ -523,6 +561,14 @@ objective.
 
 ## Changelog
 
+- 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.6.0. Added Section 5.5.1
+  on `/usr` integrity: by construction on a read-only transactional `/usr` (ideally
+  dm-verity), and by an opt-in `scope=full` scan (mirroring Machinery and sitar)
+  for a mutable `/usr`, which emits the observational `changed_managed_files` and
+  `unmanaged_files` scopes over `/usr`, the usr-merge roots, and `/boot`, and which
+  `verify scope=full` audits as integrity drift. Records that these scopes are not
+  declarable, that the scan is opt-in and never default, and that dm-verity is the
+  stronger by-construction alternative.
 - 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.5.2. Section 5.5 now
   records that the config-file reader is bounded to `/etc` (it never reads, hashes,
   or verifies files outside the declarable file domain, and never runs a

@@ -212,6 +212,23 @@ That means:
   `rpm -Va` (it is the cause of the slow describe). Treat a verifier's non-zero
   exit (it returns non-zero when it finds changed files) as the normal changed-file
   result, not an unreadable source.
+- `[spec]` `[changed-0.6.0]` Full-scan integrity (`scope=full`, on `describe` and
+  `verify` only; default `etc` scans nothing outside `/etc`). Under `full`, scan the
+  package-managed trees outside `/etc` (`/usr`, the usr-merge roots `/bin` `/sbin`
+  `/lib` `/lib64`, and `/boot`; exclude `/opt` and the virtual, runtime, and
+  mutable-data trees; do not cross into unlisted mounts; honour the keep-list) and
+  emit two observational scopes: `changed_managed_files` (packaged files outside
+  `/etc` differing from the package baseline, with a `changes` list) and
+  `unmanaged_files` (files no package owns). These are observational: do NOT feed
+  them into `compute-intent-diff` or convergence, and never write them to the
+  applied record; `compute-drift` surfaces them under `scope=full` as
+  `managed_files_modified` and `unmanaged_files_present`. The scan is expensive
+  (stat + hash the trees, verify packaged files); it is the part deliberately kept
+  out of the default. In Go, find additions by walking the trees and subtracting
+  the rpmdb-owned path set, and find modifications by comparing packaged file
+  digests to the rpmdb baseline (or `rpm -V` scoped to those trees); do not shell
+  out to a whole-system `rpm -Va`. Scope keys are underscore_style
+  (`changed_managed_files`, `unmanaged_files`), matching Machinery's JSON keys.
 
 ### Integration with the system (Go-specific)
 
