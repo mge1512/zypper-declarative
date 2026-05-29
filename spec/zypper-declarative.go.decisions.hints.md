@@ -112,14 +112,21 @@ That means:
   `signature-verification`, `keyring`, `activation-policy`, `applied-root`), with
   a command-line option overriding the corresponding preset value. The prior help
   text already exposed these; keep them.
-- `[changed-0.5.0]` Global behaviour, do NOT reuse the old "no verb -> exit 2":
+- `[changed-0.5.0]` `[changed-0.5.1]` Global behaviour, do NOT reuse the old "no
+  verb -> exit 2", and do NOT make the flags the only form:
   - bare invocation (no verb) prints usage to stdout and exits 0 (discovery, never
     runs a default verb, never converges);
-  - `--help` and `-h` print usage to stdout, exit 0;
-  - `--version` prints program name, version, and embedded spec hash to stdout,
-    exit 0;
+  - `version` and `help` are bare-word global commands (the canonical form, per the
+    cli-tool template: bare-words supported, POSIX `--flag` forbidden for new
+    options): `version` prints program name, version, and embedded spec hash to
+    stdout and exits 0; `help` prints usage to stdout and exits 0;
+  - `--version`, `--help`, and `-h` are tolerated aliases for those two commands
+    only; no option uses POSIX `--flag` style (options are key=value only);
   - unknown verb, unknown option, unknown value, or missing required value prints
     usage to stderr, exits 2.
+  - The cli-tool milestones-hints M0 gate exercises the bare words
+    (`<binary> version`, `<binary> help` must exit 0); make sure both pass, not
+    just the flag forms.
 
 ### Error and exit-code convention
 
@@ -254,7 +261,7 @@ That means:
 
 ---
 
-## Do NOT carry these over from the existing code (v0.5.0 changes)
+## Do NOT carry these over from the existing code (v0.5.0 and v0.5.1 changes)
 
 1. `describe` writing JSON regardless of the `out` extension. Output now follows
    `resolve-format`.
@@ -264,6 +271,9 @@ That means:
 3. Bare `zypper declarative` exiting 2. It now prints usage to stdout and exits 0.
 4. Any inline, per-call-site format selection in the manifest loader. It now goes
    through the shared `resolve-format`.
+5. (v0.5.1) `version` and `help` as bare words returning "unknown verb" (exit 2)
+   while only `--version` / `--help` work. The bare words are now the canonical
+   global commands and exit 0; the flags are tolerated aliases.
 
 ## Slots to fill from /tmp/pcd-original/code/
 

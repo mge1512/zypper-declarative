@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.5.0
+Version:     0.5.1
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -1204,6 +1204,9 @@ resolver fills in the transitive set.
 
 - [observable] `diff`, `verify`, `status`, and `describe` make no modification to
   packages, repositories, files, or units, and open no transaction.
+- [observable] `version` and `help` are accepted as bare-word verbs and exit 0;
+  the flag forms `--version`, `--help`, and `-h` are accepted as aliases for them.
+  No option uses POSIX `--flag` style (options are key=value only).
 - [observable] `apply` is idempotent: a second run against an unchanged manifest
   and an undrifted system computes an empty intent diff and empty drift, and exits
   0 without creating a new generation.
@@ -1601,6 +1604,33 @@ THEN:
   usage is printed to stdout
   exit_code = 0
 
+### EXAMPLE: version_verb_bare_word
+GIVEN:
+  invocation: zypper declarative version
+WHEN:
+  the tool is invoked
+THEN:
+  stdout contains the program name, version, and the embedded spec hash
+  exit_code = 0
+
+### EXAMPLE: version_flag_alias
+GIVEN:
+  invocation: zypper declarative --version
+WHEN:
+  the tool is invoked
+THEN:
+  stdout is identical to the output of the bare-word version verb
+  exit_code = 0
+
+### EXAMPLE: help_verb_bare_word
+GIVEN:
+  invocation: zypper declarative help
+WHEN:
+  the tool is invoked
+THEN:
+  usage is printed to stdout
+  exit_code = 0
+
 ### EXAMPLE: unknown_verb_rejected
 GIVEN:
   invocation: zypper declarative frobnicate
@@ -1761,17 +1791,26 @@ CONFIG): `manifest-format`, `repo-lock`, `content-store`, `keep-list`,
 `signature-verification`, `keyring`, `activation-policy`, `applied-root`. A
 command-line option overrides the corresponding preset value.
 
-Verbs (bare words): `apply`, `diff`, `verify`, `status`, `describe`.
+Verbs (bare words, each backed by a BEHAVIOR): `apply`, `diff`, `verify`,
+`status`, `describe`. The global commands `version` and `help` are also accepted
+as bare words (handled by the dispatcher, not behaviors); see below.
 
-Global behaviour (no verb, or a global flag):
-- `--version` prints the program name, version, and embedded spec hash to stdout,
+Global behaviour (bare-word global commands, with tolerated flag aliases):
+- The bare-word verbs `version` and `help` are the canonical global commands, per
+  the cli-tool template (CLI-ARG-STYLE: bare-words supported, POSIX `--flag`
+  forbidden for new options).
+- `version` (and the tolerated alias `--version`) prints the program name,
+  version, and embedded spec hash to stdout, then exits 0.
+- `help` (and the tolerated aliases `--help` and `-h`) prints usage to stdout,
   then exits 0.
-- `--help` and `-h` print usage to stdout, then exit 0.
 - Bare invocation (`zypper declarative` with no verb) prints usage to stdout and
   exits 0; it is treated as a discovery action, not an error, and it never runs a
   default verb (in particular it never converges). When dispatched as a zypper
   subcommand, exit 0 avoids zypper reporting a non-zero subcommand status for a
   plain discovery call.
+- The flag aliases `--version`, `--help`, and `-h` are accepted only as
+  conveniences for these two global commands; POSIX `--flag` style is not used for
+  any option (options are key=value only).
 - An unknown verb, an unknown option, an unknown option value, or a missing
   required value prints usage to stderr and exits 2.
 
@@ -1854,8 +1893,10 @@ Included BEHAVIORs:
   converge-units, write-applied-record
 
 Acceptance criteria:
-  ./zypper-declarative --version | grep -q "^zypper-declarative "
-  ./zypper-declarative --help | grep -q "usage:"
+  ./zypper-declarative version | grep -q "^zypper-declarative "
+  ./zypper-declarative help | grep -q "usage:"
+  ./zypper-declarative --version | grep -q "^zypper-declarative "   # tolerated alias
+  ./zypper-declarative format=bad_value; test $? -eq 2             # invocation error
 
 ## MILESTONE: 0.1.0
 Status: pending
@@ -1872,6 +1913,7 @@ Deferred BEHAVIORs:
 Acceptance criteria:
   ./zypper-declarative | grep -q "usage:"                        # bare invocation
   test $( ./zypper-declarative >/dev/null 2>&1; echo $? ) -eq 0  # bare exits 0
+  ./zypper-declarative version | grep -q "spec:"                 # bare-word version verb
   ./zypper-declarative describe out=/tmp/d.yaml && head -1 /tmp/d.yaml | grep -vq "^{"  # yaml by extension
   ./zypper-declarative status | grep -q "no declaration applied"
 
@@ -1941,6 +1983,19 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-05-29: Version 0.5.1. Fixed a CLI-surface defect surfaced by the v0.5.0
+  build: `zypper declarative version` returned "unknown verb" (exit 2) while only
+  the `--version` flag worked, which contradicts the cli-tool template
+  (CLI-ARG-STYLE: bare-words supported, POSIX `--flag` forbidden for new options)
+  and its milestones-hints M0 gate (`version` and `help` as bare words must exit
+  0). The implementation was a faithful translation of the v0.5.0 spec, which
+  listed only the five behavior verbs and provided version/help solely as POSIX
+  flags; the fix is in the spec. `version` and `help` are now the canonical
+  bare-word global commands (exit 0), with `--version`, `--help`, and `-h` kept as
+  tolerated aliases (the spec-hash convention still references `--version`).
+  Updated the verb listing, the global-behaviour section, the M0 and 0.1.0
+  acceptance criteria to exercise the bare-word forms, an invariant, and added
+  examples for the version and help bare words and the version flag alias.
 - 2026-05-29: Version 0.5.0. Three fixes surfaced by a first implementation, all
   closed in the spec rather than the code. (1) Defined the top-level CLI contract:
   bare invocation and `--help` print usage to stdout and exit 0 (discovery, not an

@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.5.0)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.5.1)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -411,7 +411,9 @@ zypper has a git-style subcommand dispatch built in. An executable in
 invoked as `zypper declarative`. No patching of zypper is required, and the
 extension may be written in any language. This is the seam regardless of whether
 the transaction is external or internal, so the user-facing surface is stable:
-`zypper declarative apply`, `diff`, `verify`, `status`, `describe`.
+`zypper declarative apply`, `diff`, `verify`, `status`, `describe`, plus the
+bare-word global commands `version` and `help` (with `--version` / `--help` / `-h`
+tolerated as aliases), per the cli-tool template's bare-word convention.
 
 Two constraints to design around: zypper's global options are not forwarded to the
 subcommand, and subcommands cannot run inside the interactive zypper shell. The
@@ -515,6 +517,11 @@ objective.
 
 ## Changelog
 
+- 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.5.1. The stable verb
+  surface now notes the bare-word global commands `version` and `help` (with
+  `--version` / `--help` / `-h` as tolerated aliases), matching the cli-tool
+  template's bare-word convention; this corrected a CLI defect where bare-word
+  `version` was rejected while only the `--version` flag worked.
 - 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.5.0 (three
   implementation-surfaced fixes). Section 5.5 gained the privilege and
   empty-scope-safety discussion: the reader works at the file-and-database level
