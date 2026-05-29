@@ -1,78 +1,172 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
-// load-desired-manifest: reads and validates the desired manifest into the
-// shared data model, selecting the input serialisation via resolve-format,
-// applying a safe YAML profile when the input is YAML, verifying the signature
-// when enabled, and computing the manifest's canonical-model identity hash.
+// Schema validation of the manifest data model, and BEHAVIOR/INTERNAL:
+// load-desired-manifest (read, resolve-format, parse under the safe profile,
+// validate, optionally verify signature, compute the canonical-model hash).
+
 package manifest
 
 import (
+	"fmt"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/mge1512/zypper-declarative/internal/diag"
 )
 
-// SignatureVerifier verifies a manifest's detached or embedded signature. The
-// production binding is resolved at deploy time; this interface keeps the
-// dependency abstract and testable. The default no-op verifier accepts.
-type SignatureVerifier interface {
-	Verify(data []byte, keyring string) error
-}
+var (
+	reSha256   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	reMode     = regexp.MustCompile(`^[0-7]{3,4}$`)
+	unitSuffix = []string{".service", ".timer", ".socket", ".target", ".path", ".mount"}
+)
 
-// LoadOptions carry the resolve-format inputs and the signature policy.
+// LoadOptions configures load-desired-manifest.
 type LoadOptions struct {
-	ExplicitFormat        Format
-	ExplicitFormatGiven   bool
-	DefaultFormat         Format
-	SignatureVerification bool
-	Keyring               string
-	Verifier              SignatureVerifier
+	// ExplicitFormat is the format= option value, if any.
+	ExplicitFormat      Format
+	ExplicitFormatGiven bool
+	DefaultFormat       Format
+	VerifySignature     bool
+	KeyringPath         string
 }
 
-// LoadDesiredManifest reads, format-resolves, parses (safe-profile for YAML),
-// schema-validates, signature-verifies (if enabled), and hashes a desired
-// manifest. It returns the Manifest and its canonical-model desired_sha256, or a
-// Diagnostic to the caller (it does not exit).
-func LoadDesiredManifest(path string, opts LoadOptions) (Manifest, string, *diag.Diagnostic) {
-	// Step 1: read the file.
+// Load implements BEHAVIOR/INTERNAL: load-desired-manifest. It returns the
+// parsed Manifest and its canonical-model desired_sha256, or a Diagnostic on
+// failure (returned to the caller; no exit).
+func Load(path string, opts LoadOptions) (*Manifest, string, *diag.Diagnostic) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Manifest{}, "", diag.Errorf(diag.DomainInvocation, "manifest unreadable: %v", err)
+		return nil, "", diag.Errorf(diag.DomainInvocation, "manifest unreadable: %s: %v", path, err)
 	}
 
-	// Step 2: resolve the input format.
-	format := ResolveFormat(opts.ExplicitFormat, opts.ExplicitFormatGiven, path, opts.DefaultFormat)
+	f, _, perr := ParseFormat(string(opts.ExplicitFormat))
+	if opts.ExplicitFormatGiven && perr != nil {
+		return nil, "", diag.Errorf(diag.DomainInvocation, "%v", perr)
+	}
+	resolved := ResolveFormat(f, opts.ExplicitFormatGiven, path, opts.DefaultFormat)
 
-	// Step 3: parse into the data model (safe profile for YAML).
-	m, perr := Parse(data, format)
-	if perr != nil {
-		if perr == ErrUnsafeYAML {
-			return Manifest{}, "", diag.Errorf(diag.DomainManifest, "manifest invalid: %v", perr)
+	m, derr := Decode(data, resolved)
+	if derr != nil {
+		if _, ok := derr.(*ErrUnsafeYAML); ok {
+			return nil, "", diag.Errorf(diag.DomainManifest, "%v", derr)
 		}
-		return Manifest{}, "", diag.Errorf(diag.DomainManifest, "manifest invalid: %v", perr)
+		return nil, "", diag.Errorf(diag.DomainManifest, "manifest parse error: %v", derr)
 	}
 
-	// Step 4: schema validation.
 	if verr := Validate(m); verr != nil {
-		return Manifest{}, "", diag.Errorf(diag.DomainManifest, "manifest invalid: %v", verr)
+		return nil, "", diag.Errorf(diag.DomainManifest, "%v", verr)
 	}
 
-	// Step 5: signature verification, if enabled.
-	if opts.SignatureVerification && opts.Verifier != nil {
-		if serr := opts.Verifier.Verify(data, opts.Keyring); serr != nil {
-			return Manifest{}, "", diag.Errorf(diag.DomainManifest, "manifest signature invalid: %v", serr)
+	if opts.VerifySignature {
+		if serr := verifySignature(path, opts.KeyringPath); serr != nil {
+			return nil, "", diag.Errorf(diag.DomainManifest, "signature verification failed: %v", serr)
 		}
 	}
 
-	// Step 6: compute desired_sha256 (canonical-model hash, format-independent).
-	hash := CanonicalSHA256(m)
+	hash, herr := m.CanonicalHash()
+	if herr != nil {
+		return nil, "", diag.Errorf(diag.DomainManifest, "could not compute manifest identity: %v", herr)
+	}
 	return m, hash, nil
 }
 
-// NoopVerifier is a SignatureVerifier that accepts everything. It is the default
-// binding when no keyring/signature mechanism is configured for the run; signing
-// is a deployment-layer concern and not exercisable in a non-privileged test.
-type NoopVerifier struct{}
+// Validate checks the manifest against the schema: meta.format_version must be
+// 1, and every present scope must conform to its record type. It returns the
+// first violation, or nil.
+func Validate(m *Manifest) error {
+	if m.Meta.FormatVersion != 1 {
+		return validationError("meta.format_version must be 1")
+	}
+	if m.Packages != nil {
+		for i, p := range m.Packages.Elements {
+			if strings.TrimSpace(p.Name) == "" {
+				return validationErrorf("packages._elements[%d].name must be non-empty", i)
+			}
+		}
+	}
+	if m.Repositories != nil {
+		for i, r := range m.Repositories.Elements {
+			if strings.TrimSpace(r.Alias) == "" {
+				return validationErrorf("repositories._elements[%d].alias must be non-empty", i)
+			}
+			if strings.TrimSpace(r.URL) == "" {
+				return validationErrorf("repositories._elements[%d].url must be non-empty", i)
+			}
+		}
+	}
+	if m.Services != nil {
+		for i, s := range m.Services.Elements {
+			if !validUnitName(s.Name) {
+				return validationErrorf("services._elements[%d].name %q is not a valid unit name", i, s.Name)
+			}
+			switch s.State {
+			case "enabled", "disabled", "masked":
+			default:
+				return validationErrorf("services._elements[%d].state %q must be enabled|disabled|masked", i, s.State)
+			}
+		}
+	}
+	if m.ConfigFiles != nil {
+		for i, c := range m.ConfigFiles.Elements {
+			if !strings.HasPrefix(c.Name, "/etc/") {
+				return validationErrorf("config_files._elements[%d].name %q must be under /etc/", i, c.Name)
+			}
+			switch c.Type {
+			case "file", "link", "dir":
+			default:
+				return validationErrorf("config_files._elements[%d].type %q must be file|link|dir", i, c.Type)
+			}
+			if c.Mode != "" && !reMode.MatchString(c.Mode) {
+				return validationErrorf("config_files._elements[%d].mode %q is not a valid mode", i, c.Mode)
+			}
+			if c.SHA256 != "" && !reSha256.MatchString(c.SHA256) {
+				return validationErrorf("config_files._elements[%d].sha256 %q is not a valid sha256", i, c.SHA256)
+			}
+			if strings.TrimSpace(c.User) == "" {
+				return validationErrorf("config_files._elements[%d].user must be non-empty", i)
+			}
+			if strings.TrimSpace(c.Group) == "" {
+				return validationErrorf("config_files._elements[%d].group must be non-empty", i)
+			}
+		}
+	}
+	return nil
+}
 
-// Verify always succeeds.
-func (NoopVerifier) Verify(_ []byte, _ string) error { return nil }
+// validationError and validationErrorf build schema-validation errors.
+func validationError(msg string) error { return &schemaError{msg: msg} }
+
+func validationErrorf(format string, args ...interface{}) error {
+	return &schemaError{msg: fmt.Sprintf(format, args...)}
+}
+
+type schemaError struct{ msg string }
+
+func (e *schemaError) Error() string { return e.msg }
+
+func validUnitName(name string) bool {
+	for _, s := range unitSuffix {
+		if strings.HasSuffix(name, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// verifySignature is a placeholder for keyring-based signature verification. The
+// concrete keyring binding is out of scope for the language-neutral spec; when
+// signature-verification is enabled and no keyring material is configured, the
+// verification cannot succeed and is reported as a failure to the caller.
+func verifySignature(path, keyring string) error {
+	if keyring == "" {
+		return validationError("signature-verification is enabled but no keyring is configured")
+	}
+	// A real keyring binding would verify a detached signature here. Absent a
+	// keyring binding in this build, treat a missing signature artefact as a
+	// verification failure so the strict contract holds.
+	if _, err := os.Stat(path + ".sig"); err != nil {
+		return validationError("no signature found for manifest")
+	}
+	return nil
+}

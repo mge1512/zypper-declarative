@@ -1,19 +1,18 @@
-# generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
-# Translation workflow for zypper-declarative (cli-tool, Go).
+# translation-workflow.pikchr
+# Pikchr diagram of the zypper-declarative translation workflow.
+# generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
+
+arrow right 200% "spec + template" "+ hints" above
+box "Tests First" "independent_tests/" "claude-opus-4-8/" fit
+arrow right 200% "guard: tests exist" above
+box "Implementation" "cmd/ + internal/*" fit
+arrow right 200% "go build" above
+box "Binary" "zypper-declarative" "(static, project root)" fit
+arrow right 200% "go test" above
+box "Compile gate" "all tests pass" fit
 
 down
-box "Read spec," "template," "hints files" fit
-arrow
-box "Phase 1:" "write tests" "(Tests First)" fit
-arrow
-box "Tests-First" "guard" fit
-arrow
-box "Phase 2:" "implementation" "(internal/* + cmd)" fit
-arrow
-box "Phase 3:" "Makefile, RPM," "debian/*, LICENSE," "man page" fit
-arrow
-box "Phase 5:" "README.md" fit
-arrow
-box "Phase 6:" "compile gate" "go build + go test" fit
-arrow
-box "Phase 7:" "TRANSLATION_REPORT.md" fit
+arrow from last box.s down 80%
+box "Packaging" "Makefile, RPM .spec," "debian/, LICENSE, man" fit
+arrow right 200% "written last" above
+box "TRANSLATION_REPORT.md" fit

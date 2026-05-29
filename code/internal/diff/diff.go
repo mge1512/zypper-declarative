@@ -1,15 +1,17 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
-// Package diff computes the intent diff (desired vs applied) and the drift report
-// (actual vs declaration). Both are pure comparisons of in-memory Manifest
-// documents; this package performs no filesystem, rpmdb, or process I/O.
+// Package diff implements the two pure comparison behaviours:
+// compute-intent-diff (desired versus applied, scope by scope; yields deletions)
+// and compute-drift (actual versus reference declaration). Neither reads the
+// filesystem, the rpmdb, or any process: they compare in-memory Manifest
+// documents only.
 package diff
 
 import (
 	"github.com/mge1512/zypper-declarative/internal/manifest"
 )
 
-// Diff is the intent diff: desired_new versus applied_old, scope by scope.
+// Diff is the intent diff: desired_new versus applied_old.
 type Diff struct {
 	PackagesInstall []manifest.PackageRecord
 	PackagesRemove  []manifest.PackageRecord
@@ -19,11 +21,14 @@ type Diff struct {
 	UnitsChange     []manifest.ServiceRecord
 }
 
-// Empty reports whether the diff contains no changes.
-func (d Diff) Empty() bool {
-	return len(d.PackagesInstall) == 0 && len(d.PackagesRemove) == 0 &&
-		len(d.ReposSet) == 0 && len(d.FilesWrite) == 0 &&
-		len(d.FilesDelete) == 0 && len(d.UnitsChange) == 0
+// Empty reports whether the intent diff has no changes in any scope.
+func (d *Diff) Empty() bool {
+	return len(d.PackagesInstall) == 0 &&
+		len(d.PackagesRemove) == 0 &&
+		len(d.ReposSet) == 0 &&
+		len(d.FilesWrite) == 0 &&
+		len(d.FilesDelete) == 0 &&
+		len(d.UnitsChange) == 0
 }
 
 // DriftReport is the drift diff: actual versus declared.
@@ -36,34 +41,31 @@ type DriftReport struct {
 
 // Empty reports whether the drift report is empty (actual equals reference
 // modulo the keep-list).
-func (r DriftReport) Empty() bool {
-	return len(r.FilesModified) == 0 && len(r.FilesExtra) == 0 &&
-		len(r.UnitsDivergent) == 0 && len(r.PackagesDivergent) == 0
+func (r *DriftReport) Empty() bool {
+	return len(r.FilesModified) == 0 &&
+		len(r.FilesExtra) == 0 &&
+		len(r.UnitsDivergent) == 0 &&
+		len(r.PackagesDivergent) == 0
 }
 
 // Count returns the total number of drift items.
-func (r DriftReport) Count() int {
+func (r *DriftReport) Count() int {
 	return len(r.FilesModified) + len(r.FilesExtra) + len(r.UnitsDivergent) + len(r.PackagesDivergent)
 }
 
-// ComputeIntentDiff computes the changes from the previously applied declaration
-// to the desired declaration, scope by scope. A scope absent in desired produces
-// no change for that scope; the filesystem is not consulted.
-func ComputeIntentDiff(desired manifest.Manifest, applied manifest.AppliedRecord) Diff {
-	d := Diff{}
+// ComputeIntentDiff implements BEHAVIOR/INTERNAL: compute-intent-diff. A scope
+// absent in desired produces no change for that scope (unmanaged); a present
+// scope is reconciled to exactly its elements. The filesystem is not read.
+func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.AppliedRecord) Diff {
+	var d Diff
 
 	// Packages.
 	if desired.Packages != nil {
 		d.PackagesInstall = append([]manifest.PackageRecord(nil), desired.Packages.Elements...)
-		desiredNames := map[string]bool{}
-		for _, p := range desired.Packages.Elements {
-			desiredNames[p.Name] = true
-		}
-		if applied.Packages != nil {
-			for _, p := range applied.Packages.Elements {
-				if !desiredNames[p.Name] {
-					d.PackagesRemove = append(d.PackagesRemove, p)
-				}
+		desiredNames := nameSet(desired.Packages.Elements)
+		for _, p := range appliedPackages(applied) {
+			if !desiredNames[p.Name] {
+				d.PackagesRemove = append(d.PackagesRemove, p)
 			}
 		}
 	}
@@ -76,27 +78,17 @@ func ComputeIntentDiff(desired manifest.Manifest, applied manifest.AppliedRecord
 	// Config files.
 	if desired.ConfigFiles != nil {
 		d.FilesWrite = append([]manifest.ManagedFileRecord(nil), desired.ConfigFiles.Elements...)
-		desiredFileNames := map[string]bool{}
-		for _, f := range desired.ConfigFiles.Elements {
-			desiredFileNames[f.Name] = true
-		}
-		if applied.ConfigFiles != nil {
-			for _, f := range applied.ConfigFiles.Elements {
-				if !desiredFileNames[f.Name] {
-					d.FilesDelete = append(d.FilesDelete, f.Name)
-				}
+		desiredPaths := fileNameSet(desired.ConfigFiles.Elements)
+		for _, e := range appliedFiles(applied) {
+			if !desiredPaths[e.Name] {
+				d.FilesDelete = append(d.FilesDelete, e.Name)
 			}
 		}
 	}
 
 	// Services.
 	if desired.Services != nil {
-		appliedState := map[string]string{}
-		if applied.Services != nil {
-			for _, s := range applied.Services.Elements {
-				appliedState[s.Name] = s.State
-			}
-		}
+		appliedState := serviceStateMap(appliedServices(applied))
 		for _, s := range desired.Services.Elements {
 			prev, ok := appliedState[s.Name]
 			if !ok || prev != s.State {
@@ -108,93 +100,56 @@ func ComputeIntentDiff(desired manifest.Manifest, applied manifest.AppliedRecord
 	return d
 }
 
-// DriftOptions carry the exclusion sets for compute-drift.
-type DriftOptions struct {
-	KeepList map[string]bool
-}
+// ComputeDrift implements BEHAVIOR/INTERNAL: compute-drift. It compares the
+// actual-state Manifest against the reference declaration, scope by scope on
+// identity fields, honouring the keep-list and the syncpoint. It performs no I/O.
+func ComputeDrift(actual *manifest.Manifest, reference *manifest.AppliedRecord, keepList map[string]bool) DriftReport {
+	var r DriftReport
 
-const syncpoint = "/etc/etc.syncpoint"
-
-// ComputeDrift compares an actual-state Manifest against a declaration, scope by
-// scope on identity fields, and reports divergence. It performs no I/O.
-func ComputeDrift(actual manifest.Manifest, reference manifest.AppliedRecord, opts DriftOptions) DriftReport {
-	r := DriftReport{}
-	keep := opts.KeepList
-	if keep == nil {
-		keep = map[string]bool{}
-	}
-
-	// 1. files_modified: declared files whose actual sha256 differs. A declared
-	// file absent from actual is treated as matching.
-	actualFiles := map[string]manifest.ManagedFileRecord{}
-	if actual.ConfigFiles != nil {
-		for _, a := range actual.ConfigFiles.Elements {
-			actualFiles[a.Name] = a
-		}
-	}
-	referenceFiles := map[string]bool{}
-	if reference.ConfigFiles != nil {
-		for _, e := range reference.ConfigFiles.Elements {
-			referenceFiles[e.Name] = true
-			if a, ok := actualFiles[e.Name]; ok && a.SHA256 != e.SHA256 {
+	// files_modified: declared files whose actual sha256 differs.
+	actualFiles := fileMap(actualFilesOf(actual))
+	for _, e := range appliedFiles(reference) {
+		if af, ok := actualFiles[e.Name]; ok {
+			if af.SHA256 != e.SHA256 {
 				r.FilesModified = append(r.FilesModified, e.Name)
 			}
 		}
+		// A declared file absent from actual is treated as matching.
 	}
 
-	// 2. files_extra: actual unpackaged, undeclared /etc files, not keep-listed,
-	// not the syncpoint.
-	if actual.ConfigFiles != nil {
-		for _, a := range actual.ConfigFiles.Elements {
-			if referenceFiles[a.Name] {
-				continue
-			}
-			if a.PackageName != "" {
-				continue // package-owned files are not "extra"
-			}
-			if keep[a.Name] || a.Name == syncpoint {
-				continue
-			}
-			r.FilesExtra = append(r.FilesExtra, a.Name)
+	// files_extra: unpackaged, undeclared /etc files, not keep-listed, not syncpoint.
+	declaredPaths := fileNameSet(appliedFiles(reference))
+	for _, a := range actualFilesOf(actual) {
+		if declaredPaths[a.Name] {
+			continue
 		}
+		if a.PackageName != "" {
+			continue
+		}
+		if a.Name == Syncpoint || (keepList != nil && keepList[a.Name]) {
+			continue
+		}
+		r.FilesExtra = append(r.FilesExtra, a.Name)
 	}
 
-	// 3. units_divergent: declared units whose actual state differs.
-	actualUnits := map[string]string{}
-	if actual.Services != nil {
-		for _, s := range actual.Services.Elements {
-			actualUnits[s.Name] = s.State
-		}
-	}
-	if reference.Services != nil {
-		for _, u := range reference.Services.Elements {
-			if st, ok := actualUnits[u.Name]; ok && st != u.State {
-				r.UnitsDivergent = append(r.UnitsDivergent, u)
-			}
+	// units_divergent: declared units reported with a different actual state.
+	actualUnits := serviceStateMap(actualServicesOf(actual))
+	for _, u := range appliedServices(reference) {
+		if state, ok := actualUnits[u.Name]; !ok || state != u.State {
+			r.UnitsDivergent = append(r.UnitsDivergent, u)
 		}
 	}
 
-	// 4. packages_divergent: packages present in one but not the other (identity
-	// fields).
-	actualPkgs := map[string]manifest.PackageRecord{}
-	if actual.Packages != nil {
-		for _, p := range actual.Packages.Elements {
-			actualPkgs[pkgKey(p)] = p
-		}
-	}
-	refPkgs := map[string]manifest.PackageRecord{}
-	if reference.Packages != nil {
-		for _, p := range reference.Packages.Elements {
-			refPkgs[pkgKey(p)] = p
-		}
-	}
-	for k, p := range refPkgs {
-		if _, ok := actualPkgs[k]; !ok {
+	// packages_divergent: identity-field symmetric difference.
+	refPkgs := packageIdentitySet(appliedPackages(reference))
+	actPkgs := packageIdentitySet(actualPackagesOf(actual))
+	for _, p := range appliedPackages(reference) {
+		if !actPkgs[packageIdentity(p)] {
 			r.PackagesDivergent = append(r.PackagesDivergent, p)
 		}
 	}
-	for k, p := range actualPkgs {
-		if _, ok := refPkgs[k]; !ok {
+	for _, p := range actualPackagesOf(actual) {
+		if !refPkgs[packageIdentity(p)] {
 			r.PackagesDivergent = append(r.PackagesDivergent, p)
 		}
 	}
@@ -202,6 +157,6 @@ func ComputeDrift(actual manifest.Manifest, reference manifest.AppliedRecord, op
 	return r
 }
 
-func pkgKey(p manifest.PackageRecord) string {
-	return p.Name + "\x00" + p.Version + "\x00" + p.Release + "\x00" + p.Arch
-}
+// Syncpoint is the /etc reference path that is never written, deleted, or
+// reported as drift.
+const Syncpoint = "/etc/etc.syncpoint"

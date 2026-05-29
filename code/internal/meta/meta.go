@@ -1,16 +1,31 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
-// Package meta carries the program identity: its version and the SHA256 of the
-// specification it was generated from. The spec hash is embedded so that
-// --version output is cryptographically tied to the spec the binary implements.
+// Package meta holds the build-time identity of the binary: its version (from
+// the spec META Version field) and the SHA256 of the specification it was
+// translated from. Both are embedded so that `version` output is
+// cryptographically tied to its source of truth.
 package meta
 
-// Version is the program version, tracking the spec META Version field.
-const Version = "0.5.0"
+const (
+	// ProgramName is the canonical binary name.
+	ProgramName = "zypper-declarative"
 
-// Name is the program / binary name.
-const Name = "zypper-declarative"
+	// Version is the spec META Version of zypper-declarative.spec.md.
+	Version = "0.5.1"
 
-// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as provided at
-// translation time. Embedded per the spec hash invariant.
-const SpecSHA256 = "58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4"
+	// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as translated.
+	SpecSHA256 = "f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2"
+)
+
+// Generator returns the generator string embedded in produced manifests, e.g.
+// "zypper-declarative 0.5.1".
+func Generator() string {
+	return ProgramName + " " + Version
+}
+
+// VersionLine returns the single-line version string printed by the `version`
+// verb and the `--version` alias: program name, version, and the embedded spec
+// hash.
+func VersionLine() string {
+	return ProgramName + " " + Version + " spec:" + SpecSHA256
+}

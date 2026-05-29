@@ -1,8 +1,9 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
 // resolve-format: the single authority for choosing a manifest serialisation.
 // Every read that parses a manifest and every write that serialises one resolves
 // its format here, so input and output behave symmetrically.
+
 package manifest
 
 import (
@@ -10,46 +11,38 @@ import (
 	"strings"
 )
 
-// Format is the serialisation of the manifest data model.
-type Format string
-
-const (
-	FormatJSON Format = "json"
-	FormatYAML Format = "yaml"
-)
-
-// ErrUnknownFormat is returned for an explicit format value that is not
-// recognised.
-type ErrUnknownFormat struct{ Value string }
+// ErrUnknownFormat reports an explicit but unrecognised format value.
+type ErrUnknownFormat struct {
+	Value string
+}
 
 func (e *ErrUnknownFormat) Error() string {
 	return "unknown format value: " + e.Value
 }
 
-// ParseFormat validates an explicit format string. The empty string means "no
-// explicit format". An unrecognised non-empty value is an error.
-func ParseFormat(s string) (Format, bool, error) {
-	if s == "" {
+// ParseFormat parses an explicit format= option value. The empty string means
+// "no explicit format". An unrecognised non-empty value returns ErrUnknownFormat.
+func ParseFormat(value string) (Format, bool, error) {
+	if value == "" {
 		return "", false, nil
 	}
-	switch strings.ToLower(s) {
+	switch strings.ToLower(value) {
 	case "json":
 		return FormatJSON, true, nil
 	case "yaml":
 		return FormatYAML, true, nil
 	default:
-		return "", false, &ErrUnknownFormat{Value: s}
+		return "", false, &ErrUnknownFormat{Value: value}
 	}
 }
 
-// ResolveFormat chooses a serialisation per the spec resolve-format behaviour:
-//  1. an explicit format always wins;
-//  2. else the operative file extension decides (.json -> json, .yaml/.yml -> yaml);
-//  3. else the manifest-format CONFIG default.
+// ResolveFormat implements BEHAVIOR/INTERNAL: resolve-format.
 //
-// explicitGiven indicates whether an explicit format= was supplied; explicit is
-// the resolved explicit value. path is the operative file path ("" for
-// stdin/stdout). def is the manifest-format default.
+//	explicit  the format= option (or "" for none), and whether it was given
+//	path      the operative file path (or "" for stdin/stdout)
+//	def       the manifest-format CONFIG default
+//
+// Precedence: explicit wins; else a recognised file extension; else the default.
 func ResolveFormat(explicit Format, explicitGiven bool, path string, def Format) Format {
 	if explicitGiven {
 		return explicit

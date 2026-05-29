@@ -1,22 +1,24 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
-// Package diag defines the Diagnostic type and the error-carrying convention
-// used across internal behaviours. Internal behaviours return errors to their
-// caller; only the verb layer (internal/cli) maps a Diagnostic's domain to an
-// exit code. A Diagnostic carries severity, domain, and message per the spec.
+// Package diag is the shared diagnostic type. Internal behaviours return
+// Diagnostics to their caller rather than exiting; only the verb layer
+// (internal/cli) maps a Diagnostic's domain to an exit code. A Diagnostic
+// carries a severity, a domain, and a message, and is written to stderr one per
+// line.
 package diag
 
 import "fmt"
 
-// Severity of a diagnostic.
+// Severity is the level of a diagnostic.
 type Severity string
 
 const (
-	SeverityError   Severity = "Error"
-	SeverityWarning Severity = "Warning"
+	SeverityError   Severity = "error"
+	SeverityWarning Severity = "warning"
 )
 
-// Domain of a diagnostic, per the spec TYPES section.
+// Domain identifies the subsystem a diagnostic relates to. The exit-code mapping
+// in the verb layer keys off the domain.
 type Domain string
 
 const (
@@ -29,21 +31,23 @@ const (
 	DomainInvocation   Domain = "invocation"
 )
 
-// Diagnostic carries severity, domain, and a human-readable message. It
-// implements the error interface so internal behaviours can return it directly.
+// Diagnostic is a single severity/domain/message triple.
 type Diagnostic struct {
-	Severity Severity `json:"severity"`
-	Domain   Domain   `json:"domain"`
-	Message  string   `json:"message"`
+	Severity Severity
+	Domain   Domain
+	Message  string
 }
 
-// Error renders the diagnostic for stderr: one line carrying its domain so a
-// reader (and the test harness) can identify the failing domain.
 func (d *Diagnostic) Error() string {
-	return fmt.Sprintf("%s: [%s] %s", d.Severity, d.Domain, d.Message)
+	return string(d.Severity) + " [" + string(d.Domain) + "] " + d.Message
 }
 
-// Errorf constructs an error-severity Diagnostic with a formatted message.
+// Line renders the diagnostic as a single stderr line.
+func (d *Diagnostic) Line() string {
+	return string(d.Severity) + ": " + string(d.Domain) + ": " + d.Message
+}
+
+// Errorf builds an error-severity Diagnostic in the given domain.
 func Errorf(domain Domain, format string, args ...interface{}) *Diagnostic {
 	return &Diagnostic{
 		Severity: SeverityError,
@@ -52,16 +56,11 @@ func Errorf(domain Domain, format string, args ...interface{}) *Diagnostic {
 	}
 }
 
-// Warnf constructs a warning-severity Diagnostic with a formatted message.
+// Warnf builds a warning-severity Diagnostic in the given domain.
 func Warnf(domain Domain, format string, args ...interface{}) *Diagnostic {
 	return &Diagnostic{
 		Severity: SeverityWarning,
 		Domain:   domain,
 		Message:  fmt.Sprintf(format, args...),
 	}
-}
-
-// Line renders a single diagnostic line for stderr.
-func (d *Diagnostic) Line() string {
-	return d.Error()
 }

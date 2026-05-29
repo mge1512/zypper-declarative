@@ -1,107 +1,130 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
-// Package manifest defines the shared data model (the declarable subset of the
-// SUSE Machinery system description) and its serialisations. The same Manifest
-// shape is produced by describe (actual state) and consumed by apply/diff/
-// verify/status (desired state and applied record).
+// Package manifest is the single owner of the manifest data model and its
+// serialisations. The manifest is a typed data model (the declarable Machinery
+// subset: packages, repositories, services, config_files, using the
+// ScopeWrapper {_attributes,_elements} idiom and underscore_style field names).
+// JSON is the canonical serialisation (format_version 1); YAML is an opt-in
+// serialisation of the identical model. All serialisation choices are routed
+// through ResolveFormat so input and output behave symmetrically.
 package manifest
 
-// ScopeAttributes is the scope-level metadata object (_attributes). It may be
-// null in the document; an absent/null value is represented as nil here.
+import (
+	"encoding/json"
+)
+
+// Format is the serialisation of the manifest data model.
+type Format string
+
+const (
+	// FormatJSON is the canonical, Machinery-compatible serialisation.
+	FormatJSON Format = "json"
+	// FormatYAML is the opt-in YAML serialisation of the same model.
+	FormatYAML Format = "yaml"
+)
+
+// ScopeAttributes is scope-level metadata (_attributes); it may be nil.
 type ScopeAttributes map[string]interface{}
 
-// ManifestMeta is the meta block of a Manifest.
-type ManifestMeta struct {
-	FormatVersion int    `json:"format_version" yaml:"format_version"`
-	Generator     string `json:"generator" yaml:"generator"`
-	CreatedAt     string `json:"created_at" yaml:"created_at"`
-	DesiredSHA256 string `json:"desired_sha256" yaml:"desired_sha256"`
+// Meta is the manifest meta block.
+type Meta struct {
+	FormatVersion int    `json:"format_version"`
+	Generator     string `json:"generator"`
+	CreatedAt     string `json:"created_at"`
+	DesiredSHA256 string `json:"desired_sha256"`
 }
 
-// PackageRecord is the Machinery package identity subset.
+// PackageRecord is the Machinery PackageRecord identity subset.
 type PackageRecord struct {
-	Name    string `json:"name" yaml:"name"`
-	Version string `json:"version" yaml:"version"`
-	Release string `json:"release" yaml:"release"`
-	Arch    string `json:"arch" yaml:"arch"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Release string `json:"release"`
+	Arch    string `json:"arch"`
 }
 
 // PackagesScope is ScopeWrapper<PackageRecord>.
 type PackagesScope struct {
-	Attributes ScopeAttributes `json:"_attributes" yaml:"_attributes"`
-	Elements   []PackageRecord `json:"_elements" yaml:"_elements"`
+	Attributes ScopeAttributes `json:"_attributes"`
+	Elements   []PackageRecord `json:"_elements"`
 }
 
 // RepositoryRecord is the Machinery zypp repository record.
 type RepositoryRecord struct {
-	Alias       string `json:"alias" yaml:"alias"`
-	Name        string `json:"name" yaml:"name"`
-	URL         string `json:"url" yaml:"url"`
-	Type        string `json:"type" yaml:"type"`
-	Enabled     bool   `json:"enabled" yaml:"enabled"`
-	GPGCheck    bool   `json:"gpgcheck" yaml:"gpgcheck"`
-	Autorefresh bool   `json:"autorefresh" yaml:"autorefresh"`
-	Priority    int    `json:"priority" yaml:"priority"`
+	Alias       string `json:"alias"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Type        string `json:"type"`
+	Enabled     bool   `json:"enabled"`
+	GPGCheck    bool   `json:"gpgcheck"`
+	Autorefresh bool   `json:"autorefresh"`
+	Priority    int    `json:"priority"`
 }
 
 // RepositoriesScope is ScopeWrapper<RepositoryRecord>.
 type RepositoriesScope struct {
-	Attributes ScopeAttributes    `json:"_attributes" yaml:"_attributes"`
-	Elements   []RepositoryRecord `json:"_elements" yaml:"_elements"`
+	Attributes ScopeAttributes    `json:"_attributes"`
+	Elements   []RepositoryRecord `json:"_elements"`
 }
 
 // ServiceRecord is the Machinery service record, declarable states only.
 type ServiceRecord struct {
-	Name  string `json:"name" yaml:"name"`
-	State string `json:"state" yaml:"state"`
+	Name  string `json:"name"`
+	State string `json:"state"`
 }
 
 // ServicesScope is ScopeWrapper<ServiceRecord>.
 type ServicesScope struct {
-	Attributes ScopeAttributes `json:"_attributes" yaml:"_attributes"`
-	Elements   []ServiceRecord `json:"_elements" yaml:"_elements"`
+	Attributes ScopeAttributes `json:"_attributes"`
+	Elements   []ServiceRecord `json:"_elements"`
 }
 
-// ManagedFileRecord aligns with the Machinery changed_config_files record,
-// extended with sha256 and content_ref.
+// ManagedFileRecord is aligned with the Machinery changed_config_files record
+// and extended with sha256 and a content reference.
 type ManagedFileRecord struct {
-	Name        string `json:"name" yaml:"name"`
-	Type        string `json:"type" yaml:"type"`
-	Mode        string `json:"mode" yaml:"mode"`
-	User        string `json:"user" yaml:"user"`
-	Group       string `json:"group" yaml:"group"`
-	SHA256      string `json:"sha256" yaml:"sha256"`
-	ContentRef  string `json:"content_ref" yaml:"content_ref"`
-	PackageName string `json:"package_name" yaml:"package_name"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Mode        string `json:"mode"`
+	User        string `json:"user"`
+	Group       string `json:"group"`
+	SHA256      string `json:"sha256"`
+	ContentRef  string `json:"content_ref"`
+	PackageName string `json:"package_name"`
 }
 
 // ConfigFilesScope is ScopeWrapper<ManagedFileRecord>.
 type ConfigFilesScope struct {
-	Attributes ScopeAttributes     `json:"_attributes" yaml:"_attributes"`
-	Elements   []ManagedFileRecord `json:"_elements" yaml:"_elements"`
+	Attributes ScopeAttributes     `json:"_attributes"`
+	Elements   []ManagedFileRecord `json:"_elements"`
 }
 
-// Manifest is the typed data model. A scope absent from the document means the
-// converger makes no assertion about it (unmanaged); a present scope with empty
-// _elements means the converger asserts the scope should be exactly empty.
-// Pointer fields distinguish "absent" (nil) from "present-but-empty" (non-nil
-// with empty Elements).
+// Manifest is the shared data model. Scopes are pointers: a nil pointer means
+// the scope is ABSENT (unmanaged); a non-nil scope with empty Elements means the
+// scope is PRESENT and asserted empty.
 type Manifest struct {
-	Meta         ManifestMeta       `json:"meta" yaml:"meta"`
-	Packages     *PackagesScope     `json:"packages,omitempty" yaml:"packages,omitempty"`
-	Repositories *RepositoriesScope `json:"repositories,omitempty" yaml:"repositories,omitempty"`
-	Services     *ServicesScope     `json:"services,omitempty" yaml:"services,omitempty"`
-	ConfigFiles  *ConfigFilesScope  `json:"config_files,omitempty" yaml:"config_files,omitempty"`
+	Meta         Meta               `json:"meta"`
+	Packages     *PackagesScope     `json:"packages,omitempty"`
+	Repositories *RepositoriesScope `json:"repositories,omitempty"`
+	Services     *ServicesScope     `json:"services,omitempty"`
+	ConfigFiles  *ConfigFilesScope  `json:"config_files,omitempty"`
 }
 
 // AppliedRecord is a Manifest with the packages scope fully resolved (the lock)
-// and meta.desired_sha256 set. It is the same Go type as Manifest.
+// and meta.desired_sha256 set. It is a structural alias of Manifest.
 type AppliedRecord = Manifest
 
-// Empty returns a Manifest with all scopes absent (unmanaged) and a valid meta.
-// This is the "first-ever apply" / "no applied record" representation.
+// Empty returns a Manifest with all scopes absent (the first-ever-apply state).
 func Empty() Manifest {
-	return Manifest{
-		Meta: ManifestMeta{FormatVersion: 1},
+	return Manifest{Meta: Meta{FormatVersion: 1}}
+}
+
+// MarshalCanonicalJSON serialises the manifest as pretty-printed canonical JSON
+// (Machinery format_version 1). The byte output is suitable for on-disk storage
+// and stdout. The identity hash is computed separately by CanonicalHash, which
+// uses a compact, key-sorted form.
+func (m *Manifest) MarshalCanonicalJSON() ([]byte, error) {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return nil, err
 	}
+	return append(b, '\n'), nil
 }

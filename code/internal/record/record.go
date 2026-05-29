@@ -1,99 +1,78 @@
-// generated from spec: zypper-declarative.spec.md sha256:58e1636e2de82ab81a5cd3f81d6b3c9ac6a8976e18f9abb2bbd2b2aba56fe4d4
+// generated from spec: zypper-declarative.spec.md sha256:f8ff76ecbc4bbc69a49e2e32b2924da3a64df1ad46196e05ce8c137b684429b2
 //
-// Package record reads and writes the applied record of a generation. The
-// applied record lives at <root>/usr/lib/zypper-declarative/applied.json so it
-// travels with the snapshot and is restored automatically on rollback.
+// Package record implements load-applied-record and write-applied-record. The
+// applied record travels with the generation under
+// <root>/usr/lib/zypper-declarative/applied.json and is always canonical JSON.
 package record
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
+	"github.com/mge1512/zypper-declarative/internal/meta"
 )
 
-// RelPath is the path of the applied record relative to a generation root.
+// RelPath is the applied-record path relative to a generation root.
 const RelPath = "usr/lib/zypper-declarative/applied.json"
 
-// Load reads the applied record under root. Absence is a normal state
-// (first-ever apply) and is reported as an empty record with present=false, not
+// Path returns the applied-record path under the given root.
+func Path(root string) string {
+	return filepath.Join(root, RelPath)
+}
+
+// Load implements BEHAVIOR/INTERNAL: load-applied-record. Absence is a normal
+// state (first-ever apply) reported as an empty record with present=false, not
 // an error. A present-but-corrupt record yields a files error to the caller.
 func Load(root string) (manifest.AppliedRecord, bool, *diag.Diagnostic) {
-	path := filepath.Join(root, RelPath)
-	data, err := os.ReadFile(path)
+	p := Path(root)
+	data, err := os.ReadFile(p)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return manifest.Empty(), false, nil
 		}
-		return manifest.Empty(), false, diag.Errorf(diag.DomainFiles, "applied record unreadable: %v", err)
+		return manifest.Empty(), false, diag.Errorf(diag.DomainFiles, "applied record unreadable: %s: %v", p, err)
 	}
-	rec, perr := manifest.Parse(data, manifest.FormatJSON)
-	if perr != nil {
-		return manifest.Empty(), false, diag.Errorf(diag.DomainFiles, "applied record unparseable: %v", perr)
+	rec, derr := manifest.Decode(data, manifest.FormatJSON)
+	if derr != nil {
+		return manifest.Empty(), false, diag.Errorf(diag.DomainFiles, "applied record unparseable: %s: %v", p, derr)
 	}
-	return rec, true, nil
+	return *rec, true, nil
 }
 
-// Stamper stamps the snapshot's snapper userdata with a key/value. The
-// production binding talks to snapper; this interface keeps it abstract. The
-// no-op stamper is used where snapper is unavailable (non-privileged paths).
-type Stamper interface {
-	Stamp(root, key, value string) error
-}
-
-// NoopStamper is a Stamper that does nothing and succeeds.
-type NoopStamper struct{}
-
-// Stamp is a no-op.
-func (NoopStamper) Stamp(_, _, _ string) error { return nil }
-
-// Write constructs and writes the applied record under root: it copies desired's
-// repositories, services, and config_files; sets the packages scope to the
-// resolved lock; sets meta.desired_sha256, created_at (now), and format_version
-// (1). It is serialised as canonical JSON regardless of the desired manifest's
-// input serialisation. Then it stamps the snapper userdata.
-func Write(root string, desired manifest.Manifest, desiredSHA256 string, resolved *manifest.PackagesScope, stamper Stamper) *diag.Diagnostic {
-	rec := manifest.Manifest{
-		Meta: manifest.ManifestMeta{
+// Write implements BEHAVIOR/INTERNAL: write-applied-record. It constructs the
+// AppliedRecord (desired's repositories, services, config_files; resolved
+// packages scope; meta.desired_sha256 set; meta.created_at now;
+// meta.format_version 1), serialises it as canonical JSON, and writes it under
+// the context root. The snapper userdata stamp is delegated to the caller via
+// the returned record; the file write is the in-tree ledger.
+func Write(root string, desired *manifest.Manifest, desiredSHA256 string, resolved *manifest.PackagesScope) (manifest.AppliedRecord, *diag.Diagnostic) {
+	rec := manifest.AppliedRecord{
+		Meta: manifest.Meta{
 			FormatVersion: 1,
-			Generator:     "zypper-declarative " + version(),
+			Generator:     meta.Generator(),
 			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 			DesiredSHA256: desiredSHA256,
 		},
+		Packages:     resolved,
 		Repositories: desired.Repositories,
 		Services:     desired.Services,
 		ConfigFiles:  desired.ConfigFiles,
-		Packages:     resolved,
 	}
 
-	data, err := manifest.MarshalCanonicalJSON(rec)
+	data, err := rec.MarshalCanonicalJSON()
 	if err != nil {
-		return diag.Errorf(diag.DomainFiles, "applied record serialise failed: %v", err)
+		return rec, diag.Errorf(diag.DomainFiles, "could not serialise applied record: %v", err)
 	}
-
-	path := filepath.Join(root, RelPath)
-	if mkErr := os.MkdirAll(filepath.Dir(path), 0755); mkErr != nil {
-		return diag.Errorf(diag.DomainFiles, "applied record dir create failed: %v", mkErr)
+	p := Path(root)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return rec, diag.Errorf(diag.DomainFiles, "could not create applied-record directory: %v", err)
 	}
-	if wErr := os.WriteFile(path, data, 0644); wErr != nil {
-		return diag.Errorf(diag.DomainFiles, "applied record write failed: %v", wErr)
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		return rec, diag.Errorf(diag.DomainFiles, "could not write applied record: %v", err)
 	}
-
-	if stamper != nil {
-		if sErr := stamper.Stamp(root, "manifest", desiredSHA256); sErr != nil {
-			return diag.Errorf(diag.DomainFiles, "userdata stamp failed: %v", sErr)
-		}
-	}
-	return nil
+	return rec, nil
 }
-
-// version returns the generator version string; kept local to avoid an import
-// cycle with the meta package consumers.
-func version() string { return metaVersion }
-
-// metaVersion mirrors internal/meta.Version; it is set via SetVersion to avoid a
-// package import cycle if record were imported by meta (it is not, but this keeps
-// the dependency direction one-way and explicit).
-var metaVersion = "0.5.0"
