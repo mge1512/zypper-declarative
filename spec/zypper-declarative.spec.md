@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.0
+Version:     0.6.1
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -442,6 +442,9 @@ to the system and opening no transaction.
 INPUTS:
 ```
 manifest_path: AbsolutePath
+state_path:    AbsolutePath | none  // optional captured actual state in the shared
+                                    // schema; default = read live via describe-actual-state
+format:        ManifestFormat | none // optional; applies to both files via resolve-format
 ```
 
 OUTPUTS:
@@ -460,8 +463,10 @@ STEPS:
 2. Load the applied record via `load-applied-record`; absence yields all scopes
    empty.
 3. Compute the intent diff via `compute-intent-diff`.
-4. Obtain the actual state via `describe-actual-state` on "/" and compute the
-   drift report via `compute-drift`.
+4. Obtain the actual state for the drift portion: if `state_path` is given, load
+   and schema-validate that dump as a Manifest (offline, no live read); otherwise
+   obtain it via `describe-actual-state` on "/". On a malformed dump exit 2.
+   Compute the drift report via `compute-drift`.
 5. Print the combined plan (packages to install and remove, repositories to set,
    files to write and delete, units to change, and current drift) to stdout.
    Exit 0.
@@ -469,10 +474,13 @@ STEPS:
 POSTCONDITIONS:
 - No file, package, repository, or unit on the system is modified.
 - No transaction is opened.
+- When `state_path` is supplied the live system is not read at all; the plan is a
+  pure function of the two files.
 - Exit is 0 whenever the plan was computed, whether or not differences exist.
 
 ERRORS:
 - manifest unreadable -> exit 2, domain=invocation
+- supplied state dump malformed -> exit 2, domain=invocation
 - manifest invalid or signature unverified -> exit 1, domain=manifest
 
 ---
@@ -480,20 +488,27 @@ ERRORS:
 ## BEHAVIOR: verify
 Constraint: required
 
-Checks whether the actual state equals the declaration recorded in the current
-generation, modulo the keep-list. The post-condition assertion of the converge
-loop, usable on a timer for drift detection. The actual state is read live by
-default, or supplied as a state dump in the shared schema (for offline or remote
-verification), since `describe` output and any compatible dump are the same
-format.
+Checks whether the actual state equals a reference declaration, modulo the
+keep-list. The post-condition assertion of the converge loop, usable on a timer
+for drift detection. By default the reference is the applied record of the current
+generation and the actual state is read live, so `verify` answers "does this
+system still match what was last applied". Both sides may instead be supplied as
+files: a reference manifest via `manifest_path` and a captured actual state via
+`state_path`. With both supplied, `verify` is a fully offline two-file comparison
+(no live system, no applied record required), which answers "does this captured
+state satisfy this intended manifest" for audit and air-gapped review. All three
+(desired manifest, applied record, captured state) are the same shared schema, so
+`describe` output is directly usable on either side.
 
 INPUTS:
 ```
-state_path: AbsolutePath          // optional state dump in the shared schema;
-                                  // default = read live via describe-actual-state
-format:     ManifestFormat | none // optional; resolved via resolve-format against state_path
-scope:      ScanScope             // etc (default) or full; full additionally
-                                  // audits the package-managed trees outside /etc
+manifest_path: AbsolutePath | none  // optional reference declaration; when given,
+                                    // used instead of the applied record
+state_path:    AbsolutePath | none  // optional captured actual state; default =
+                                    // read live via describe-actual-state
+format:        ManifestFormat | none // optional; applies to both files via resolve-format
+scope:         ScanScope             // etc (default) or full; full additionally
+                                     // audits the package-managed trees outside /etc
 ```
 
 OUTPUTS:
@@ -504,22 +519,26 @@ summary:     string          // to stdout
 ```
 
 PRECONDITIONS:
-- An applied record exists for the current generation.
+- A reference exists: either `manifest_path` is given, or an applied record exists
+  for the current generation.
 
 STEPS:
-1. Load the applied record via `load-applied-record`. If none exists, emit
-   "no declaration applied" to stderr and exit 2 (nothing to verify against).
+1. Determine the reference. If `manifest_path` is given, load it via
+   `load-desired-manifest` and use it as the reference (the applied record is not
+   consulted; observational scopes in it are ignored as usual). Otherwise load the
+   applied record via `load-applied-record`; if none exists, emit "no declaration
+   applied" to stderr and exit 2 (nothing to verify against).
 2. Obtain the actual state. If `state_path` is given, resolve its format via
-   `resolve-format(format, state_path)` (explicit option, else the dump's file
-   extension, else the default), load it under that serialisation, and
-   schema-validate it as a Manifest; a YAML dump is parsed under the same safe
-   profile as a desired manifest. Otherwise obtain the actual state via
-   `describe-actual-state` on "/" with `on_unreadable=error` and `scope`. Under
-   `scope=full` the actual state additionally carries the changed_managed_files
-   and unmanaged_files scopes. On a malformed dump exit 2.
+   `resolve-format(format, state_path)`, load it under that serialisation, and
+   schema-validate it as a Manifest (offline, no live read); a YAML dump is parsed
+   under the same safe profile as a desired manifest. Otherwise obtain the actual
+   state via `describe-actual-state` on "/" with `on_unreadable=error` and `scope`.
+   Under `scope=full` the actual state additionally carries the
+   changed_managed_files and unmanaged_files scopes. On a malformed dump exit 2.
 3. Compute the drift report via `compute-drift` from the actual state and the
-   applied record. Under `scope=full` the report additionally carries
-   managed_files_modified and unmanaged_files_present.
+   reference. Under `scope=full` the report additionally carries
+   managed_files_modified and unmanaged_files_present (only meaningful when the
+   actual state was read or captured with scope=full).
 4. If the drift report is empty (excluding the keep-list), emit "system matches
    declaration" to stdout and exit 0. Otherwise emit one diagnostic per drift
    item to stderr and exit 1. Under `scope=full`, a changed packaged file or an
@@ -529,11 +548,16 @@ STEPS:
 
 POSTCONDITIONS:
 - The system is not modified.
-- Exit 0 if and only if the actual state equals the applied record modulo the
-  keep-list.
+- When both `manifest_path` and `state_path` are supplied, the live system is not
+  read and no applied record is required; the result is a pure function of the two
+  files.
+- Exit 0 if and only if the actual state equals the reference modulo the keep-list.
 
 ERRORS:
-- no applied record present -> exit 2, domain=invocation
+- no reference available (no manifest_path and no applied record) -> exit 2,
+  domain=invocation
+- reference manifest unreadable, invalid, unsafe-YAML, or unverified -> exit 2 on
+  read/format, else exit 1, domain=manifest
 - supplied state dump malformed -> exit 2, domain=invocation
 - drift detected -> exit 1, domain=files or units or packages (under scope=full,
   also a changed packaged file or an unpackaged addition outside /etc)
@@ -851,11 +875,13 @@ STEPS:
    version like `1.10` are not coerced). A YAML input that requires any disabled
    feature returns a manifest error rather than being parsed.
 4. Validate against the manifest schema: `meta.format_version` must be 1, and
-   every present scope must conform to its ScopeWrapper record type. Observational
-   scopes (changed_managed_files, unmanaged_files) are ignored if present and do
-   not contribute to the desired state, so a describe scope=full dump can be reused
-   as a desired manifest with its out-of-/etc findings simply dropped (they are not
-   declarable). On violation return a manifest error naming the first violation.
+   every present scope must conform to its ScopeWrapper record type. The
+   observational scopes (changed_managed_files, unmanaged_files) are not declarable:
+   if either is present with a non-empty `_elements`, return a manifest error (a
+   desired manifest must not carry observational findings; this prevents a raw
+   `describe scope=full` dump from being mistaken for a baseline). An empty or
+   absent observational scope is tolerated and dropped. On any other violation
+   return a manifest error naming the first violation.
 5. If signature verification is enabled in CONFIG, verify the manifest's signature
    against the configured keyring. On failure return a manifest error.
 6. Compute desired_sha256 as the SHA256 of the canonical JSON serialisation of the
@@ -872,6 +898,8 @@ ERRORS:
 - file unreadable -> invocation error returned to caller
 - unknown format value -> invocation error returned to caller
 - YAML requires a disabled (unsafe) feature -> manifest error returned to caller
+- desired manifest carries a non-empty observational scope -> manifest error
+  returned to caller
 - schema violation -> manifest error returned to caller
 - signature invalid -> manifest error returned to caller
 
@@ -1416,6 +1444,15 @@ resolver fills in the transitive set.
   they are ignored by `compute-intent-diff` and by convergence, and never appear
   in a desired manifest or an applied record. `verify scope=full` surfaces them as
   integrity drift against the package baseline (exit 1 when non-empty).
+- [observable] A desired manifest carrying a non-empty observational scope is
+  rejected by `load-desired-manifest` with a manifest error, so a raw
+  `describe scope=full` dump cannot be applied as a baseline without first being
+  edited into intent.
+- [observable] `diff` with `state_path`, and `verify` with both `manifest_path`
+  and `state_path`, read neither the live system nor any applied record; each is a
+  pure comparison of the supplied files.
+- [observable] `verify` with `manifest_path` uses that manifest as the reference
+  instead of the applied record, and does not require an applied record to exist.
 - [observable] The full scan covers `/usr`, the usr-merge roots, and `/boot`, and
   excludes `/etc`, `/opt`, and the virtual, runtime, and mutable-data trees; it
   honours the keep-list.
@@ -1982,6 +2019,52 @@ THEN:
   a manifest bootstrapped from this output leaves repositories unmanaged
   exit_code = 0
 
+### EXAMPLE: diff_offline_two_files
+GIVEN:
+  a reference manifest baseline.json and a captured actual state after.json,
+    both in the shared schema
+  invocation: zypper declarative diff manifest-path=baseline.json state-path=after.json
+WHEN:
+  diff runs
+THEN:
+  the plan is computed purely from the two files
+  the live system is not read and no transaction is opened
+  exit_code = 0
+
+### EXAMPLE: verify_offline_manifest_and_state
+GIVEN:
+  a reference manifest baseline.json and a captured state after.json
+  no apply has run on this host (no applied record exists)
+  invocation: zypper declarative verify manifest-path=baseline.json state-path=after.json
+WHEN:
+  verify runs
+THEN:
+  baseline.json is used as the reference instead of an applied record
+  the comparison is purely between the two files; the live system is not read
+  exit is 0 if after.json satisfies baseline.json, else 1 with per-item diagnostics
+
+### EXAMPLE: verify_offline_no_applied_record_ok
+GIVEN:
+  no applied record exists on the host
+  invocation: zypper declarative verify manifest-path=baseline.json state-path=after.json
+WHEN:
+  verify runs
+THEN:
+  it does not emit "no declaration applied" (a reference manifest was supplied)
+  it completes the offline comparison
+
+### EXAMPLE: apply_rejects_full_describe_dump
+GIVEN:
+  a manifest that still carries a non-empty unmanaged_files scope (a raw
+    describe scope=full dump used directly)
+  invocation: zypper declarative apply manifest-path=full-dump.json
+WHEN:
+  apply runs
+THEN:
+  load-desired-manifest rejects it with a diagnostic, domain=manifest
+  no transaction is opened
+  exit_code = 1
+
 ### EXAMPLE: idempotent_second_apply
 GIVEN:
   apply has just succeeded for a manifest M
@@ -2024,6 +2107,8 @@ zypper declarative describe root=/mnt out=/tmp/state.json
 zypper declarative describe scope=full out=/tmp/full-state.json   # include /usr and /boot
 zypper declarative verify                            # declaration check (/etc)
 zypper declarative verify scope=full                 # declaration + /usr,/boot integrity audit
+zypper declarative diff manifest-path=baseline.json state-path=after.json   # offline, no live read
+zypper declarative verify manifest-path=baseline.json state-path=after.json # offline, no applied record
 zypper declarative apply manifest-path=/etc/zypper-declarative/desired.yaml
 ```
 Equivalent direct form: `zypper-declarative <verb> [key=value ...]`.
@@ -2031,12 +2116,14 @@ Equivalent direct form: `zypper-declarative <verb> [key=value ...]`.
 Key=value options (precede any bare-word argument):
 ```
 mode=auto|external|internal       transaction binding; default auto
-manifest-path=<path>              desired manifest; default from CONFIG
+manifest-path=<path>              desired manifest (apply, diff); reference
+                                  manifest for verify (offline comparison)
 format=json|yaml                  serialisation for this invocation's manifest I/O
                                   (manifest-path on load, state-path on verify,
                                   out on describe); when omitted, the operative
                                   file extension decides, else manifest-format
-state-path=<path>                 state dump as actual-state source for verify
+state-path=<path>                 captured actual state for verify and diff
+                                  (offline; default reads the live system)
 root=<path>                       root to describe; default "/"
 out=<path>                        describe output file; default stdout
 on-unreadable=error|warn          describe: fail (default) or omit+warn on an
@@ -2242,6 +2329,20 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-05-29: Version 0.6.1. Added offline two-file comparison and a guard against
+  applying a raw describe dump, both motivated by the architect baseline-authoring
+  workflow. `verify` now accepts `manifest_path` as the reference (used instead of
+  the applied record, and not requiring one to exist) and `diff` now accepts
+  `state_path` as a captured actual state; with both files supplied, `verify` and
+  `diff` are pure comparisons that read neither the live system nor any applied
+  record, which serves air-gapped and audit review (capture state on one host,
+  compare against an intended manifest on another). `compute-drift` was already
+  pure, so this is a routing change at the verb layer. Separately,
+  `load-desired-manifest` now rejects a desired manifest that carries a non-empty
+  observational scope (changed_managed_files or unmanaged_files), so a raw
+  `describe scope=full` dump cannot be mistaken for a baseline and silently
+  half-applied; it must first be edited into intent. Added invariants and examples
+  for both.
 - 2026-05-29: Version 0.6.0. Added an opt-in full-system integrity scan, mirroring
   the old Machinery and sitar behaviour, for the case where `/usr` is not
   guaranteed immutable. A `scope` option (`etc` default, `full`), accepted on

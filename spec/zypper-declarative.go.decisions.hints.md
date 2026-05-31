@@ -282,7 +282,7 @@ That means:
 
 ---
 
-## Do NOT carry these over from the existing code (v0.5.0, v0.5.1, v0.5.2 changes)
+## Do NOT carry these over from the existing code (v0.5.0 through v0.6.1 changes)
 
 1. `describe` writing JSON regardless of the `out` extension. Output now follows
    `resolve-format`.
@@ -307,6 +307,21 @@ That means:
    `/etc`. This is both correctness and the performance fix (the slow full-system
    verification scales with the installed base; the bounded read scales with the
    size of `/etc`).
+8. (v0.6.0) The integrity scan (`scope=full`) is opt-in and on `describe`/`verify`
+   only; do not engage it by default or on `status`/`diff`/`apply`. Its two scopes
+   are observational; never feed them to convergence or write them to the applied
+   record.
+9. (v0.6.1) `verify` requiring an applied record even when a reference
+   `manifest-path` is supplied, and `verify`/`diff` always reading the live system.
+   When `manifest-path` (reference) and/or `state-path` (actual) are given, route
+   `compute-drift` over the files: `verify manifest-path=X state-path=Y` and
+   `diff manifest-path=X state-path=Y` must be pure two-file comparisons that read
+   neither the live system nor any applied record. `compute-drift` is already pure;
+   this is verb-layer routing.
+10. (v0.6.1) `apply` (via `load-desired-manifest`) silently accepting a manifest
+    that carries a non-empty observational scope. Reject it with a manifest error
+    so a raw `describe scope=full` dump cannot be applied as a baseline; an empty
+    or absent observational scope is tolerated and dropped.
 
 ## Slots to fill from /tmp/pcd-original/code/
 

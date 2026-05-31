@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.0)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.1)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -561,6 +561,14 @@ objective.
 
 ## Changelog
 
+- 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.6.1 (offline comparison
+  and the describe-dump guard). No architecture change beyond noting that the
+  describe-bootstrap path (Section 5.5 / delivery) now has explicit tool support:
+  `verify` and `diff` accept a reference manifest and a captured state as files for
+  a fully offline comparison, and `apply` refuses a manifest still carrying
+  observational scopes so a raw full describe dump cannot be applied as a baseline.
+  A separate user guide (`doc/user-guide.md`) covers initiating a host and
+  authoring a baseline.
 - 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.6.0. Added Section 5.5.1
   on `/usr` integrity: by construction on a read-only transactional `/usr` (ideally
   dm-verity), and by an opt-in `scope=full` scan (mirroring Machinery and sitar)
