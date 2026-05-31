@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.1
+Version:     0.6.2
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -123,18 +123,25 @@ ManagedFileRecord := {
   mode:         Mode,
   user:         string where non-empty,
   group:        string where non-empty,
-  sha256:       Sha256,    // content digest; comparison key for drift
-  content_ref:  string,    // desired: how content is supplied at apply time;
-                           // "" in describe output (actual state carries no source ref)
+  sha256:       string,    // for type=file: a Sha256 content digest; "" otherwise
+  target:       string,    // for type=link: the verbatim symlink target (not
+                           // resolved, not normalised); "" otherwise
+  content_ref:  string,    // for a DESIRED type=file: how content is supplied at
+                           // apply time; "" in describe output and for non-file types
   package_name: string     // owning package; "" if unpackaged. Machinery field.
                            // Drives the files_extra rule: only unpackaged,
                            // undeclared /etc files count as extra.
-}
+}  where (type = "file" implies sha256 matches Sha256 AND target = "")
+   AND   (type = "link" implies sha256 = "" AND target != "" AND content_ref = "")
+   AND   (type = "dir"  implies sha256 = "" AND target = "")
 // Aligned with the Machinery changed_config_files record (name, type, mode,
-// user, group, package_name) and extended, as sitar extends Machinery, with
-// sha256 and a content reference, because a DESIRED file needs its content,
-// which an observational dump does not carry inline. v1 confines declared files
-// to /etc.
+// user, group, package_name) and extended, as sitar extends Machinery, with a
+// content digest for files and a verbatim target for symlinks. A regular file's
+// identity is its content (sha256); a symlink's identity is its target (stored
+// verbatim, so relative targets and chroot-relative targets survive); type is
+// part of identity in every comparison. v1 confines declared files to /etc.
+// describe emits file and link records; directories are traversed but not
+// emitted, and special files (device, fifo, socket) are skipped.
 
 ConfigFilesScope := ScopeWrapper<ManagedFileRecord>
 
@@ -154,13 +161,15 @@ ManagedBaselineRecord := {
   mode:         Mode,
   user:         string where non-empty,
   group:        string where non-empty,
-  sha256:       Sha256,         // actual content digest (files); "" for dir/link
+  sha256:       string,         // for type=file: content digest; "" otherwise
+  target:       string,         // for type=link: verbatim symlink target; "" otherwise
   package_name: string where non-empty,  // owning package (always set here)
   changes:      []string        // what differs from the package baseline,
-                                // e.g. ["sha256"], ["mode","user"]
+                                // e.g. ["sha256"], ["target"], ["mode","user"]
 }
 // Machinery changed_managed_files record: a packaged file outside /etc whose
-// current content or metadata differs from the package-recorded baseline.
+// current content, target, or metadata differs from the package-recorded
+// baseline.
 
 ChangedManagedFilesScope := ScopeWrapper<ManagedBaselineRecord>
 
@@ -170,7 +179,8 @@ UnmanagedFileRecord := {
   mode:   Mode,
   user:   string where non-empty,
   group:  string where non-empty,
-  sha256: Sha256                // actual content digest (files); "" for dir/link
+  sha256: string,               // for type=file: content digest; "" otherwise
+  target: string                // for type=link: verbatim symlink target; "" otherwise
 }
 // Machinery unmanaged_files record: a file present in the scanned trees that no
 // installed package owns (an out-of-band addition). It has no package baseline.
@@ -332,6 +342,7 @@ fenced and excluded from structural parsing):
         "user": "root",
         "group": "root",
         "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "target": "",
         "content_ref": "files/etc/nginx/nginx.conf",
         "package_name": ""
       }
@@ -719,24 +730,40 @@ STEPS:
    (`_attributes.init_system = "systemd"`) with each unit's state normalised to
    enabled, disabled, or masked. Purely-static units are omitted (not
    declarable). If enablement cannot be read, treat per `on_unreadable` (step 6).
-4. config_files: enumerate only `<root>/etc` and inspect only paths under it. For
-   each `/etc` file determine its owning package and whether it differs from that
-   package's recorded baseline. Build a ManagedFileRecord with actual sha256,
-   mode, user, group, type, and package_name for every `/etc` file that is either
-   changed from its package default or unpackaged. Skip files that are
-   package-pristine, the keep-list, and `/etc/etc.syncpoint`. content_ref is "".
+4. config_files: walk `<root>/etc` recursively and inspect only paths under it.
+   The walk descends into subdirectories; it does not attempt to read a directory
+   as a file (a tree such as `/etc/ssl/` is traversed, and its entries are the
+   candidates). Classify each entry by its own type without following symlinks
+   (an lstat, not a stat), into one of: regular file, symlink, directory, or
+   special (device, fifo, socket). Then:
+   - Regular file: determine its owning package and whether its content differs
+     from the package baseline; for a changed or unpackaged file emit a
+     ManagedFileRecord with type "file", the actual content sha256 (target ""),
+     mode, user, group, and package_name.
+   - Symlink: do not dereference it or read its target as a file. Determine its
+     owning package and whether its target differs from the package-recorded
+     target; for a changed or unpackaged symlink emit a ManagedFileRecord with
+     type "link", the verbatim target (sha256 ""), mode, user, group, and
+     package_name. The target is stored exactly as read, neither resolved nor
+     normalised, so relative and chroot-relative targets survive.
+   - Directory: traverse into it; do not emit a record for the directory itself.
+   - Special file: skip it; do not read, hash, or emit it, and do not error.
+   Skip package-pristine files and symlinks, the keep-list, and
+   `/etc/etc.syncpoint`. content_ref is "".
    Two constraints on this step:
    - Bounded scope: the package-baseline comparison consults package metadata only
-     for the `/etc` files enumerated here. The reader does not read, hash, or
+     for the `/etc` entries enumerated here. The reader does not read, hash, or
      verify files outside `/etc` (the declarable file domain), and in particular
      does not perform a whole-system package verification. The cost therefore
      scales with the size of `/etc`, not with the installed package base.
-   - Difference reporting is not failure: a package-verification mechanism reports
-     changed files as its normal, successful result, and commonly signals "one or
-     more files differ" with a non-zero exit status. That non-zero status, and an
-     empty match, are the expected outcome that yields the changed-file set; they
-     are NOT an unreadable source. Only a genuine access or I/O failure to read a
-     required `/etc` file is unreadable, treated per `on_unreadable` (step 6).
+   - Encountering a directory, a symlink, or a special file during the walk is
+     NORMAL and never an unreadable-source error. Difference reporting is likewise
+     not failure: a package-verification mechanism reports changed entries as its
+     normal, successful result, commonly with a non-zero exit status; that
+     non-zero status, and an empty match, are the expected outcome, NOT an
+     unreadable source. Only a genuine access or I/O failure to read a regular
+     file or to list a directory is unreadable, treated per `on_unreadable`
+     (step 6).
 4a. full-scan integrity (only when `scope = full`; skipped entirely under
    `scope = etc`): scan the package-managed operating-system trees OUTSIDE `/etc`
    and emit two observational scopes.
@@ -746,15 +773,23 @@ STEPS:
      (`/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var`, `/home`, `/root`, `/mnt`,
      `/media`). Within the scanned trees do not descend into separate filesystem
      mounts other than the named ones, and honour the keep-list.
-   - changed_managed_files: for each packaged file in the scanned trees whose
-     current content or metadata differs from the package-recorded baseline, emit
-     a ManagedBaselineRecord with the actual sha256, mode, user, group, type, the
+   - The scan walks the trees recursively and classifies each entry by its own
+     type without following symlinks (lstat), exactly as the `/etc` walk does:
+     directories are traversed (not emitted), special files are skipped, regular
+     files are compared by content, and symlinks are compared by target (verbatim,
+     never dereferenced). Encountering a directory, symlink, or special file is
+     never an unreadable-source error.
+   - changed_managed_files: for each packaged regular file or symlink in the
+     scanned trees whose current content (file) or target (link) or metadata
+     differs from the package-recorded baseline, emit a ManagedBaselineRecord with
+     the actual sha256 (file) or target (link), mode, user, group, type, the
      owning package_name, and a `changes` list naming what differs. A verifier
      reporting differences (commonly a non-zero exit) is the normal result here,
      not an unreadable source (step 6).
-   - unmanaged_files: for each file in the scanned trees that no installed package
-     owns, and that is not keep-listed, emit an UnmanagedFileRecord with the actual
-     sha256 (files), type, mode, user, and group.
+   - unmanaged_files: for each regular file or symlink in the scanned trees that
+     no installed package owns, and that is not keep-listed, emit an
+     UnmanagedFileRecord with the actual sha256 (file) or target (link), type,
+     mode, user, and group.
    - This step is expensive (it stats and hashes the scanned trees and verifies
      packaged files). It runs only under `scope=full`, which is opt-in and never
      engaged by default. Generated artifacts under `/boot` (initramfs images, the
@@ -770,13 +805,14 @@ STEPS:
    than asserting deletion, and a clean full scan simply omits the two integrity
    scopes). Return it, with any warn diagnostics.
 6. Unreadable-source handling. "Unreadable" means a genuine access or I/O failure
-   to read a source: a permission denial on a required path, a missing required
-   path, or an rpmdb, repos.d, or unit-state source that cannot be opened or read.
-   It explicitly does NOT include a verification or query command exiting non-zero
-   to report content differences, nor a query returning an empty result; those are
-   normal successful outcomes. A scope or item that is genuinely unreadable is
-   never represented as an empty scope. Under `on_unreadable=error`, return an
-   error naming the unreadable source (the caller fails the run). Under
+   to read a source: a permission denial on a required path, a failure to list a
+   directory, a missing required path, or an rpmdb, repos.d, or unit-state source
+   that cannot be opened or read. It explicitly does NOT include encountering a
+   directory, symlink, or special file during a walk, a verification or query
+   command exiting non-zero to report differences, or a query returning an empty
+   result; those are normal successful outcomes. A scope or item that is genuinely
+   unreadable is never represented as an empty scope. Under `on_unreadable=error`,
+   return an error naming the unreadable source (the caller fails the run). Under
    `on_unreadable=warn`, omit the affected scope (or the affected items), append a
    diagnostic naming the source, and continue.
 
@@ -785,8 +821,13 @@ POSTCONDITIONS:
 - The returned Manifest is schema-valid and contains only the four declarable
   scopes.
 - config_files contains exactly the changed-from-package and unpackaged /etc
-  files it could read (minus keep-list and syncpoint); package-pristine files are
-  absent.
+  regular files and symlinks it could read (minus keep-list and syncpoint);
+  package-pristine entries are absent.
+- The `/etc` walk recurses into directories and classifies each entry by its own
+  type (lstat, symlinks not followed): regular files are hashed, symlinks record
+  their verbatim target, directories are traversed but not emitted, special files
+  are skipped. A directory, symlink, or special file is never read as a file and
+  never causes an unreadable-source error.
 - config_files inspection is bounded to `/etc`: no file outside the declarable
   file domain is read, hashed, or verified, so the cost is a function of the size
   of `/etc`, not of the installed package base.
@@ -1005,10 +1046,13 @@ report: DriftReport
 
 STEPS:
 1. files_modified: for each ManagedFileRecord e in reference.config_files._elements,
-   if actual.config_files._elements contains a record with name e.name whose
-   sha256 differs from e.sha256, add e.name. A declared file absent from
-   actual.config_files is treated as matching the declaration (it equals the
-   package or declared default and so was not reported as changed).
+   find the record a in actual.config_files._elements with name e.name. Add e.name
+   if any of the following holds (type is part of identity): a.type differs from
+   e.type (a type transition, for example a declared regular file that is now a
+   symlink or a directory); both are type "file" and a.sha256 differs from
+   e.sha256; both are type "link" and a.target differs from e.target. A declared
+   entry absent from actual.config_files is treated as matching the declaration
+   (it equals the package or declared default and so was not reported as changed).
 2. files_extra: for each record a in actual.config_files._elements whose name is
    not in reference.config_files._elements, whose package_name is "" (unpackaged),
    and which is not keep-listed and not `/etc/etc.syncpoint`, add a.name. Changed
@@ -1036,6 +1080,9 @@ POSTCONDITIONS:
   unpackaged, undeclared /etc files do.
 - A declared file absent from the actual scope is treated as matching, not as
   missing.
+- File comparison treats type as part of identity: a path whose on-disk type
+  differs from the declared type is modified, regardless of content; a symlink is
+  compared by target, a regular file by sha256.
 - managed_files_modified and unmanaged_files_present are non-empty only when the
   actual state was read with scope=full; they report integrity drift against the
   package/substrate baseline, not against the declaration.
@@ -1132,6 +1179,15 @@ Constraint: required
 Applies the file portion of the intent diff to `<ctx.root>/etc`, writing declared
 files (resolving their content via content_ref) and deleting only files the
 declaration dropped.
+
+Reserved for a later version (not yet specified here): convergence of symlink
+records (creating, updating, or removing a type "link" entry by its target) and
+the handling of a type transition at apply time (a declared type differing from
+the actual type at the same path), which is to be a hard error that aborts the
+transaction rather than a silent destructive rewrite. In this version
+`converge-files` writes and deletes regular files; symlink convergence and
+type-transition handling are deferred to the milestone that exercises `apply` on
+a live host. describe and drift already classify and compare these entry types.
 
 INPUTS:
 ```
@@ -1435,6 +1491,18 @@ resolver fills in the transitive set.
   scope; it does not read, hash, or verify files outside `/etc`, and does not run
   a whole-system package verification. Its config_files cost scales with the size
   of `/etc`, not the installed package base.
+- [observable] The `/etc` walk (and the full-scan walk under scope=full) recurses
+  into directories and classifies each entry by its own type without following
+  symlinks: regular files are hashed, symlinks record their verbatim target,
+  directories are traversed but not emitted as records, special files are skipped.
+  A directory, symlink, or special file is never read as a file and never causes
+  an unreadable-source error.
+- [observable] A symlink's recorded target is stored verbatim: neither resolved
+  nor normalised, so relative and chroot-relative targets are preserved.
+- [observable] In `compute-drift`, type is part of a config file's identity: a
+  path whose on-disk type differs from the declared type is reported as modified
+  regardless of content; a symlink is compared by target and a regular file by
+  sha256.
 - [observable] The out-of-/etc integrity scan runs only under `scope=full`;
   `scope` defaults to `etc`, so by default no file outside `/etc` is scanned, read,
   or hashed, including on a mutable `/usr`.
@@ -1742,6 +1810,49 @@ WHEN:
 THEN:
   the config_files scope contains the changed file with package_name set
   the package-pristine file is absent from the config_files scope
+
+### EXAMPLE: describe_traverses_etc_subdirectories
+GIVEN:
+  /etc contains a subdirectory (for example /etc/ImageMagick-7) holding a changed file
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the walk descends into the subdirectory rather than reading it as a file
+  the changed file inside it is emitted as a type "file" record
+  no "is a directory" error occurs and the run does not abort
+
+### EXAMPLE: describe_records_symlink_verbatim
+GIVEN:
+  /etc contains a changed or unpackaged symlink whose target is "../foo/bar.conf"
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the symlink is emitted as a type "link" record with target "../foo/bar.conf"
+  the target is stored verbatim (not resolved or made absolute) and sha256 is ""
+  the symlink is not dereferenced and its target file is not read
+
+### EXAMPLE: describe_skips_special_file
+GIVEN:
+  /etc contains a fifo or socket
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the special file is skipped: not read, not hashed, not emitted
+  the run does not hang or error on it
+
+### EXAMPLE: drift_type_transition_is_modified
+GIVEN:
+  the reference declares /etc/foo as a type "file" record
+  the actual state reports /etc/foo as a type "link"
+  invocation path: compute-drift over actual and reference
+WHEN:
+  compute-drift runs
+THEN:
+  /etc/foo appears in files_modified because the type differs
+  the result does not depend on any content hash comparison
 
 ### EXAMPLE: describe_config_files_bounded_to_etc
 GIVEN:
@@ -2329,6 +2440,28 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-06-01: Version 0.6.2. Fixed a `describe` crash surfaced on a live host
+  ("files: unreadable scope source: /etc: read /etc/ImageMagick-7: is a
+  directory") and, with it, underspecified handling of non-regular-file entries
+  across the read and compare paths. The `/etc` walk (and the scope=full walk over
+  `/usr` and `/boot`) now recurses into directories and classifies each entry by
+  its own type without following symlinks: regular files are hashed (type "file"),
+  symlinks record their verbatim target (type "link", never dereferenced, neither
+  resolved nor normalised, which also keeps chroot-relative targets correct),
+  directories are traversed but not emitted (traverse-only), and special files
+  (device, fifo, socket) are skipped. Encountering a directory, symlink, or
+  special file is explicitly never an unreadable-source error. Type is now part of
+  a config file's identity in `compute-drift`: a path whose on-disk type differs
+  from the declared type is modified regardless of content; a symlink is compared
+  by target, a regular file by sha256. The file records gained a verbatim `target`
+  field with type/sha256/target consistency rules. Hardlinks are treated as single
+  files by content and type per path (hardlink identity out of scope for v1). The
+  converge-side type semantics (creating, updating, and removing symlinks, and
+  treating a declared-versus-actual type transition as a hard error that aborts the
+  transaction) are noted as reserved for the milestone that exercises `apply` on a
+  live host; this version covers the read and drift side, which is testable
+  offline. Added invariants and examples (directory traversal, verbatim symlink
+  recording, special-file skip, type-transition drift).
 - 2026-05-29: Version 0.6.1. Added offline two-file comparison and a guard against
   applying a raw describe dump, both motivated by the architect baseline-authoring
   workflow. `verify` now accepts `manifest_path` as the reference (used instead of

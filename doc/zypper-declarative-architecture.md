@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.1)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.2)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -561,6 +561,16 @@ objective.
 
 ## Changelog
 
+- 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.2 (filesystem object
+  model). The state reader now treats `/etc` (and the scope=full trees) as a tree
+  of typed objects: it recurses into directories, classifies each entry without
+  following symlinks, hashes regular files, records symlink targets verbatim
+  (preserving relative and chroot-relative targets), traverses directories without
+  emitting them, and skips special files; none of those is a read error. Type is
+  part of a config file's identity in drift. Converge-side symlink and
+  type-transition handling (the latter a hard error that aborts the transaction)
+  is reserved for the apply milestone. No structural architecture change; the
+  two-diff model and the reader's role are unchanged.
 - 2026-05-29: Aligned with `zypper-declarative.spec.md` v0.6.1 (offline comparison
   and the describe-dump guard). No architecture change beyond noting that the
   describe-bootstrap path (Section 5.5 / delivery) now has explicit tool support:

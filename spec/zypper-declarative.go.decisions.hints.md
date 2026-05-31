@@ -212,6 +212,26 @@ That means:
   `rpm -Va` (it is the cause of the slow describe). Treat a verifier's non-zero
   exit (it returns non-zero when it finds changed files) as the normal changed-file
   result, not an unreadable source.
+- `[spec]` `[changed-0.6.2]` Filesystem object model. The `/etc` walk (and the
+  scope=full walk over `/usr`/`/boot`) must recurse into directories and classify
+  each entry by its own type using lstat (do NOT follow symlinks, do NOT os.ReadFile
+  a path before classifying). In Go: `filepath.WalkDir` or a manual stack with
+  `os.Lstat`; for each entry, `d.Type()&fs.ModeSymlink` -> read target with
+  `os.Readlink` (store verbatim, do not `filepath.Abs`/`Clean` it), regular file
+  -> hash, `IsDir` -> descend (emit nothing), anything else (device/fifo/socket)
+  -> skip. The original crash was calling a file read on a directory; classify
+  first. A directory, symlink, or special file is never an unreadable-source
+  error. Records carry a `target` field (verbatim symlink target, "" for
+  non-links) with the type/sha256/target consistency from TYPES. In compute-drift,
+  type is part of identity: differing type -> modified; same type compare sha256
+  (file) or target (link). Hardlinks: treat per path by content+type, do not
+  attempt to detect or preserve hardlink identity.
+- `[spec]` `[changed-0.7.0-reserved]` converge-files does NOT yet create/update/
+  remove symlinks or handle type transitions; that is reserved for the apply
+  milestone. When implemented: a declared type "link" is converged by its target;
+  a declared-vs-actual type mismatch at a path is a HARD ERROR that aborts the
+  transaction (no silent destructive rewrite). Do not silently delete a directory
+  tree to write a file or vice versa.
 - `[spec]` `[changed-0.6.0]` Full-scan integrity (`scope=full`, on `describe` and
   `verify` only; default `etc` scans nothing outside `/etc`). Under `full`, scan the
   package-managed trees outside `/etc` (`/usr`, the usr-merge roots `/bin` `/sbin`
