@@ -1,62 +1,39 @@
 # zypper-declarative: translation decisions hints (Rust)
 
-This is the Rust instance of `zypper-declarative.<lang>.decisions.hints.md`, the
-decisions hints file from PCD section 13. It is read by a translator during
-guided regeneration: a clean rebuild from the specification that honours the
-worth-keeping architectural decisions. It is NOT a specification artifact (it does
-not affect `pcd-lint`), and it is disposable.
+Rust instance of `zypper-declarative.<lang>.decisions.hints.md` (PCD "When the
+Specification Changes"), read by the translator during guided regeneration: a
+clean rebuild from the spec that honours the worth-keeping architectural
+decisions. Not a spec artifact; does not affect `pcd-lint`; disposable. The Rust
+sibling of the Go decisions file: same architecture, retargeted to Rust idiom.
+Read the spec, the cli-tool template, and `cli-tool.rs.milestones.hints.md` first.
 
-It is the Rust sibling of the Go decisions file: the same architecture, the same
-"do NOT carry over" list, retargeted to Rust idiom. The specification itself is
-language-neutral; this file is where the Rust-specific decisions live. Read the
-spec, the cli-tool template, and `cli-tool.rs.milestones.hints.md` before writing
-code.
-
-## Provenance tags
-
-- `[spec]` decided by `zypper-declarative.spec.md`; authoritative here.
-- `[pcd]` a documented PCD finding or environment constraint; authoritative.
-- `[recommended]` a sound Rust default; apply unless the existing code does
-  something equally good.
-- `[extract]` read from an existing Rust implementation if one exists; a slot.
-- `[changed-N]` the spec version N changed this; follow the new spec.
-
-## How KIT should consume this
-
-Guided regeneration: the translator reads the spec, the template, this file, and
-`cli-tool.rs.milestones.hints.md`, and does NOT read any prior buggy code. Use the
-"normal" translator prompt (input -> output), not the incremental-from-old-code
-prompt. After generation, verify the crate name and the embedded spec hash by
-hand.
+Tags: `[spec]` decided by the spec; `[pcd]` a PCD/environment constraint;
+`[recommended]` a sound Rust default; `[extract]` read from existing Rust code if
+present. The translator does NOT read prior buggy code. After generation, verify
+the crate name and embedded spec hash by hand.
 
 ---
 
-## Decisions to preserve
+## Crate and toolchain
 
-### Crate and toolchain
+- `[spec]` Spec META `Module:` is `github.com/mge1512/zypper-declarative`; for Rust
+  map it to crate name `zypper-declarative` and record that URL as `Cargo.toml`
+  `repository`. Do not invent another name.
+- `[pcd]` No root at build time: vendor with `cargo vendor` and build offline
+  (`cargo build --offline`); `CARGO_HOME` under the user's home; read-only
+  package-DB queries (`rpm -q`/`-qf`/`-qa`/`-ql`/`--queryformat`) ARE available to
+  build/test as an ordinary user and should be used to verify config_files during
+  translation rather than deferring it.
+- `[recommended]` Edition 2021, recent stable toolchain; pin in
+  `rust-toolchain.toml` (reproducibility matters for EUCC).
+- `[pcd]` Static binary via `target-feature=+crt-static` (see milestones hints).
+  Unlike C++, the Rust logic has no system-library dependency, so static is the
+  natural low-cost default.
 
-- `[spec]` The spec META `Module:` is `github.com/mge1512/zypper-declarative`. For
-  Rust this is not a module path; map it to a crate name `zypper-declarative` and
-  record the upstream as that URL in `Cargo.toml` `repository`. Do not invent a
-  different name.
-- `[pcd]` No root at build time. Vendor dependencies with `cargo vendor` and build
-  offline (`cargo build --offline` against the vendor directory); do not fetch at
-  build time on the target. Use a `GOPATH`-equivalent under the home directory
-  only insofar as Cargo's `CARGO_HOME` is set in the user's home.
-- `[recommended]` Edition 2021, a recent stable toolchain. Pin the toolchain in
-  `rust-toolchain.toml` if reproducibility across build hosts matters (it does for
-  EUCC).
-- `[pcd]` Dynamic vs static: the spec's deployment template asks for a static
-  binary by default; Rust achieves this with `target-feature=+crt-static` against
-  glibc (see the Rust milestones hints). Unlike the C++ build (which links
-  distro shared libraries), the Rust build has no system library dependency for
-  its logic, so a static binary is the natural, low-cost default here.
+## Source layout
 
-### Source layout
-
-- `[recommended]` Mirror the spec's behaviour grouping as modules, one concern per
-  file. Reconcile with any existing layout and prefer it where at least as clear:
-
+- `[recommended]` One module per concern, mirroring the spec's behaviour grouping;
+  reconcile with any existing layout and prefer it where at least as clear:
   ```
   src/
     main.rs              entry: build args, dispatch to cli
@@ -71,324 +48,234 @@ hand.
     record/mod.rs        load/write applied record
     meta.rs              embedded spec SHA256 and version
   ```
-
-- `[spec]` `describe-actual-state` is the single live-state reader; no other module
+- `[spec]` `describe-actual-state` is the ONLY live-state reader; no other module
   reads the rpmdb, repos.d, systemd, or `/etc` directly. Keep it in `state`.
-- `[spec]` `compute-drift` performs no I/O; it compares two in-memory `Manifest`
-  values. Keep `diff` free of filesystem/process calls.
+- `[spec]` `compute-drift` performs no I/O (compares two in-memory `Manifest`
+  values); keep `diff` free of filesystem/process calls.
 - `[spec]` `resolve-format` is the single authority for serialisation choice; route
-  every read and write through it. No per-call-site format logic.
+  every read and write through it, no per-call-site format logic.
 
-### Argument parsing and the global contract
+## Argument parsing and the global contract
 
 - `[spec]` Options are `key=value`, parsed by the tool; bare words are verbs;
-  options precede bare-word arguments BUT must be accepted in any position (the Go
-  build had a bug where options after the verb were rejected; do not reproduce
-  it). Environment-variable control is forbidden.
-- `[spec]` All CONFIG knobs are also accepted as `key=value` options
-  (`manifest-format`, `repo-lock`, `content-store`, `keep-list`,
-  `signature-verification`, `keyring`, `activation-policy`, `applied-root`,
-  `on-unreadable`, `scope`), command-line overriding preset.
-- `[spec]` `[changed-0.5.1]` `version` and `help` are bare-word global commands and
-  exit 0; `--version`, `--help`, `-h` are tolerated aliases only. No option uses
-  POSIX `--flag`. Bare invocation prints usage to stdout and exits 0 (discovery,
-  never converges). Unknown verb/option/value or missing value -> usage to stderr,
-  exit 2. The cli-tool milestones M0 gate exercises the bare words.
+  options must be accepted in ANY position (the Go build wrongly rejected options
+  after the verb; do not reproduce). Environment-variable control is forbidden.
+- `[spec]` All CONFIG knobs are also `key=value` options (`manifest-format`,
+  `repo-lock`, `content-store`, `keep-list`, `signature-verification`, `keyring`,
+  `activation-policy`, `applied-root`, `on-unreadable`, `scope`); command-line
+  overrides preset.
+- `[spec]` `version` and `help` are bare-word global commands, exit 0; `--version`,
+  `--help`, `-h` are tolerated aliases only; no option uses POSIX `--flag`. Bare
+  invocation prints usage to stdout, exits 0 (never converges). Unknown
+  verb/option/value or missing value -> usage to stderr, exit 2.
 - `[recommended]` Do NOT pull in `clap` or another arg parser; the grammar is
-  key=value plus bare verbs, which is a few lines of hand-written parsing and
-  avoids a `--flag`-shaped dependency that would fight the spec's CLI style.
+  key=value plus bare verbs (a few lines of hand-written parsing) and a `--flag`-
+  shaped dependency would fight the spec's CLI style.
 
-### Errors and exit codes
+## Errors and exit codes
 
-- `[spec]` Internal functions return errors to their caller; exit-code mapping
-  lives only in the verb layer (`cli`). Model a `Diagnostic { severity, domain,
-  message }` with `domain` in {packages, repositories, services, files, manifest,
-  transaction, invocation}. Diagnostics to stderr, one per line; normal output to
-  stdout.
+- `[spec]` Internal functions return errors to their caller; exit-code mapping lives
+  only in the verb layer (`cli`). Model `Diagnostic { severity, domain, message }`
+  with `domain` in {packages, repositories, services, files, manifest, transaction,
+  invocation}; diagnostics to stderr one per line, normal output to stdout.
 - `[recommended]` Use a concrete error enum (or `thiserror`) carrying the domain,
-  rather than `Box<dyn Error>`, so the verb layer can map domain -> exit code
-  without string matching. Exit codes: 0 success; 1 logical failure (convergence
-  failed/discarded, verify drift, invalid/unsafe-YAML/unverified manifest, state
-  collection failed); 2 invocation error (bad args, unknown format value,
-  unreadable manifest, insufficient privilege, transaction unavailable,
-  unwritable output, malformed state dump).
+  not `Box<dyn Error>`, so the verb layer maps domain -> exit code without string
+  matching. Exit codes: 0 success; 1 logical failure (convergence failed/discarded,
+  verify drift, invalid/unsafe-YAML/unverified manifest, state collection failed);
+  2 invocation error (bad args, unknown format value, unreadable manifest,
+  insufficient privilege, transaction unavailable, unwritable output, malformed
+  state dump).
 
-### Manifest data model and serialisation
+## Manifest data model and serialisation
 
 - `[spec]` The manifest is the declarable Machinery subset (packages, repositories,
   services, config_files), `ScopeWrapper { _attributes, _elements }`, underscore
-  field names. JSON canonical, YAML opt-in, same data model. Model scopes with
-  serde structs; `#[serde(rename = "_attributes")]` / `"_elements"`.
-- `[spec]` Absent vs empty scope is semantic. In Rust, model a declarable scope as
-  `Option<Scope>`: `None` = absent (unmanaged), `Some` with empty `_elements` =
-  present-empty (reconcile to empty). Do not collapse the two.
+  field names; JSON canonical, YAML opt-in, same model. Use serde structs with
+  `#[serde(rename = "_attributes")]` / `"_elements"`.
+- `[spec]` Absent vs empty scope is semantic: model a declarable scope as
+  `Option<Scope>` (`None` = absent/unmanaged; `Some` with empty `_elements` =
+  present-empty, reconcile to empty). Do not collapse the two.
 - `[spec]` `resolve-format`: explicit `format=` wins, else operative file extension
-  (`.json` -> json; `.yaml`/`.yml` -> yaml), else `manifest-format` default.
-  Operative path = manifest-path on load, state-path on verify, out on describe.
-  `[changed-0.5.0]`/`[changed-0.5.2]` describe output follows
-  `resolve-format(out)`; do not hardcode JSON.
+  (`.json`->json, `.yaml`/`.yml`->yaml), else `manifest-format` default. Operative
+  path = manifest-path on load, state-path on verify, out on describe. describe
+  output follows `resolve-format(out)`; do not hardcode JSON.
 - `[spec]` The applied record is ALWAYS canonical JSON regardless of input format.
-- `[spec]` `desired_sha256` is the SHA256 of a canonical serialisation of the
-  parsed data model (format-independent). `[recommended]` Define canonical
-  concretely and apply it for the hash: object keys sorted, compact separators,
-  UTF-8, `_elements` sorted by identity key (packages by name+arch, repositories
-  by alias, services by name, config_files by path). On-disk `applied.json` may be
-  pretty; the HASH is over the compact canonical form. Use the `sha2` crate.
-- `[spec]` YAML safe profile: a non-executing loader, no arbitrary/executable tags,
-  bounded or disabled anchor/alias expansion, single document only, explicit typing
-  per schema (no implicit coercion, e.g. `NO`/`1.10`). `[recommended]` Parse YAML
-  into an untyped value first (e.g. `serde_yaml::Value`), walk it to reject tags,
-  aliases, and multi-document, then deserialize into the typed structs; record the
-  exact crate and version in `TRANSLATION_REPORT.md`. A YAML input needing a
-  disabled feature is a manifest error.
-- `[lesson]` On the WRITE side, string-typed fields must serialise as quoted YAML
+- `[spec]` `desired_sha256` is the SHA256 of a canonical serialisation of the parsed
+  model (format-independent). `[recommended]` Define canonical concretely: keys
+  sorted, compact separators, UTF-8, `_elements` sorted by identity key (packages
+  by name+arch, repositories by alias, services by name, config_files by path).
+  On-disk `applied.json` may be pretty; the hash is over the compact form. Use the
+  `sha2` crate.
+- `[spec]` `meta.generator` is `zypper-declarative <version>`, matching other
+  implementations of the same spec version (do not drop the version).
+- `[spec]` YAML safe profile: non-executing loader, no arbitrary/executable tags,
+  bounded or disabled alias expansion, single document only, explicit typing per
+  schema (no implicit coercion, e.g. `NO`/`1.10`). `[recommended]` Parse YAML into
+  an untyped value first (e.g. `serde_yaml::Value`), walk it to reject tags,
+  aliases, and multi-document, then deserialize into typed structs; record crate
+  and version in `TRANSLATION_REPORT.md`. A YAML input needing a disabled feature
+  is a manifest error.
+- `[spec]` On the WRITE side, string-typed fields must serialise as QUOTED YAML
   scalars: `mode: "0600"`, `sha256: "..."`, `target: "..."`, not `mode: 0600`
-  (which round-trips as an int or octal). The C++ build emitted unquoted `0600`;
-  do not repeat it. The model field types are strings, so ensure the YAML emitter
-  quotes them; verify by round-tripping a written YAML file back through the
-  reader and checking types are preserved.
+  (which round-trips as int/octal). Verify by round-tripping a written YAML file
+  back through the reader and checking types are preserved.
 
-### Reading actual state, empty-scope rule, filesystem object model
+## Reading actual state, empty-scope rule, filesystem object model
 
-- `[spec]` `[changed-0.5.2]` Repositories actual state from `/etc/zypp/repos.d/*.repo`
-  (INI). No network refresh, no privileged cache. A scope source that cannot be
-  read is NEVER an empty scope: `on-unreadable=error` (default) errors naming the
-  source, `warn` omits with a diagnostic; genuinely-empty readable scopes are
-  omitted so a bootstrap leaves them unmanaged.
-- `[spec]` `[changed-0.6.2]` Filesystem object model. Walk `/etc` (and the
-  scope=full trees) recursively, classifying each entry by its own type WITHOUT
-  following symlinks. In Rust: `std::fs::symlink_metadata` (lstat) and
-  `FileType::is_symlink`/`is_dir`/`is_file`; read a symlink target with
-  `std::fs::read_link` and store it VERBATIM (no `canonicalize`, no normalisation,
-  which also keeps chroot-relative targets correct); hash regular files only
-  (`sha2`); descend directories and emit nothing for them (traverse-only); skip
-  special files (anything not file/symlink/dir). A directory, symlink, or special
-  file is NEVER an unreadable-source error. The original Go crash was reading a
-  directory as a file; classify first.
-- `[spec]` File records carry a verbatim `target` field (symlink target, "" for
-  non-links), sha256 only for regular files, with the TYPES consistency rules.
+- `[spec]` Repositories actual state from `/etc/zypp/repos.d/*.repo` (INI: alias,
+  name, baseurl->url, type, enabled, gpgcheck, autorefresh, priority); no network
+  refresh, no privileged cache. A scope source that cannot be read is NEVER an empty
+  scope: `on-unreadable=error` (default) errors naming the source, `warn` omits with
+  a diagnostic; genuinely-empty readable scopes are omitted so a bootstrap leaves
+  them unmanaged.
+- `[spec]` Filesystem object model: walk `/etc` (and the scope=full trees)
+  recursively, classifying each entry by its own type WITHOUT following symlinks.
+  In Rust: `std::fs::symlink_metadata` (lstat) and `FileType::is_symlink`/
+  `is_dir`/`is_file`; read a symlink target with `std::fs::read_link` and store it
+  VERBATIM (no `canonicalize`, no normalisation; keeps chroot-relative targets
+  correct); hash regular files only (`sha2`); descend directories and emit nothing;
+  skip special files (anything not file/symlink/dir). A directory, symlink, or
+  special file is NEVER an unreadable-source error (the original Go crash was
+  reading a directory as a file; classify first). Records carry a verbatim `target`
+  field ("" for non-links), sha256 only for regular files, per the TYPES rules.
 - `[spec]` In `compute-drift`, type is part of identity: differing type -> modified;
-  same type compare sha256 (file) or target (link). A declared entry absent from
-  actual is treated as matching.
-- `[spec]` Hardlinks: treat per path by content+type; do not detect or preserve
-  hardlink identity (out of scope for v1).
-- `[spec]` config_files inspection is bounded to `/etc`; never read/hash/verify
-  outside it and never run a whole-system verification.
-- `[spec]` Difference-reporting is not failure: a package verifier returning
-  non-zero because it found changed files is the normal result, not an unreadable
-  source.
+  same type compare sha256 (file) or target (link); a declared entry absent from
+  actual is treated as matching. Hardlinks: treat per path by content+type, do not
+  detect or preserve hardlink identity.
 
-### Integration with the system (Rust-specific)
+## config_files: ownership and the pristine/reproducibility rule
 
-- `[recommended]` Drive `zypper`, `snapper`, `systemctl`, and `rpm` by executing
-  their command-line interfaces (`std::process::Command`) and parsing their
-  output; read repos.d as files. This keeps the Rust binary free of FFI to the
-  SUSE C/C++ libraries and lets it stay a static binary. (This is the deliberate
-  difference from the C++ build, which links libzypp/libsnapper directly; Rust and
-  Go both take the exec route.) `[extract]` If an existing Rust build chose FFI to
-  libzypp via bindgen, that is a decision to revisit against the static-binary
-  goal, not to preserve by default.
+This is the highest-risk behaviour; the C++/libzypp build is the behavioural oracle
+for it (Go's over-emission was the bug). Verify it during translation using
+read-only rpm, and ship the two self-checks below as tests.
+
+- `[spec]` config_files is the changed-from-package and unpackaged `/etc` files,
+  excluding package-pristine files, the keep-list, and `/etc/etc.syncpoint`; bounded
+  to `/etc` (never read/hash/verify outside it, never a whole-system `rpm -Va`). A
+  package verifier returning non-zero because it found changes is the normal result,
+  not an unreadable source.
+- `[spec]` Determine each path's owning package and recorded baseline (digest, link
+  target, mode, owner, group, and file FLAGS including the GHOST bit) via the rpm
+  database. Never default a path to unpackaged because a lookup was skipped or
+  failed.
+- `[spec]` BULK lookup keyed BY PATH, not by row position. `rpm -qf path1 path2 ...`
+  does not return one block per input path in order (rpm reorders, deduplicates when
+  paths share an owner, drops unowned paths), so a positional zip misaligns owners
+  to files. Query the owning packages' file lists, which emit the absolute path on
+  every line:
+  ```
+  rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS} %{FILELINKTOS} %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILEDIGESTALGO}\n]' <pkglist>
+  ```
+  and build a `path -> attributes` map indexed by that path. (Per-path `rpm -qf` is
+  correct but slow, and was the cause of the first Rust build's slowness; batch as
+  above.)
+- `[spec]` Judge each `/etc` path INDEPENDENTLY against its OWN owning package;
+  never collapse a symlink with the file it points to (e.g. `/etc/pam.d/common-auth`
+  owned by `pam` vs `common-auth-pc` owned by `pam-config` are separate judgements;
+  suppressing the pristine link must not suppress the target); never dereference a
+  symlink to judge it. `package_name` is the BARE name (`openssh-server`), never the
+  NEVRA `rpm -qf` prints.
+- `[spec]` Emission test (reproducibility): emit a path exactly when a fresh install
+  of its owning package (or no owning package) would NOT reproduce its on-disk
+  state. Concretely:
+  - unpackaged -> EMIT;
+  - regular file: pristine iff on-disk digest AND mode/owner/group match -> SUPPRESS;
+    else EMIT;
+  - symlink: pristine iff on-disk target matches the recorded target (mode NOT
+    compared) -> SUPPRESS; else EMIT. An owned distro symlink with the package's
+    target (the `/etc/X11/xim.d/*/40-ibus` links) is suppressed (the first build
+    over-emitted some pristine symlinks);
+  - type mismatch (recorded type differs from on-disk type) -> EMIT as the on-disk
+    type (`/etc/pam.d/common-auth`: pam ships a regular file, disk has a symlink ->
+    emit the link), judged against its own package;
+  - ghost (FLAGS has the ghost bit; no shipped content baseline) with real on-disk
+    content -> EMIT (`/etc/pam.d/common-auth-pc`, a 0-byte ghost holding the real
+    bytes; the v0.6.4 rebuild dropped this, it must be emitted); ghost empty on disk
+    with empty baseline -> SUPPRESS. A ghost is never pristine-by-digest.
+- `[spec]` Digest comparison is algorithm-aware and normalised: read the recorded
+  algorithm (`%{FILEDIGESTALGO}`, 8=SHA256, 1=MD5) and hash the on-disk file with
+  the SAME algorithm; compare lowercase, trimmed. An EMPTY recorded digest
+  (directories, symlinks, ghosts) is no-baseline, route through the type/ghost rule,
+  not a mismatch. The emitted `sha256` is always the real SHA256 of the on-disk file
+  regardless of the recorded algorithm.
+- `[spec]` A file whose CONTENT cannot be read (a protected file an unprivileged
+  reader cannot open) is an `on_unreadable` condition, never silently classified as
+  changed-from-package. Distinguish "read the file, digest differs" (emit) from
+  "could not read it" (on_unreadable). `rpm -V` itself reads content and trips on
+  protected files, so prefer the header-metadata route above for the baseline.
+- `[spec]` `created_at` is a real RFC3339 timestamp (a properly converted
+  `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`). It is
+  informational, excluded from comparison and the hash, but must be correct.
+- `[spec]` Two required self-check tests (runnable with read-only rpm during
+  translation): (1) ownership resolves a known file to its known package
+  (`/etc/ssh/sshd_config` -> `openssh-server`, `/etc/pam.d/common-auth` -> `pam`);
+  (2) a known-pristine packaged file (e.g. an `/etc/ImageMagick-7-SUSE/*.xml`) is
+  ABSENT from config_files. The first catches a misaligned join; the second catches
+  a broken digest comparison.
+
+## Integration with the system (Rust-specific)
+
+- `[recommended]` Drive `zypper`, `snapper`, `systemctl`, and `rpm` via
+  `std::process::Command` and parse their output; read repos.d as files. This keeps
+  the binary free of FFI to the SUSE C/C++ libraries and lets it stay static. (The
+  deliberate difference from the C++ build, which links libzypp/libsnapper; Rust and
+  Go both take the exec route, which preserves the three-way independence.)
+  `[extract]` If an existing Rust build chose FFI via bindgen, revisit against the
+  static-binary goal rather than preserving it by default.
 - `[spec]` The transaction binding is abstract (`acquire-transaction-context`
-  resolves auto|external|internal); keep it isolated in `txn`. Unit enablement
-  under a root uses offline enablement; do not rely on first-boot preset.
-- `[spec]` `[lesson]` The `services` scope is MANDATORY and is unit ENABLEMENT
-  (enabled/disabled/masked), read offline via `systemctl --root <root>` (the C++
-  build deferred it to an empty/omitted scope while Go read 214; do not repeat
-  that). A deferred-empty scope silently drops declarable state. Do not use a
-  D-Bus/sd-bus-style API: it cannot answer enablement under a non-running root,
-  which the tool's rooted model requires.
-- `[spec]` `[lesson]` Package ownership and the pristine rule: determine ownership
-  via the rpm database (query rpm for the file's owning package and recorded
-  digest/mode/owner), and SUPPRESS package-pristine `/etc` entries (owned and
-  matching the recorded digest, target, mode, owner, group); emit only unpackaged
-  or changed-from-package. Do NOT default a file to "unpackaged" because the
-  ownership lookup was skipped or failed (that was the Go bug the C++/libzypp build
-  exposed: Go over-emitted ~1700 pristine files as unpackaged). The C++ build is
-  the behavioural oracle here.
-- `[spec]` `[changed-0.6.4]` Pristine refinements (Rust got the symlink case
-  partly wrong in the first build): (1) judge each `/etc` path INDEPENDENTLY
-  against its own owning package; never collapse a symlink with the file it points
-  to (e.g. `/etc/pam.d/common-auth` owned by `pam` vs `common-auth-pc` owned by
-  `pam-config` are two separate judgements); never dereference a symlink to judge
-  it. (2) A symlink is pristine iff its TARGET matches the package-recorded target;
-  do NOT compare a symlink's mode (the first build emitted pristine symlinks it
-  should have suppressed). A regular file is pristine iff digest+mode+owner+group
-  match. (3) `package_name` is the BARE name (`openssh-server`); the first build
-  emitted the full NEVRA from `rpm -qf` (`openssh-server-9.6p1-...x86_64`) - reduce
-  it to the name. (4) Do ownership/verification in BULK (one `rpm -qf` over all
-  enumerated `/etc` paths, one bulk verification), NOT per file; the first build's
-  per-file `rpm -qf`/`rpm -V` is the cause of its slowness versus Go and C++.
-- `[spec]` `[changed-0.6.5]` Reproducibility rule for the ghost/type-mismatch
-  cases (the v0.6.4 Rust rebuild emitted the `common-auth` symlink correctly but
-  dropped the `common-auth-pc` content-bearing ghost; under v0.6.5 BOTH are
-  emitted). The batched `rpm` query MUST include `%{FILEFLAGS}` so the ghost bit is
-  visible, e.g. `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS}
-  %{FILELINKTOS} %{FILEMODES}\n]'` (bit 64 = ghost, bit 1 = config). Then: (a) a
-  `%ghost` path with real on-disk content -> EMIT (a fresh install ships no content;
-  `/etc/pam.d/common-auth-pc` is a 0-byte ghost holding the real 462 bytes -> emit
-  with that sha256); (b) a ghost empty on disk with an empty baseline -> SUPPRESS;
-  (c) a path whose on-disk type differs from the recorded type -> EMIT as the
-  on-disk type (`/etc/pam.d/common-auth`: pam ships a regular file, disk has a
-  symlink -> emit the link), judged against its own package, not collapsed with the
-  target; (d) otherwise pristine iff digest+mode+owner+group (file) or recorded
-  linkto (symlink) match -> SUPPRESS, else EMIT. A ghost is never pristine-by-digest.
-- `[lesson]` `[preventive-0.6.5]` When you batch the ownership/baseline query for
-  performance (which the bulk-lookup requirement asks for), JOIN owner-to-path BY
-  THE PATH, never by output row position. This is preventive: the Go build, which
-  is exec-based like Rust, scrambled every `package_name` by zipping a bulk
-  `rpm -qf path1 path2 ...` output against the input list positionally
-  (`/etc/ssh/sshd_config` came out owned by `speech-dispatcher`, etc.), which then
-  corrupted its whole pristine comparison. `rpm -qf` over many paths does NOT emit
-  one block per input path in input order: it may reorder, deduplicate when paths
-  share an owner, collapse, or drop unowned paths. Rust has not hit this yet only
-  because earlier builds used per-file `rpm -qf` (one path, one answer); the moment
-  you batch, the hazard appears. Do it safely: query the OWNING PACKAGES' file
-  lists once, e.g. `rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS}
-  %{FILELINKTOS} %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME}\n]' <pkglist>`, which
-  emits the absolute path on every line, and build a `path -> attributes` map keyed
-  by that path; then look up each enumerated `/etc` path in the map. Never assume
-  positional correspondence between the queried path list and the output lines.
-  Add a test asserting a few known mappings (e.g. `/etc/ssh/sshd_config` must map
-  to `openssh-server`, `/etc/pam.d/common-auth` to `pam`).
-- `[lesson]` `created_at` must be a real RFC3339 timestamp. The first Rust build
-  emitted `1970-01-01T00:00:36Z` (it formatted a small duration as if it were a
-  Unix epoch time; the v0.6.4 rebuild fixed this); use the wall clock correctly
-  (e.g. a properly converted `SystemTime::now()` to RFC3339). The field is
-  informational and excluded from comparison and the hash, but it must still be
-  correct.
+  resolves auto|external|internal); keep it isolated in `txn`. Unit enablement under
+  a root uses offline enablement; do not rely on first-boot preset.
+- `[spec]` The `services` scope is MANDATORY: unit ENABLEMENT (enabled/disabled/
+  masked), read OFFLINE via `systemctl --root <root>` (the C++ build deferred it to
+  an empty scope while Go read ~214; do not regress). Do NOT use a D-Bus/sd-bus API:
+  it cannot answer enablement under a non-running root, which the rooted model
+  requires. Purely-static units are omitted (not declarable).
+- `[spec]` `[reserved-0.7.0]` `converge-files` does NOT yet create/update/remove
+  symlinks or handle type transitions (reserved for the apply milestone). When
+  implemented: a declared type "link" is converged by its target; a declared-vs-
+  actual type mismatch at a path is a HARD ERROR that aborts the transaction (no
+  silent destructive rewrite).
 
-### Cross-implementation consistency (the three-way oracle)
+## Cross-implementation consistency (the three-way oracle)
 
-- `[lesson]` The Go and C++ builds, diffed on the same host, surfaced a bug
-  (Go's pristine mislabelling) that neither build's own tests caught. Treat the
-  three implementations as a continuous consistency check: Rust `describe` output,
-  on the same host, should match the Go and C++ output after canonicalisation.
-  Any divergence is a bug in one of them, arbitrated by the spec.
-- For the comparison to be clean: scopes, field presence, type classification,
-  scalar typing, and ordering must agree. Sort `_elements` by identity key and
-  emit `_attributes` as `{}` (never null) so the structures line up. Exclude
-  `meta.created_at` from the comparison (it is a per-run timestamp); `meta.generator`
-  SHOULD match across implementations of the same spec version, so emit
-  `zypper-declarative <version>` (do not drop the version, as the first C++ build
-  did).
+- `[spec]` The three implementations are a continuous consistency check: Rust
+  `describe` output on a host should match Go and C++ after canonicalisation; any
+  divergence is a bug in one of them, arbitrated by the spec. For the comparison to
+  be clean, scopes, field presence, type classification, scalar typing, and ordering
+  must agree: sort `_elements` by identity key, emit `_attributes` as `{}` never
+  null, and exclude `meta.created_at` (a per-run timestamp) from the comparison.
+  This is the diff that caught Go's pristine mislabelling, which neither build's own
+  tests caught.
 
-### Spec-hash embedding and packaging
+## Spec-hash embedding and packaging
 
-- `[spec]` Embed the SHA256 of the spec in: source headers, `--version`/`version`
-  output, `TRANSLATION_REPORT.md` (`Spec-SHA256:`), the RPM spec, the DEB control
+- `[spec]` Embed the spec SHA256 in source headers, `--version`/`version` output,
+  `TRANSLATION_REPORT.md` (`Spec-SHA256:`), the RPM spec, the DEB control
   (`X-PCD-Spec-SHA256:`), the Containerfile label, and the Makefile/Cargo metadata.
-  `[recommended]` Keep version and hash in `meta.rs`, injected at build via a
-  `build.rs` that writes a generated constant, or via `env!` of a build-time var.
-  `version` prints `zypper-declarative <version> spec:<sha256>`.
-- `[spec]` Deliverable surfaced as a zypper subcommand (`/usr/lib/zypper/commands`)
-  and invocable directly. OBS package, no curl install. SIGTERM/SIGINT clean exit;
-  an interrupted `apply` discards the transaction.
+  `[recommended]` Keep version and hash in `meta.rs`, injected via a `build.rs` that
+  writes a generated constant (or `env!` of a build-time var); `version` prints
+  `zypper-declarative <version> spec:<sha256>`.
+- `[spec]` Surfaced as a zypper subcommand (`/usr/lib/zypper/commands`) and invocable
+  directly; OBS package, no curl install; SIGTERM/SIGINT clean exit; an interrupted
+  `apply` discards the transaction.
 
-### Testing boundary
+## Testing boundary
 
 - `[pcd]` Black-box tests invoke the built binary via `std::process::Command` and
-  assert on stdout, stderr, and exit code; they do NOT call internal functions.
-  The v0.5.x/0.6.x examples (bare `version`/`help`, `describe out=...yaml`, offline
-  `verify`/`diff`, the `/etc` directory-traversal, symlink-verbatim, special-file
-  skip, type-transition drift) are black-box assertions of exactly this kind. Two
-  of the filesystem cases (a symlink and a fifo under a synthetic root) are
-  constructible offline; cover them rather than leaving them code-review-only.
-
----
-
-## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.5)
-
-1. describe output ignoring the `out` extension (now follows `resolve-format`).
-2. repositories read in a way that returns empty on read failure, or any path that
-   emits an empty scope for an unreadable source (read repos.d; never empty for
-   unreadable; omit genuine-empty).
-3. bare `version`/`help` returning exit 2 (now the canonical commands, exit 0;
-   flags are aliases); bare invocation exiting non-zero (now usage + exit 0).
-4. per-call-site format selection (now `resolve-format`).
-5. options after the verb being rejected (the Go parser bug); accept key=value in
-   any position.
-6. treating a package verifier's non-zero "differences found" exit as an unreadable
-   source.
-7. a whole-system `rpm -Va`; bound to `/etc` (and scope=full trees only under
-   scope=full).
-8. scope=full engaged by default, or its observational scopes fed into convergence
-   or written to the applied record.
-9. `verify` requiring an applied record when a reference manifest is supplied, and
-   `verify`/`diff` always reading the live system; with `manifest-path`/`state-path`
-   they are pure offline comparisons.
-10. `apply` accepting a manifest carrying a non-empty observational scope (reject
-    it; a raw `describe scope=full` dump is not a baseline).
-11. reading a directory (or symlink, or special file) as a regular file, or erroring
-    on encountering one; classify by lstat first, traverse dirs, record symlink
-    targets verbatim, skip special files.
-12. comparing config files by content hash alone; type is part of identity.
-13. (v0.6.3) omitting/deferring the `services` scope; it is mandatory, read offline
-    via `systemctl --root`. Go reads it; do not regress.
-14. (v0.6.3) defaulting a file to "unpackaged" when the ownership lookup is skipped
-    or fails, and over-emitting package-pristine files; do real ownership/digest
-    determination and suppress pristine entries (the C++/libzypp behaviour, which
-    is correct; Go's was the bug).
-15. (v0.6.3) `_attributes` as null/`~` (always `{}`); unquoted YAML string scalars
-    like `mode: 0600` (quote them); and dropping the version from `meta.generator`.
-16. (v0.6.4) collapsing a symlink with its target file; comparing a symlink's mode
-    for pristine-ness (target-match only); putting the NEVRA in `package_name`
-    (bare name only); per-file `rpm -qf`/`rpm -V` instead of bulk (the slowness
-    cause); and emitting a bogus `created_at` (use the real wall clock).
-17. (v0.6.5) dropping a content-bearing ghost such as `common-auth-pc` (the v0.6.4
-    rebuild did this; it must be EMITTED); omitting `%{FILEFLAGS}` from the query
-    (ghost bit required); suppressing a type-mismatched path; treating a ghost as
-    pristine-by-digest.
-18. (v0.6.5, preventive) when batching the rpm query, joining owner-to-path by
-    output row position (the Go build did this and scrambled every package_name);
-    always key the map by the absolute path in the output, never by row order.
-
-## Slots to fill from an existing Rust implementation (if any)
-
-- `[extract]` actual module layout, error enum design, the YAML crate chosen and
-  whether it meets the safe profile, the Makefile/OBS packaging, the spec-hash
-  injection mechanism, and whether integration was exec-based or FFI.
-
----
+  assert on stdout, stderr, and exit code; they do NOT call internal functions. The
+  config_files self-checks above and the v0.5.x/0.6.x examples (bare `version`/
+  `help`, `describe out=...yaml`, offline `verify`/`diff`, `/etc` directory
+  traversal, symlink-verbatim, special-file skip, type-transition drift) are
+  black-box assertions; the symlink and fifo cases are constructible under a
+  synthetic root, cover them rather than leaving them code-review-only.
 
 ## Changelog
 
-- 2026-06-01: Added (hints only, no spec change) a preventive bulk-lookup
-  alignment lesson, prompted by the Go build scrambling every `package_name` by
-  joining bulk `rpm -qf` output positionally. Rust is exec-based like Go and will
-  face the same hazard the moment it batches the query (as the performance
-  requirement asks); the lesson says to key the owner/baseline map by the absolute
-  path in the output, never by row position, and to query the owning packages'
-  file lists (which emit the path per line). Item 18 added to the do-not-carry
-  list.
-- 2026-06-01: Updated to spec v0.6.5 after the v0.6.4 Rust rebuild verified on
-  milos (created_at fixed, bare package_name, ibus symlinks suppressed; the
-  remaining gap was the pam.d `common-auth` symlink, now confirmed CORRECT to emit
-  as a type mismatch). Added the reproducibility rule: include `%{FILEFLAGS}` in
-  the query, emit content-bearing ghosts (the rebuild dropped `common-auth-pc`,
-  which must be emitted) and type-mismatched paths, suppress
-  empty-ghost-matching-empty. Item 17 added to the do-not-carry list.
-- 2026-06-01: Updated to spec v0.6.4 after the first Rust build was compared
-  three-way on milos. The build was the cleanest of the three (services present,
-  pristine files suppressed, generator versioned), with four issues now pinned:
-  symlink/target independence and symlink-pristine-by-target-only (it emitted some
-  pristine symlinks), bare `package_name` (it emitted the full NEVRA), bulk rpm
-  queries (per-file `rpm -qf`/`-V` was the cause of its slowness versus Go and
-  C++), and a real `created_at` (it emitted `1970-01-01T00:00:36Z`). Item 16 added
-  to the do-not-carry list.
-- 2026-06-01: Updated to spec v0.6.3, incorporating the lessons from the Go and
-  C++ runs before Rust is generated. Added: the `services` scope is mandatory
-  (read offline via `systemctl --root`; C++ deferred it, Go read it); the
-  package-pristine rule with real ownership/digest determination and suppression
-  of pristine `/etc` entries (the C++/libzypp behaviour is the oracle; Go's
-  over-emission was the bug); a cross-implementation-consistency section making the
-  three-way describe diff a continuous check; YAML write-side string-quoting; and
-  the `_attributes` `{}`-not-null and `meta.generator`-version rules. Items 13-15
-  added to the do-not-carry list.
-- 2026-06-01: Initial Rust decisions hints, translated from the Go decisions file
-  at spec v0.6.2. Same architecture and the same twelve "do NOT carry over" items,
-  retargeted to Rust idiom (serde model with Option-typed scopes for absent-vs-empty,
-  hand-written key=value parsing, concrete error enum, sha2 canonical hashing,
-  serde_yaml Value-walk for the safe profile, std::fs symlink_metadata/read_link
-  for the filesystem object model, exec-based system integration and a static
-  binary). Library choices are self-contained Cargo crates, so this file has no
-  dependency on SLE packaging.
+- 2026-06-01: Compressed losslessly from the accreted v0.5.0-v0.6.5 file (same rule
+  coverage; post-mortem narration and the per-build changelog diary removed; the
+  duplicate do-not-carry list folded into the rules above). Tracks spec v0.6.5:
+  reproducibility emission rule (type-mismatch and content-bearing ghost emit,
+  empty-ghost suppress), algorithm-aware digest comparison, bulk ownership keyed by
+  path, protected-file handling via on_unreadable. Rust-specific preventive lessons
+  (path-keyed join, algorithm-aware digest) retained inline, since Rust is exec-based
+  and meets both hazards when it batches.

@@ -1,499 +1,288 @@
 # zypper-declarative: translation decisions hints (Go)
 
-This is the decisions hints file from PCD section 13 ("When the Specification
-Changes"). It is read by a translator during **guided regeneration**: a clean
-rebuild from the specification that nonetheless honours the worth-keeping
-architectural decisions of the prior implementation. It is NOT a specification
-artifact: it does not affect `pcd-lint`, and it is disposable.
+Decisions hints (PCD "When the Specification Changes"), read by the translator
+during guided regeneration: a clean rebuild from the spec that honours the
+worth-keeping architectural decisions. Not a spec artifact; does not affect
+`pcd-lint`; disposable. Read the spec and the cli-tool template first, then this.
 
-## Naming and language
-
-This file is the Go instance, named `zypper-declarative.go.decisions.hints.md`.
-The generic name is `zypper-declarative.<lang>.decisions.hints.md`; the qualifier
-is the implementation language and the file is discarded when the language
-changes. If the language is later chosen to be Rust or C++, rename the qualifier
-(`.rust.`, `.cpp.`) and re-read the language-specific sections below, which are
-written for Go with substitution notes. The specification itself stays
-language-neutral; this file is where the language-specific decisions live.
-
-## Provenance of the entries below
-
-Normally this file is produced by the translator (via `assess_change_impact` or
-`prompts/change-impact.md`) by reading the existing code. This copy is
-hand-authored as a starting point, so each entry is tagged:
-
-- `[spec]` decided by `zypper-declarative.spec.md` v0.5.0; authoritative here.
-- `[pcd]` a documented PCD finding or environment constraint; authoritative here.
-- `[recommended]` a sound default to apply unless the existing code already does
-  something equally good; reconcile against `/tmp/pcd-original/code/`.
-- `[extract]` must be read from the existing code; left as a slot to fill, since
-  the existing implementation is not visible to the author of this file.
-- `[changed-0.5.0]` the v0.5.0 spec changed this; do NOT carry the old code's
-  behaviour over, follow the new spec.
-
-## How KIT should consume this (important)
-
-This file supports **guided regeneration**, which is the middle of the PCD
-three-state model. The translator must read the spec, the template, and this
-file, and must NOT read the old code (so the prior bugs cannot be carried over).
-That means:
-
-- Use your "normal" translator prompt (input `/tmp/pcd-input/`, output
-  `/tmp/pcd-output/`), NOT the existing-code prompt that mounts
-  `/tmp/pcd-original/code/`. The existing-code prompt is for incremental update,
-  which is the mode we deliberately did not choose for v0.5.0.
-- Place into `/tmp/pcd-input/` alongside the v0.5.0 spec and the cli-tool
-  template: this file, `ROLE.md` declaring translator mode, and `prompt.md`.
-- Ensure the translator flow in `prompt.md` reads `*.decisions.hints.md` from the
-  input directory. If `prompt.md` only supports clean-from-scratch, either add a
-  step that reads this file, or accept clean-from-scratch (in which case this file
-  is human onboarding, not a translator input; PCD says it is ignored on clean
-  full regeneration).
-- After generation, fix the Go module path by hand (see Module path below); the
-  PCD record notes this is a systematic translator gap.
+Tags: `[spec]` decided by the spec (authoritative); `[pcd]` a PCD/environment
+constraint; `[recommended]` a sound default; `[extract]` read from existing code
+if present. The translator reads the spec, the template, and this file, and does
+NOT read old code, so prior bugs are not carried over. Fix the Go module path by
+hand after generation (it is a known translator gap).
 
 ---
 
-## Decisions to preserve
+## Module and toolchain
 
-### Module and toolchain
+- `[spec]` `go.mod` module line is exactly `github.com/mge1512/zypper-declarative`.
+  Verify and fix this post-generation before any push (systematic translator gap).
+- `[extract]` Go version floor: the version on the SLES 16.1 / OBS build host; pin
+  it in `go.mod`, do not invent one.
+- `[pcd]` No root at build time: module downloads run as the current user with
+  `GOPATH`/`GOCACHE` under home; vendor with `go mod vendor`; install no system
+  packages. Read-only package-DB queries (`rpm -q`/`-qf`/`-qa`/`-ql`/`--queryformat`)
+  ARE available to the build/test as an ordinary user and should be used to verify
+  the config_files behaviour during translation rather than deferring it.
 
-- `[spec]` Go module path is `github.com/mge1512/zypper-declarative` (META
-  `Module`). Set the `go.mod` `module` line to exactly this.
-- `[pcd]` Module path is a systematic translator gap and cannot be inferred from
-  the spec by the translator reliably. Verify and fix it post-generation before
-  any push.
-- `[extract]` Go language version floor for `go.mod`. Use what the existing code
-  used, or, if starting clean, the Go available on the SLES 16.1 / OBS build host;
-  pin it in `go.mod`. Do not invent a version.
-- `[pcd]` No root at build time. Module downloads run as the current user with
-  `GOPATH`/`GOCACHE` under the home directory. Vendor dependencies with
-  `go mod vendor`. Do not install system packages.
+## Source layout
 
-### Source layout
-
-- `[recommended]` Group code to mirror the spec's behaviour grouping, one internal
-  package per concern, so each spec behaviour maps to an obvious home. Reconcile
-  with the layout already in `/tmp/pcd-original/code/` and prefer the existing one
-  where it is at least as clear:
-
+- `[recommended]` One internal package per concern so each spec behaviour has an
+  obvious home:
   ```
-  cmd/zypper-declarative/main.go     thin entry: build args, call internal/cli
-  internal/cli/                      dispatch, key=value parsing, global contract
-  internal/manifest/                 data-model types; json+yaml (de)serialise;
-                                     resolve-format; canonical-model hashing
-  internal/state/                    describe-actual-state: the single live reader
-  internal/diff/                     compute-intent-diff, compute-drift (pure)
-  internal/converge/                 converge-packages, -files, -units
-  internal/txn/                      acquire-transaction-context + bindings
-  internal/record/                   load/write applied record
-  internal/meta/                     embedded spec SHA256 and version
+  cmd/zypper-declarative/main.go   thin entry: build args, call internal/cli
+  internal/cli/                    dispatch, key=value parsing, global contract
+  internal/manifest/               data model; json+yaml (de)serialise;
+                                   resolve-format; canonical-model hashing
+  internal/state/                  describe-actual-state: the single live reader
+  internal/diff/                   compute-intent-diff, compute-drift (pure)
+  internal/converge/               converge-packages, -files, -units
+  internal/txn/                    acquire-transaction-context + bindings
+  internal/record/                 load/write applied record
+  internal/meta/                   embedded spec SHA256 and version
   ```
+- `[spec]` `describe-actual-state` is the ONLY code that reads live system state;
+  every verb obtains actual state through it (or a supplied dump). No other package
+  reads the rpmdb, repos.d, systemd, or `/etc` directly. Keep it in `internal/state`.
+- `[spec]` `compute-drift` performs no I/O; keep `internal/diff` free of filesystem,
+  rpmdb, and process calls (pure comparison of two in-memory `Manifest` documents).
+- `[spec]` `resolve-format` is the single authority for choosing a serialisation;
+  put it in `internal/manifest` and route every read and write through it.
 
-- `[spec]` `describe-actual-state` is the single live-state reader: it is the only
-  code that reads live system state. `describe`, `diff`, `verify`, `status`, and
-  the post-converge check in `apply` all obtain actual state through it (or a
-  supplied dump). Keep it in one package (`internal/state`) and do not let any
-  other package read the rpmdb, repos.d, systemd, or `/etc` directly.
-- `[spec]` `compute-drift` performs no I/O; it compares two in-memory `Manifest`
-  documents. Keep `internal/diff` free of filesystem, rpmdb, and process calls.
-- `[changed-0.5.0]` `resolve-format` is a new shared behaviour and the single
-  authority for choosing a serialisation. Put it in `internal/manifest` and route
-  every read and write through it. Remove any per-call-site inline format logic
-  the old code had in the manifest loader.
+## Argument parsing and the global contract
 
-### Argument parsing and the global contract
+- `[spec]` Options are `key=value`, parsed by the tool; bare words are verbs;
+  options precede bare-word arguments; environment-variable control is forbidden.
+- `[spec]` All CONFIG knobs are also `key=value` options (`manifest-format`,
+  `repo-lock`, `content-store`, `keep-list`, `signature-verification`, `keyring`,
+  `activation-policy`, `applied-root`); a command-line option overrides the preset.
+- `[spec]` Global behaviour:
+  - bare invocation (no verb) prints usage to stdout, exits 0 (never runs a verb);
+  - `version` and `help` are bare-word commands (the canonical form): `version`
+    prints program name, version, and embedded spec hash to stdout, exits 0; `help`
+    prints usage to stdout, exits 0;
+  - `--version`, `--help`, `-h` are tolerated aliases for those two only; no option
+    uses POSIX `--flag` style;
+  - unknown verb / option / value, or a missing required value: usage to stderr,
+    exit 2.
 
-- `[spec]` Options are `key=value`, parsed by the tool itself; bare words are
-  verbs. Options precede bare-word arguments. Control via environment variables is
-  forbidden.
-- `[spec]` All CONFIG knobs are also accepted as `key=value` options
-  (`manifest-format`, `repo-lock`, `content-store`, `keep-list`,
-  `signature-verification`, `keyring`, `activation-policy`, `applied-root`), with
-  a command-line option overriding the corresponding preset value. The prior help
-  text already exposed these; keep them.
-- `[changed-0.5.0]` `[changed-0.5.1]` Global behaviour, do NOT reuse the old "no
-  verb -> exit 2", and do NOT make the flags the only form:
-  - bare invocation (no verb) prints usage to stdout and exits 0 (discovery, never
-    runs a default verb, never converges);
-  - `version` and `help` are bare-word global commands (the canonical form, per the
-    cli-tool template: bare-words supported, POSIX `--flag` forbidden for new
-    options): `version` prints program name, version, and embedded spec hash to
-    stdout and exits 0; `help` prints usage to stdout and exits 0;
-  - `--version`, `--help`, and `-h` are tolerated aliases for those two commands
-    only; no option uses POSIX `--flag` style (options are key=value only);
-  - unknown verb, unknown option, unknown value, or missing required value prints
-    usage to stderr, exits 2.
-  - The cli-tool milestones-hints M0 gate exercises the bare words
-    (`<binary> version`, `<binary> help` must exit 0); make sure both pass, not
-    just the flag forms.
+## Error and exit-code convention
 
-### Error and exit-code convention
-
-- `[spec]` Internal behaviours return errors to their caller; they do not exit.
-  Exit-code mapping lives only in the verb layer (`internal/cli`). In Go terms:
-  internal packages return `error` (or a typed `Diagnostic`), and only
-  `internal/cli`/`main` translate that to an exit code.
+- `[spec]` Internal behaviours return `error` (or a typed `Diagnostic`) to their
+  caller; only `internal/cli`/`main` map to an exit code.
 - `[spec]` Diagnostics carry `severity`, `domain`
   (`packages|repositories|files|units|manifest|transaction|invocation`), and
-  `message`. Write them to stderr, one per line. Normal output (summaries, the
-  diff plan, the status report, the describe document) goes to stdout.
+  `message`; one per line on stderr. Normal output (summaries, diff plan, status
+  report, describe document) goes to stdout.
 - `[spec]` Exit codes: 0 success (converged, no-op, matches declaration, or
   describe emitted); 1 logical failure (convergence failed and discarded; verify
-  drift; invalid, unsafe-YAML, or unverified manifest; state collection failed);
+  drift; invalid/unsafe-YAML/unverified manifest; state collection failed);
   2 invocation error (bad args; unknown format value; manifest unreadable;
-  insufficient privilege; transaction mechanism unavailable; output path
-  unwritable; malformed state dump).
-- `[extract]` The concrete Go error type or sentinel-error pattern the existing
-  code used for carrying `domain`. Preserve it if it was clean.
+  insufficient privilege; transaction unavailable; output path unwritable;
+  malformed state dump).
 
-### Manifest data model and serialisation
+## Manifest data model and serialisation
 
-- `[spec]` The manifest is a typed data model (the declarable Machinery subset:
-  packages, repositories, services, config_files, with the `ScopeWrapper`
-  `{_attributes, _elements}` idiom and underscore_style field names). JSON and
-  YAML are serialisations of that model. Keep the Go structs as the single model
-  and treat json/yaml strictly as edges.
-- `[spec]` Canonical serialisation is JSON (`format_version` 1). The applied
-  record is ALWAYS written as canonical JSON regardless of the desired manifest's
-  input format.
-- `[spec]` `resolve-format` precedence: explicit `format=` option, else the
-  operative file extension (`.json` -> json; `.yaml`/`.yml` -> yaml), else the
-  `manifest-format` default. The operative path is `manifest-path` on load,
-  `state-path` on verify, and `out` on describe. stdin/stdout with no explicit
-  format use the default.
-- `[changed-0.5.0]` `describe` output format follows `resolve-format(out)`. Do NOT
-  hardcode JSON output. `describe out=...yaml` must write YAML; `out=...json` must
-  write JSON; an explicit `format=` overrides the extension.
-- `[spec]` Manifest identity `desired_sha256` is the SHA256 of a canonical
-  serialisation of the parsed data model, format-independent, so JSON and YAML of
-  the same manifest hash identically.
-- `[recommended]` Define "canonical" concretely for the hash and apply it
-  consistently: object keys sorted, compact separators, UTF-8, scope `_elements`
-  sorted by their identity key (packages by name+arch, repositories by alias,
-  services by name, config_files by path). The on-disk `applied.json` may be
-  pretty-printed for readability, but the HASH is taken over the canonical compact
-  form. Sorting `_elements` before both serialising and hashing also makes
-  describe output deterministic and diffable.
-- `[spec]` YAML safe profile (only when YAML is enabled): a non-code-executing
-  loader, no arbitrary or executable tags, bounded or disabled anchor/alias
-  expansion, single-document streams only, explicit typing per the schema (no
-  implicit YAML coercion such as `NO` -> false or `1.10` -> float). A YAML input
-  needing any disabled feature is rejected with a manifest error.
-- `[recommended]` In Go, the translator selects a YAML approach that satisfies the
-  safe profile and records the exact library and configuration in
-  `TRANSLATION_REPORT.md`. One robust route is to convert YAML to JSON and decode
-  with `encoding/json` using `DisallowUnknownFields`, which rejects YAML-only
-  constructs and uses JSON typing; whichever route is chosen, it must demonstrably
-  meet every safe-profile constraint above. Do not pick a loader that executes
-  tags or expands aliases without a bound.
+- `[spec]` The manifest is one typed data model (the declarable Machinery subset:
+  packages, repositories, services, config_files; `ScopeWrapper`
+  `{_attributes, _elements}`; underscore_style field names). JSON and YAML are
+  serialisations of it; keep the Go structs as the single model, json/yaml as edges.
+  Every struct in JSON output needs explicit `json:` tags (underscore_style keys).
+- `[spec]` Canonical serialisation is JSON (`format_version` 1). The applied record
+  is ALWAYS canonical JSON regardless of the desired manifest's input format.
+- `[spec]` Each scope's `_attributes` serialises as a JSON object, empty `{}` when
+  it has no attributes, NEVER `null`. In YAML, quote string-typed scalars
+  (`mode: "0600"`, `sha256`, `target`).
+- `[spec]` `resolve-format` precedence: explicit `format=`, else the operative file
+  extension (`.json`->json, `.yaml`/`.yml`->yaml), else the `manifest-format`
+  default. Operative path is `manifest-path` on load, `state-path` on verify, `out`
+  on describe; stdin/stdout with no explicit format use the default. `describe`
+  output follows `resolve-format(out)`; do not hardcode JSON.
+- `[spec]` `desired_sha256` is the SHA256 of a canonical serialisation of the
+  parsed model, format-independent (JSON and YAML of the same manifest hash equal).
+  `[recommended]` Define canonical concretely: keys sorted, compact separators,
+  UTF-8, `_elements` sorted by identity key (packages by name+arch, repositories by
+  alias, services by name, config_files by path). On-disk `applied.json` may be
+  pretty-printed, but the hash is over the canonical compact form. Sorting
+  `_elements` also makes describe output deterministic and diffable.
+- `[spec]` `meta.generator` is `zypper-declarative <version>`, so independent
+  implementations of the same spec version emit the same string.
+- `[spec]` YAML safe profile (only when YAML enabled): non-code-executing loader,
+  no arbitrary/executable tags, bounded or disabled alias expansion, single
+  document, explicit typing per schema (no implicit coercion such as `NO`->false,
+  `1.10`->float). A YAML input needing any disabled feature is a manifest error.
+  `[recommended]` One robust Go route: convert YAML to JSON and decode with
+  `encoding/json` `DisallowUnknownFields`; whichever route, it must meet every
+  safe-profile constraint; record the library and config in `TRANSLATION_REPORT.md`.
 
-### Reading actual state and the empty-scope rule
+## Reading actual state and the empty-scope rule
 
-- `[changed-0.5.0]` Repositories actual state is read from the on-disk
-  `<root>/etc/zypp/repos.d/*.repo` files (INI sections: alias, name, baseurl
-  mapped to `RepositoryRecord.url`, type, enabled, gpgcheck, autorefresh,
-  priority). Do NOT read repositories via a network refresh or a privileged cache.
-  This is what fixed the empty-`repositories` bug: those files are world-readable
-  in the normal case.
-- `[changed-0.5.0]` A scope source that cannot be read is NEVER represented as an
-  empty `_elements`. Under `on-unreadable=error` (default) return an error naming
-  the source; under `on-unreadable=warn` omit the affected scope and emit a
-  diagnostic. A genuinely-empty readable scope is OMITTED from describe output, so
-  a bootstrapped manifest leaves it unmanaged rather than asserting deletion.
-- `[spec]` The `describe` verb passes `on_unreadable` through from its option;
-  every other caller (apply, diff, status, verify reading live state) passes
-  `on_unreadable=error`.
-- `[spec]` `[changed-0.5.2]` `[changed-0.6.3]` `config_files` actual state is the
-  changed-from-package and unpackaged `/etc` files, excluding package-pristine
-  files, the keep-list, and `/etc/etc.syncpoint`. `package_name` is populated from
-  rpm; `content_ref` is empty in actual state. Bound the work to `/etc`: do not
-  read, hash, or verify anything outside `/etc`, and do not run a whole-system
-  verification such as `rpm -Va` (it is the cause of the slow describe). Treat a
-  verifier's non-zero exit (it returns non-zero when it finds changed files) as the
-  normal changed-file result, not an unreadable source.
-  CRITICAL (the v0.6.2 Go build got this wrong, exposed by diffing against the
-  C++/libzypp build): you MUST actually determine each `/etc` entry's owning
-  package and its package-recorded baseline (digest, mode, owner, group), and
-  SUPPRESS package-pristine entries, emitting only unpackaged or changed-from-package
-  ones. The v0.6.2 build mislabelled ~1700 package-owned files as unpackaged
-  (empty `package_name`) and over-emitted them, because the ownership/digest lookup
-  was not actually performed. Do the lookup: for each enumerated `/etc` path, query
-  rpm for the owning package and the recorded file digest/mode/owner (e.g. via the
-  rpm file database; `rpm -qf` for ownership and the recorded digest for the
-  baseline), compare, and suppress when all of digest/target+mode+owner+group match.
-  Never default a path to unpackaged because the lookup was skipped. The C++ build
-  (libzypp) is the behavioural oracle for this scope.
-- `[spec]` `[changed-0.6.4]` Pristine rule refinements: (1) judge each `/etc` path
-  INDEPENDENTLY against its own owning package; never collapse a symlink with the
-  file it points to (suppressing a pristine symlink must NOT suppress its target
-  file; the target is a separate path judged against its own owner, often a
-  different package, e.g. `/etc/pam.d/common-auth` owned by `pam` vs
-  `common-auth-pc` owned by `pam-config`); never dereference a symlink to judge it.
-  (2) A symlink is pristine when its TARGET matches the package-recorded target
-  (do not compare a symlink's mode); a regular file when digest+mode+owner+group
-  match. An owned distro symlink with the package's target (the `/etc/X11/xim.d/*/
-  40-ibus` links) is suppressed. (3) `package_name` is the BARE name
-  (`openssh-server`), never the NEVRA; `rpm -qf` prints the full NEVRA, so reduce
-  it to the name. (4) Do the lookups in BULK: one `rpm -qf` over all enumerated
-  `/etc` paths (it accepts many path arguments and prints owners line-by-line) and
-  a bulk verification of the owning packages, NOT `rpm -qf`/`rpm -V` per file. This
-  is the performance fix; the result is unchanged and the work stays bounded to
-  `/etc`.
-- `[spec]` `[changed-0.6.5]` Reproducibility rule for the hard cases (emit a path
-  exactly when a fresh package install would not reproduce its on-disk state). The
-  batched `rpm` query MUST include the file flags so the ghost bit is visible, for
-  example `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS}
-  %{FILELINKTOS} %{FILEMODES}\n]'` over the enumerated paths (FILEFLAGS bit 64 =
-  ghost, bit 1 = config). Then: (a) a `%ghost` path (flags has the ghost bit) with
-  real on-disk content -> EMIT (a fresh install ships no content for it; e.g.
-  `/etc/pam.d/common-auth-pc`, shipped 0-byte ghost, holds the real 462 bytes on
-  disk); (b) a ghost that is empty on disk and empty in the baseline -> SUPPRESS;
-  (c) a path whose on-disk type differs from the recorded type (recorded a regular
-  file, disk has a symlink) -> EMIT as the on-disk type (e.g.
-  `/etc/pam.d/common-auth`), judged against its own package, not collapsed with the
-  target; (d) otherwise pristine iff digest+mode+owner+group (file) or recorded
-  linkto (symlink) match -> SUPPRESS, else EMIT. A ghost is never pristine-by-digest
-  against a shipped baseline (it has none).
-- `[lesson]` `[CRITICAL-0.6.5]` Bulk ownership lookup MUST join owner-to-path BY
-  THE PATH, never by output row position. The first v0.6.5 Go build scrambled
-  every `package_name` (`/etc/ssh/sshd_config` -> `speech-dispatcher`,
-  `/etc/pam.d/common-auth` -> `libldap-data`, etc.): the package names were real
-  but mapped to the wrong files, and that wrong ownership then corrupted the whole
-  pristine comparison (912 emitted vs the correct ~460-530, because every file was
-  compared against some other package's baseline). The cause is treating a bulk
-  `rpm -qf path1 path2 ...` as if it returns exactly one answer block per input
-  path in input order. It does NOT: rpm may reorder, deduplicate when several
-  paths share an owner, collapse, or drop unowned paths, so a positional zip of
-  the input list against the output lines is misaligned. Correct approaches, pick
-  one and verify alignment:
-  - Query so each result row carries its own path and build a `path -> {package,
-    flags, digest, linkto, mode, owner, group}` map, then look up each enumerated
-    `/etc` path in that map (join by path string). For example run `rpm -qf` per
-    path is correct-but-slow; to batch, query the OWNING PACKAGES' file lists once
-    (`rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS} %{FILELINKTOS}
-    %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME}\n]' <pkglist>`) which emits the
-    absolute path on every line, and index by that path. This gives both the bulk
-    speed and a path-keyed map with no positional assumption.
-  - First resolve ownership for all paths (`rpm -qf` returning package per path,
-    parsed so each owner is tied to its queried path, not zipped by position), then
-    for the distinct owning packages pull their per-file baseline via the package
-    file-list query above, and join everything on the absolute path.
-  Do NOT assume `rpm -qf a b c` prints three blocks in the order a, b, c. Always
-  key by the path that appears in the output. Add a self-check: for a few known
-  files (e.g. `/etc/ssh/sshd_config` must map to `openssh-server`) assert the
-  mapping in tests.
-- `[lesson]` `created_at` must be a real RFC3339 timestamp. The v0.6.5 Go build
-  emitted an empty string; emit the actual wall-clock time (e.g. `time.Now()` in
-  RFC3339). The field is informational and excluded from the hash and comparison,
-  but it must be present and correct (Rust emits it correctly; match that).
-- `[spec]` `[changed-0.6.2]` Filesystem object model. The `/etc` walk (and the
-  scope=full walk over `/usr`/`/boot`) must recurse into directories and classify
-  each entry by its own type using lstat (do NOT follow symlinks, do NOT os.ReadFile
-  a path before classifying). In Go: `filepath.WalkDir` or a manual stack with
-  `os.Lstat`; for each entry, `d.Type()&fs.ModeSymlink` -> read target with
-  `os.Readlink` (store verbatim, do not `filepath.Abs`/`Clean` it), regular file
-  -> hash, `IsDir` -> descend (emit nothing), anything else (device/fifo/socket)
-  -> skip. The original crash was calling a file read on a directory; classify
-  first. A directory, symlink, or special file is never an unreadable-source
-  error. Records carry a `target` field (verbatim symlink target, "" for
-  non-links) with the type/sha256/target consistency from TYPES. In compute-drift,
-  type is part of identity: differing type -> modified; same type compare sha256
-  (file) or target (link). Hardlinks: treat per path by content+type, do not
-  attempt to detect or preserve hardlink identity.
-- `[spec]` `[changed-0.7.0-reserved]` converge-files does NOT yet create/update/
-  remove symlinks or handle type transitions; that is reserved for the apply
-  milestone. When implemented: a declared type "link" is converged by its target;
-  a declared-vs-actual type mismatch at a path is a HARD ERROR that aborts the
-  transaction (no silent destructive rewrite). Do not silently delete a directory
-  tree to write a file or vice versa.
-- `[spec]` `[changed-0.6.0]` Full-scan integrity (`scope=full`, on `describe` and
-  `verify` only; default `etc` scans nothing outside `/etc`). Under `full`, scan the
-  package-managed trees outside `/etc` (`/usr`, the usr-merge roots `/bin` `/sbin`
-  `/lib` `/lib64`, and `/boot`; exclude `/opt` and the virtual, runtime, and
-  mutable-data trees; do not cross into unlisted mounts; honour the keep-list) and
-  emit two observational scopes: `changed_managed_files` (packaged files outside
-  `/etc` differing from the package baseline, with a `changes` list) and
-  `unmanaged_files` (files no package owns). These are observational: do NOT feed
-  them into `compute-intent-diff` or convergence, and never write them to the
-  applied record; `compute-drift` surfaces them under `scope=full` as
-  `managed_files_modified` and `unmanaged_files_present`. The scan is expensive
-  (stat + hash the trees, verify packaged files); it is the part deliberately kept
-  out of the default. In Go, find additions by walking the trees and subtracting
-  the rpmdb-owned path set, and find modifications by comparing packaged file
-  digests to the rpmdb baseline (or `rpm -V` scoped to those trees); do not shell
-  out to a whole-system `rpm -Va`. Scope keys are underscore_style
-  (`changed_managed_files`, `unmanaged_files`), matching Machinery's JSON keys.
+- `[spec]` Repositories actual state is read from `<root>/etc/zypp/repos.d/*.repo`
+  (INI: alias, name, baseurl->`RepositoryRecord.url`, type, enabled, gpgcheck,
+  autorefresh, priority). Not via a network refresh or privileged cache (those
+  files are world-readable).
+- `[spec]` A scope source that cannot be read is NEVER an empty `_elements`. Under
+  `on-unreadable=error` (default) return an error naming the source; under
+  `on-unreadable=warn` omit the scope and emit a diagnostic. A genuinely-empty
+  readable scope is OMITTED from describe (so a bootstrapped manifest leaves it
+  unmanaged). `describe` passes its `on_unreadable` option through; every other
+  caller passes `on_unreadable=error`.
 
-### Integration with the system (Go-specific)
+## config_files: ownership and the pristine/reproducibility rule
 
-- `[recommended]` Drive `zypper`, `snapper`, `systemctl`, and `rpm` by executing
-  their command-line interfaces (`os/exec`) and parsing their output, rather than
-  binding libzypp via cgo. This keeps `CGO_ENABLED=0` and yields the single static
-  binary the spec calls for, and matches "no runtime deps of its own beyond the
-  tools it drives". Repositories are read as files directly (no exec needed).
-  `[extract]` Confirm what the existing code did; if it used cgo/libzypp, that is a
-  decision to revisit against the static-binary goal, not to preserve by default.
+This scope is the changed-from-package and unpackaged `/etc` files, excluding
+package-pristine files, the keep-list, and `/etc/etc.syncpoint`. `content_ref` is
+empty in actual state. This is the highest-risk behaviour; verify it during
+translation using read-only rpm (available to the build), and ship the two
+self-checks below as tests.
+
+- `[spec]` Bound the work to `/etc`: enumerate `/etc` and consult package metadata
+  only for those paths. Do not read, hash, or verify anything outside `/etc`, and
+  do not run a whole-system verification (`rpm -Va`). A package verifier exiting
+  non-zero (it does so when it finds changed files) is the normal result, not an
+  unreadable source.
+- `[spec]` Determine each path's owning package and its package-recorded baseline
+  (digest, link target, mode, owner, group, and the file FLAGS including the GHOST
+  bit). Never default a path to unpackaged because a lookup was skipped.
+- `[spec]` BULK lookup, keyed BY PATH not by row position. `rpm -qf path1 path2 ...`
+  does not return one block per input path in order (rpm reorders, deduplicates
+  when paths share an owner, and drops unowned paths), so a positional zip
+  misaligns owners to files. Instead, query the owning packages' file lists, which
+  emit the absolute path on every line:
+  ```
+  rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS} %{FILELINKTOS} %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILEDIGESTALGO}\n]' <pkglist>
+  ```
+  and build a `path -> {package, flags, digest, algo, linkto, mode, owner, group}`
+  map indexed by that path; look up each `/etc` path in the map. Resolve ownership
+  with `rpm -qf` first if needed, tying each owner to its queried path, never
+  zipping. (Per-path `rpm -qf` is correct but slow; batch as above.)
+- `[spec]` Judge each `/etc` path INDEPENDENTLY against its OWN owning package.
+  Never collapse a symlink with the file it points to: suppressing a pristine
+  symlink must not suppress its target, which is judged separately against its own
+  owner (often a different package, e.g. `/etc/pam.d/common-auth` owned by `pam`
+  vs `common-auth-pc` owned by `pam-config`). Never dereference a symlink to judge
+  it.
+- `[spec]` `package_name` is the BARE name (`openssh-server`), never the NEVRA
+  (`rpm -qf` prints NEVRA; reduce it).
+- `[spec]` Emission test (reproducibility): emit a path exactly when a fresh
+  install of its owning package (or no owning package) would NOT reproduce its
+  on-disk state. Concretely:
+  - unpackaged (no owner) -> EMIT;
+  - regular file: pristine iff on-disk digest AND mode/owner/group match the
+    recorded baseline -> SUPPRESS; else EMIT;
+  - symlink: pristine iff on-disk target matches the recorded target (mode NOT
+    compared) -> SUPPRESS; else EMIT. An owned distro symlink with the package's
+    target (the `/etc/X11/xim.d/*/40-ibus` links) is suppressed;
+  - type mismatch (recorded type differs from on-disk type, e.g. recorded a regular
+    file, disk has a symlink) -> EMIT as the on-disk type, judged against its own
+    package;
+  - ghost (FLAGS has the ghost bit; no shipped content baseline) with real on-disk
+    content -> EMIT (a fresh install ships no content; e.g. `/etc/pam.d/common-auth-pc`,
+    a 0-byte ghost holding the real bytes); ghost empty on disk with empty baseline
+    -> SUPPRESS. A ghost is never pristine-by-digest.
+- `[spec]` Digest comparison is algorithm-aware and normalised: read the recorded
+  algorithm (`%{FILEDIGESTALGO}`, 8=SHA256, 1=MD5) and hash the on-disk file with
+  the SAME algorithm; compare lowercase, trimmed. An EMPTY recorded digest
+  (directories, symlinks, ghosts) is no-baseline, route through the type/ghost rule,
+  not a mismatch. The emitted `sha256` is always the real SHA256 of the on-disk
+  file regardless of the recorded algorithm.
+- `[spec]` A file whose CONTENT cannot be read (a protected file an unprivileged
+  reader cannot open) is an `on_unreadable` condition, never silently classified as
+  changed-from-package. Distinguish "read the file, digest differs" (emit) from
+  "could not read the file" (on_unreadable). Note `rpm -V` itself reads content and
+  trips on protected files, so prefer the header-metadata route above for the
+  baseline.
+- `[spec]` Two required self-check tests (runnable with read-only rpm during
+  translation): (1) ownership resolves a known file to its known package
+  (`/etc/ssh/sshd_config` -> `openssh-server`); (2) a known-pristine packaged file
+  (e.g. an `/etc/ImageMagick-7-SUSE/*.xml`) is ABSENT from config_files. The first
+  catches a misaligned join; the second catches a broken digest comparison.
+
+## Filesystem object model (the /etc and full-scan walks)
+
+- `[spec]` Recurse into directories and classify each entry by its own type using
+  lstat (do NOT follow symlinks, do NOT read a path before classifying). In Go:
+  `filepath.WalkDir` or a manual stack with `os.Lstat`; symlink
+  (`d.Type()&fs.ModeSymlink`) -> `os.Readlink`, store verbatim (no `Abs`/`Clean`);
+  regular file -> hash; directory -> descend, emit nothing; device/fifo/socket ->
+  skip. A directory, symlink, or special file is never an unreadable-source error.
+  Records carry a `target` field (verbatim symlink target, "" for non-links).
+  Hardlinks: treat per path by content+type, do not detect or preserve hardlink
+  identity.
+- `[spec]` In `compute-drift`, type is part of identity: differing type -> modified;
+  same type compares sha256 (file) or target (link).
+
+## Full-scan integrity (scope=full)
+
+- `[spec]` On `describe` and `verify` only; default `etc` scans nothing outside
+  `/etc`. Under `full`, scan the package-managed trees (`/usr`, the usr-merge roots
+  `/bin` `/sbin` `/lib` `/lib64`, `/boot`; exclude `/opt` and the virtual/runtime/
+  mutable-data trees; do not cross unlisted mounts; honour the keep-list) and emit
+  two observational scopes: `changed_managed_files` (packaged files outside `/etc`
+  differing from baseline, with a `changes` list) and `unmanaged_files` (files no
+  package owns). Observational: do NOT feed them to `compute-intent-diff` or
+  convergence, and never write them to the applied record; `compute-drift` surfaces
+  them under `scope=full` as `managed_files_modified` and `unmanaged_files_present`.
+  In Go, find additions by walking and subtracting the rpmdb-owned path set, and
+  modifications by comparing packaged digests to the baseline; do not run
+  whole-system `rpm -Va`. Scope keys are underscore_style.
+
+## Integration with the system (Go-specific)
+
+- `[recommended]` Drive `zypper`, `snapper`, `systemctl`, and `rpm` via `os/exec`
+  and parse their output, rather than binding libzypp via cgo; this keeps
+  `CGO_ENABLED=0` and the single static binary. Repositories are read as files (no
+  exec). `[extract]` If existing code used cgo/libzypp, revisit against the
+  static-binary goal rather than preserving it by default.
 - `[spec]` The transaction binding is abstract: `acquire-transaction-context`
   resolves `auto|external|internal` and returns a context with a writable `root`
-  and `opened_here`. The convergence code path is identical regardless of binding.
-  Keep the binding isolated in `internal/txn` so the rest of the code is unaware
-  of which mechanism opened the snapshot.
-- `[spec]` Unit enablement under a root uses offline enablement (e.g.
-  `systemctl --root <ctx.root> ...` semantics) for `converge-units`, and a query
-  for `describe-actual-state`; do not rely on first-boot preset evaluation.
+  and `opened_here`; the convergence path is identical regardless. Keep the binding
+  isolated in `internal/txn`.
+- `[spec]` Unit enablement under a root uses offline enablement
+  (`systemctl --root <ctx.root> ...`) for `converge-units`, and a query for
+  `describe-actual-state`; do not rely on first-boot preset evaluation.
+- `[spec]` `[reserved-0.7.0]` `converge-files` does NOT yet create/update/remove
+  symlinks or handle type transitions (reserved for the apply milestone). When
+  implemented: a declared type "link" is converged by its target; a declared-vs-
+  actual type mismatch at a path is a HARD ERROR that aborts the transaction (no
+  silent destructive rewrite).
 
-### Spec-hash embedding and provenance
+## Spec-hash embedding and provenance
 
 - `[spec]` Embed the SHA256 of `zypper-declarative.spec.md` in every produced
-  artifact: source headers, the `--version` output, `TRANSLATION_REPORT.md`
-  (`Spec-SHA256:`), the RPM spec comment, the DEB control `X-PCD-Spec-SHA256:`,
-  the Containerfile label, and the Makefile variable.
-- `[recommended]` In Go, keep the hash and version in `internal/meta`, injected at
-  build via `-ldflags -X` or as a generated file consumed by `go:embed`. `--version`
-  prints `zypper-declarative <version> spec:<sha256>`.
+  artifact: source headers, `--version` output, `TRANSLATION_REPORT.md`
+  (`Spec-SHA256:`), the RPM spec comment, the DEB control `X-PCD-Spec-SHA256:`, the
+  Containerfile label, the Makefile variable. `[recommended]` Keep hash and version
+  in `internal/meta`, injected via `-ldflags -X` or `go:embed`. `--version` prints
+  `zypper-declarative <version> spec:<sha256>`. `created_at` is a real RFC3339
+  timestamp (e.g. `time.Now()`), informational and excluded from the hash/comparison
+  but present and correct.
 
-### Build and packaging
+## Build and packaging
 
-- `[spec]` Deliverable is a single static binary, no runtime deps of its own,
-  surfaced as a zypper subcommand (an executable in `/usr/lib/zypper/commands`)
-  and invocable directly. Final container stage is `FROM scratch`.
-- `[spec]` Installation is via an OBS package on build.opensuse.org. No
-  curl-based installation.
-- `[spec]` Signal handling: clean exit on SIGTERM and SIGINT; an interrupted
-  `apply` discards the transaction and leaves no new snapshot as the default boot
-  target. Document the approach in `TRANSLATION_REPORT.md`.
-- `[extract]` The existing `Makefile`/packaging targets and any OBS `.spec`
-  scaffolding worth keeping.
+- `[spec]` Single static binary (`CGO_ENABLED=0`; final container stage
+  `FROM scratch`), no runtime deps of its own, surfaced as a zypper subcommand (an
+  executable in `/usr/lib/zypper/commands`) and invocable directly.
+- `[spec]` Installed via an OBS package on build.opensuse.org; no curl-based
+  installation.
+- `[spec]` Signal handling: clean exit on SIGTERM/SIGINT; an interrupted `apply`
+  discards the transaction and leaves no new snapshot as the default boot target.
+  Document the approach in `TRANSLATION_REPORT.md`.
 
-### Testing boundary (aligns with your test-author methodology)
+## Testing boundary
 
-- `[pcd]` Tests are black-box: they invoke the built binary through the DEPLOYMENT
-  interface using `os/exec` (`exec.Command`) and assert on stdout, stderr, and
-  exit code. Tests must NOT call internal Go functions or simulate the binary's
-  behaviour through wrapper code. The new v0.5.0 examples (bare invocation,
-  unknown verb, `describe out=...yaml`, `verify state-path=...yaml`, unreadable
-  and genuinely-empty repositories) are black-box assertions of exactly this kind.
-
----
-
-## Do NOT carry these over from the existing code (v0.5.0 through v0.6.5 changes)
-
-1. `describe` writing JSON regardless of the `out` extension. Output now follows
-   `resolve-format`.
-2. `repositories` read via a method that returns empty for an unprivileged or
-   uncached run, and any code path that emits an empty scope on a read failure.
-   Read repos.d files; never emit empty for unreadable; omit genuine-empty.
-3. Bare `zypper declarative` exiting 2. It now prints usage to stdout and exits 0.
-4. Any inline, per-call-site format selection in the manifest loader. It now goes
-   through the shared `resolve-format`.
-5. (v0.5.1) `version` and `help` as bare words returning "unknown verb" (exit 2)
-   while only `--version` / `--help` work. The bare words are now the canonical
-   global commands and exit 0; the flags are tolerated aliases.
-6. (v0.5.2) Treating a package-verification command's non-zero exit (it returns
-   non-zero when it finds changed files, i.e. the normal case) as an unreadable
-   source. Consume the verifier output; only a genuine access or I/O failure is
-   unreadable.
-7. (v0.5.2) Running a whole-system package verification (for example `rpm -Va`)
-   for config_files. Bound the work to `/etc`: enumerate `/etc`, and consult
-   package metadata only for the `/etc` files found (for example query the
-   packaged `/etc` file digests from the rpmdb and compare, or verify only the
-   packages that own an `/etc` file). Do not read, hash, or verify files outside
-   `/etc`. This is both correctness and the performance fix (the slow full-system
-   verification scales with the installed base; the bounded read scales with the
-   size of `/etc`).
-8. (v0.6.0) The integrity scan (`scope=full`) is opt-in and on `describe`/`verify`
-   only; do not engage it by default or on `status`/`diff`/`apply`. Its two scopes
-   are observational; never feed them to convergence or write them to the applied
-   record.
-9. (v0.6.1) `verify` requiring an applied record even when a reference
-   `manifest-path` is supplied, and `verify`/`diff` always reading the live system.
-   When `manifest-path` (reference) and/or `state-path` (actual) are given, route
-   `compute-drift` over the files: `verify manifest-path=X state-path=Y` and
-   `diff manifest-path=X state-path=Y` must be pure two-file comparisons that read
-   neither the live system nor any applied record. `compute-drift` is already pure;
-   this is verb-layer routing.
-10. (v0.6.1) `apply` (via `load-desired-manifest`) silently accepting a manifest
-    that carries a non-empty observational scope. Reject it with a manifest error
-    so a raw `describe scope=full` dump cannot be applied as a baseline; an empty
-    or absent observational scope is tolerated and dropped.
-11. (v0.6.3) mislabelling package-owned `/etc` files as unpackaged and over-emitting
-    package-pristine files (the actual v0.6.2 Go bug). Do real rpm ownership/digest
-    lookup and suppress pristine entries; emit only unpackaged or changed-from-package.
-12. (v0.6.3) serialising a scope's `_attributes` as `null`; it is always a JSON
-    object, empty `{}`. Quote string-typed YAML scalars (`mode: "0600"`).
-13. (v0.6.3) anything that makes describe output diverge from the C++ and Rust
-    builds on the same host (after excluding `meta.created_at`); the three-way
-    diff is a consistency oracle. `meta.generator` must be `zypper-declarative
-    <version>` so it matches across implementations.
-14. (v0.6.4) collapsing a symlink with its target file (judge each `/etc` path
-    independently against its own owning package; suppressing a pristine link must
-    not suppress its target).
-15. (v0.6.4) comparing a symlink's mode for pristine-ness (a link is pristine iff
-    its target matches the package); over-comparing files is fine, over-comparing
-    links wrongly emits them.
-16. (v0.6.4) putting the full NEVRA in `package_name` (bare name only); and doing
-    `rpm -qf`/`rpm -V` per file instead of in bulk (batch the queries).
-17. (v0.6.5) omitting `%{FILEFLAGS}` from the batched query (the ghost bit is
-    required); suppressing a content-bearing ghost or a type-mismatched path (both
-    EMIT); treating a ghost as pristine-by-digest.
-18. (v0.6.5) joining bulk `rpm -qf` output to paths BY POSITION (the build did this
-    and scrambled every package_name); always key the owner/baseline map by the
-    absolute path in the output, never by row order. Emitting an empty `created_at`
-    (emit a real RFC3339 timestamp).
-
-## Slots to fill from /tmp/pcd-original/code/
-
-- `[extract]` Actual package names and file split, if they differ from the
-  recommended layout and are at least as clear.
-- `[extract]` The Go version floor and any direct dependencies already vendored.
-- `[extract]` The error-carrying type or pattern used for `domain`.
-- `[extract]` The YAML library already chosen, if any, and whether it meets the
-  safe profile (replace it if it does not).
-- `[extract]` Existing Makefile/OBS packaging targets, container build, and the
-  spec-hash injection mechanism.
-- `[extract]` Whether system integration was exec-based or cgo/libzypp, and the
-  decision to keep or revisit it against the static-binary goal.
-
----
+- `[pcd]` Tests are black-box: invoke the built binary through the DEPLOYMENT
+  interface via `os/exec` and assert on stdout, stderr, and exit code. Tests must
+  NOT call internal Go functions or simulate the binary. The config_files
+  self-checks above and the v0.5.0 examples (bare invocation, unknown verb,
+  `describe out=...yaml`, `verify state-path=...yaml`, unreadable and genuinely-empty
+  repositories) are black-box assertions of exactly this kind.
 
 ## Changelog
 
-- 2026-06-01: Fixed (hints only, no spec change) the bulk-lookup defect the first
-  v0.6.5 Go build exhibited: it joined bulk `rpm -qf` output to paths by row
-  position and scrambled every `package_name` (e.g. `/etc/ssh/sshd_config` ->
-  `speech-dispatcher`), which corrupted the pristine comparison and over-emitted
-  (912 vs the correct ~460-530). Added a CRITICAL lesson: key the ownership and
-  baseline map by the absolute path in the query output, never by row order; query
-  the owning packages' file lists (which emit the path on every line) and join on
-  path. Re-added the real-RFC3339 `created_at` requirement (the build emitted an
-  empty string). Items 18 added to the do-not-carry list. The structural v0.6.5
-  rule landed correctly in that build (pam pair emitted with the right shape,
-  services present, bare names, gross pristine bug gone); only ownership alignment
-  and the timestamp need fixing.
-- 2026-06-01: Updated to spec v0.6.5. Added the reproducibility rule for the
-  ghost/type-mismatch cases: the batched `rpm` query must include `%{FILEFLAGS}`
-  so the ghost bit is visible; emit content-bearing ghosts and type-mismatched
-  paths, suppress empty-ghost-matching-empty. Item 17 added to the do-not-carry
-  list.
-- 2026-06-01: Updated to spec v0.6.4. Added the pristine-rule refinements from the
-  three-way comparison: independent per-path judgement (no symlink/target
-  collapse), symlink pristine-by-target-only, bare `package_name` (not NEVRA), and
-  bulk `rpm -qf`/verification instead of per-file (the performance fix). Items
-  14-16 added to the do-not-carry list.
-- 2026-06-01: Updated to spec v0.6.3 after diffing the Go and C++ describe output
-  on milos. Headline: the Go build's config_files reader mislabelled ~1700
-  package-owned `/etc` files as unpackaged and over-emitted package-pristine files,
-  because the ownership/digest lookup was not actually performed; the entry and the
-  do-not-carry list now require real rpm ownership/digest determination and
-  suppression of pristine entries (the C++/libzypp build is the oracle). Also added:
-  `_attributes` `{}`-not-null and YAML string quoting, `meta.generator` carrying the
-  version, and the three-way cross-implementation diff as a consistency oracle.
-- 2026-05-29: Initial Go decisions hints for the v0.5.0 guided regeneration.
-  Captures the spec-determined architecture (single live-state reader,
-  pure compute-drift, shared resolve-format, abstract transaction binding,
-  applied-record-always-JSON, canonical-model hashing), the Go-specific defaults
-  (exec-based integration for a static CGO_ENABLED=0 binary, internal package
-  layout, spec-hash in internal/meta), the v0.5.0 behaviours that must not be
-  inherited from the prior buggy code, and the slots to extract from the existing
-  implementation.
+- 2026-06-01: Compressed losslessly from the accreted v0.5.0-v0.6.5 file (same rule
+  coverage; post-mortem narration and the per-build changelog diary removed; the
+  duplicate do-not-carry list folded into the rules above). Tracks spec v0.6.5:
+  reproducibility emission rule (type-mismatch and content-bearing ghost emit,
+  empty-ghost suppress), algorithm-aware digest comparison, bulk ownership keyed by
+  path, protected-file handling via on_unreadable.
