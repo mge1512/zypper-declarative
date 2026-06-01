@@ -2,17 +2,17 @@ Source: zypper-declarative
 Section: admin
 Priority: optional
 Maintainer: Matthias G. Eckermann <pcd@mailbox.org>
-Build-Depends: debhelper-compat (= 13), golang-go (>= 2:1.23~), pandoc
+Build-Depends: debhelper-compat (= 13), golang-go, pandoc
 Standards-Version: 4.6.2
 Homepage: https://github.com/mge1512/zypper-declarative
-X-PCD-Spec-SHA256: b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+X-PCD-Spec-SHA256: f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 
 Package: zypper-declarative
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Declarative reconciling converger surfaced as a zypper subcommand
- zypper-declarative converges a SUSE system to a desired manifest (the
- declarable subset of the SUSE Machinery system description: packages,
- repositories, services, and /etc config files) inside a single snapshot
- transaction, recording what was applied. It provides the verbs apply, diff,
- verify, status, and describe. Idempotent and read-only except for apply.
+Description: Reconciling declarative converger surfaced as a zypper subcommand
+ zypper-declarative converges a system to a desired manifest inside a single
+ snapshot transaction, recording what was applied. The manifest is the
+ declarable subset of the SUSE Machinery system description (packages,
+ repositories, services, config_files), serialised as canonical JSON
+ (format_version 1) or, optionally, YAML.

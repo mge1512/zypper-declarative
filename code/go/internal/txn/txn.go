@@ -1,18 +1,18 @@
-// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 //
-// Package txn implements acquire-transaction-context: it resolves the
-// abstract transaction binding (auto|external|internal) and yields a context
-// the convergence domains operate within. The binding is kept isolated here so
-// the rest of the code is unaware of which mechanism opened the snapshot.
+// Package txn implements acquire-transaction-context: it resolves the abstract
+// transaction binding (auto | external | internal) and yields a context the
+// convergence domains operate within. The binding is isolated here so the rest
+// of the code is unaware of which mechanism opened the snapshot.
 package txn
 
 import (
 	"os"
 
-	"github.com/mge1512/zypper-declarative/internal/manifest"
+	"github.com/mge1512/zypper-declarative/internal/diag"
 )
 
-// Mode is the TransactionMode.
+// Mode is the transaction binding mode.
 type Mode string
 
 const (
@@ -21,89 +21,81 @@ const (
 	ModeInternal Mode = "internal"
 )
 
-// Context is the resolved TransactionContext.
+// ParseMode validates a mode= value.
+func ParseMode(s string) (Mode, *diag.Diagnostic) {
+	switch Mode(s) {
+	case ModeAuto, ModeExternal, ModeInternal:
+		return Mode(s), nil
+	default:
+		return "", diag.New(diag.DomainInvocation, "unknown transaction mode %q", s)
+	}
+}
+
+// Context is the resolved transaction context.
 type Context struct {
 	Mode       Mode
-	Root       string // mount point of the new snapshot's root tree
-	OpenedHere bool   // true if this tool opened the transaction
+	Root       string
+	OpenedHere bool
 }
 
-// Binding abstracts the two mechanisms. detectInside reports whether the
-// process already runs inside a fresh snapshot transaction; externalRoot
-// returns the writable new-generation root presented by an external opener (or
-// "" if none); openInternal opens a new snapshot transaction and returns its
-// mount point.
-type Binding interface {
-	DetectInside() bool
-	ExternalRoot() (root string, present bool)
-	OpenInternal() (root string, err error)
-}
+// envNewRoot is the environment-independent signal a separate mechanism uses to
+// expose the new-generation root. The spec forbids behaviour control via env
+// vars; this is detection of the surrounding transaction, not a behaviour knob.
+const envNewRoot = "TRANSACTIONAL_UPDATE_NEWROOT"
 
-// Acquire implements BEHAVIOR/INTERNAL: acquire-transaction-context.
-func Acquire(mode Mode, b Binding) (*Context, *manifest.Diagnostic) {
-	resolved := mode
-	if mode == ModeAuto {
-		if b.DetectInside() {
-			resolved = ModeExternal
-		} else {
-			resolved = ModeInternal
+// Acquire resolves the transaction binding for mode and returns a context.
+func Acquire(mode Mode) (*Context, *diag.Diagnostic) {
+	switch mode {
+	case ModeAuto:
+		if insideTransaction() {
+			return acquireExternal()
 		}
-	}
-
-	switch resolved {
+		return acquireInternal()
 	case ModeExternal:
-		root, present := b.ExternalRoot()
-		if !present {
-			return nil, manifest.NewError(manifest.DomainTransaction,
-				"external mode but not running inside a transaction")
-		}
-		return &Context{Mode: ModeExternal, Root: root, OpenedHere: false}, nil
+		return acquireExternal()
 	case ModeInternal:
-		root, err := b.OpenInternal()
-		if err != nil {
-			return nil, manifest.NewError(manifest.DomainTransaction,
-				"internal mode but transaction could not be opened: "+err.Error())
-		}
-		return &Context{Mode: ModeInternal, Root: root, OpenedHere: true}, nil
+		return acquireInternal()
 	default:
-		return nil, manifest.NewError(manifest.DomainTransaction, "unknown transaction mode")
+		return nil, diag.New(diag.DomainInvocation, "unknown transaction mode %q", mode)
 	}
 }
 
-// EnvBinding is the production binding. It detects an external transaction by
-// the TRANSACTIONAL_UPDATE / new-generation-root environment commonly set by
-// transactional-update, and opens an internal transaction via the snapshot
-// mechanism. Because the spec deliberately does not commit to either binding,
-// the internal opener is delegated; in an environment without the snapshot
-// machinery available, OpenInternal reports the mechanism as unavailable.
-type EnvBinding struct{}
-
-// DetectInside reports whether a fresh-snapshot transaction is already active.
-func (EnvBinding) DetectInside() bool {
-	_, ok := os.LookupEnv("TRANSACTIONAL_UPDATE")
-	return ok
+// insideTransaction detects whether the process already runs inside a fresh
+// snapshot transaction (a new-generation root is exposed).
+func insideTransaction() bool {
+	r := os.Getenv(envNewRoot)
+	if r == "" {
+		return false
+	}
+	fi, err := os.Stat(r)
+	return err == nil && fi.IsDir()
 }
 
-// ExternalRoot returns the new-generation root an external opener presents.
-func (EnvBinding) ExternalRoot() (string, bool) {
-	if v, ok := os.LookupEnv("TRANSACTIONAL_UPDATE_NEW_ROOT"); ok && v != "" {
-		return v, true
+func acquireExternal() (*Context, *diag.Diagnostic) {
+	r := os.Getenv(envNewRoot)
+	if r == "" {
+		return nil, diag.New(diag.DomainTransaction,
+			"external mode but not running inside a snapshot transaction")
 	}
-	// transactional-update conventionally chroots into the new root, so "/" of
-	// the running process is the new generation when it set TRANSACTIONAL_UPDATE.
-	if _, ok := os.LookupEnv("TRANSACTIONAL_UPDATE"); ok {
-		return "/", true
+	fi, err := os.Stat(r)
+	if err != nil || !fi.IsDir() {
+		return nil, diag.New(diag.DomainTransaction,
+			"external mode but the new-generation root %q is not present", r)
 	}
-	return "", false
+	return &Context{Mode: ModeExternal, Root: r, OpenedHere: false}, nil
 }
 
-// OpenInternal opens a new snapshot transaction through the zypper-merged
-// transactional machinery. The mechanism is part of the deferred binding; when
-// it is not available this reports the transaction mechanism as unavailable.
-func (EnvBinding) OpenInternal() (string, error) {
-	return "", &manifest.Diagnostic{
-		Severity: manifest.SeverityError,
-		Domain:   manifest.DomainTransaction,
-		Message:  "transaction mechanism unavailable",
+// acquireInternal opens a new snapshot transaction through the zypper-merged
+// transactional machinery. Opening a real snapshot is reserved for the
+// apply-on-live-host milestone; here it reports that the internal mechanism is
+// unavailable unless a transaction root is exposed, so callers fail cleanly
+// rather than mutating the running system.
+func acquireInternal() (*Context, *diag.Diagnostic) {
+	if r := os.Getenv(envNewRoot); r != "" {
+		if fi, err := os.Stat(r); err == nil && fi.IsDir() {
+			return &Context{Mode: ModeInternal, Root: r, OpenedHere: true}, nil
+		}
 	}
+	return nil, diag.New(diag.DomainTransaction,
+		"internal transaction mechanism unavailable: no writable new-generation root")
 }

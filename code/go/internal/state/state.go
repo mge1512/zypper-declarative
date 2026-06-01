@@ -1,24 +1,25 @@
-// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 //
-// Package state implements describe-actual-state: the single live-state
-// reader. It reads the four declarable scopes under a root into the shared
-// data model, and under scope=full adds the two observational integrity
-// scopes. No other package reads live system state.
+// Package state implements describe-actual-state, the single live-state reader.
+// It is the only code that reads live system state (rpmdb, repos.d, systemd,
+// and the /etc tree). Reads are file-and-database level (no network refresh).
 package state
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
-	"github.com/mge1512/zypper-declarative/internal/meta"
-	"github.com/mge1512/zypper-declarative/internal/sysexec"
 )
 
 // OnUnreadable controls how an unreadable source is treated.
@@ -37,103 +38,114 @@ const (
 	ScopeFull Scope = "full"
 )
 
+// CommandRunner abstracts external command execution so callers can drive rpm,
+// systemctl, and zypper through their CLIs (keeping CGO_ENABLED=0).
+type CommandRunner interface {
+	Run(cmd string, args ...string) (stdout string, stderr string, err error)
+}
+
+// OSCommandRunner runs commands via os/exec with a sanitised PATH.
+type OSCommandRunner struct{}
+
+// Run executes cmd with args and returns stdout, stderr, and the run error.
+func (r *OSCommandRunner) Run(cmd string, args ...string) (string, string, error) {
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", "/sbin:/bin:/usr/bin:/usr/sbin")
+	defer func() { _ = os.Setenv("PATH", oldPath) }()
+
+	c := exec.Command(cmd, args...)
+	var stdout, stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	err := c.Run()
+	return stdout.String(), stderr.String(), err
+}
+
 // Options for describe-actual-state.
 type Options struct {
-	Root         string
 	OnUnreadable OnUnreadable
 	Scope        Scope
-	Runner       sysexec.CommandRunner
 	KeepList     map[string]bool
+	Runner       CommandRunner
 }
 
-// Result is the output of describe-actual-state.
+// Result is the actual state and any warn diagnostics.
 type Result struct {
 	Manifest    *manifest.Manifest
-	Diagnostics []*manifest.Diagnostic // under warn: one per omitted scope
+	Diagnostics []*diag.Diagnostic
 }
 
-// Describe implements BEHAVIOR/INTERNAL: describe-actual-state. On the first
-// unreadable source under on_unreadable=error it returns an error to the
-// caller; under warn it omits the affected scope, records a diagnostic, and
-// continues.
-func Describe(opts Options) (*Result, *manifest.Diagnostic) {
-	if opts.Root == "" {
-		opts.Root = "/"
+// keepListDefault paths never reported or deleted.
+var keepListDefault = map[string]bool{
+	"/etc/machine-id": true,
+}
+
+// DescribeActualState reads the actual state of the declarable scopes under
+// root and returns a Manifest in the shared schema. On an unreadable source
+// under on_unreadable=error it returns a *diag.Diagnostic to the caller.
+func DescribeActualState(root string, opts Options) (*Result, error) {
+	if opts.Runner == nil {
+		opts.Runner = &OSCommandRunner{}
+	}
+	if opts.OnUnreadable == "" {
+		opts.OnUnreadable = OnUnreadableError
 	}
 	if opts.Scope == "" {
 		opts.Scope = ScopeEtc
 	}
-	r := opts.Runner
+	keep := mergeKeep(opts.KeepList)
+
 	res := &Result{Manifest: &manifest.Manifest{
-		Meta: manifest.Meta{
+		Meta: manifest.ManifestMeta{
 			FormatVersion: 1,
-			Generator:     meta.Program + " " + meta.Version,
-			CreatedAt:     nowRFC3339(),
+			Generator:     "zypper-declarative 0.6.2",
+			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 		},
 	}}
 
-	// helper: handle an unreadable source per policy.
-	unreadable := func(domain, source string) *manifest.Diagnostic {
-		d := manifest.NewError(domain, "unreadable scope source: "+source)
-		if opts.OnUnreadable == OnUnreadableWarn {
-			res.Diagnostics = append(res.Diagnostics, manifest.NewWarning(domain, "omitting unreadable scope source: "+source))
-			return nil
-		}
-		return d
-	}
-
-	// 1. packages (rpmdb under root).
-	pkgs, perr := ReadPackages(opts.Root, r)
-	if perr != nil {
-		if d := unreadable(manifest.DomainPackages, "rpmdb"); d != nil {
-			return nil, d
-		}
-	} else if len(pkgs.Elements) > 0 {
+	// 1. packages
+	pkgs, err := readPackages(root, opts)
+	if d := handleSource(opts, res, "rpmdb", diag.DomainPackages, err); d != nil {
+		return nil, d
+	} else if err == nil && pkgs != nil && len(pkgs.Elements) > 0 {
 		res.Manifest.Packages = pkgs
 	}
 
-	// 2. repositories (on-disk /etc/zypp/repos.d).
-	repos, rerr := readRepositories(opts.Root)
-	if rerr != nil {
-		if d := unreadable(manifest.DomainRepositories, "/etc/zypp/repos.d"); d != nil {
-			return nil, d
-		}
-	} else if len(repos.Elements) > 0 {
+	// 2. repositories
+	repos, err := readRepositories(root)
+	if d := handleSource(opts, res, filepath.Join(root, "etc/zypp/repos.d"), diag.DomainRepositories, err); d != nil {
+		return nil, d
+	} else if err == nil && repos != nil && len(repos.Elements) > 0 {
 		res.Manifest.Repositories = repos
 	}
 
-	// 3. services (unit enablement under root).
-	svcs, serr := readServices(opts.Root, r)
-	if serr != nil {
-		if d := unreadable(manifest.DomainUnits, "unit enablement"); d != nil {
-			return nil, d
-		}
-	} else if len(svcs.Elements) > 0 {
+	// 3. services
+	svcs, err := readServices(root, opts)
+	if d := handleSource(opts, res, "unit enablement", diag.DomainServices, err); d != nil {
+		return nil, d
+	} else if err == nil && svcs != nil && len(svcs.Elements) > 0 {
 		res.Manifest.Services = svcs
 	}
 
-	// 4. config_files (changed-from-package and unpackaged /etc files).
-	cfiles, cerr := readConfigFiles(opts.Root, r, opts.KeepList)
-	if cerr != nil {
-		if d := unreadable(manifest.DomainFiles, cerr.Error()); d != nil {
-			return nil, d
-		}
-	} else if len(cfiles.Elements) > 0 {
-		res.Manifest.ConfigFiles = cfiles
+	// 4. config_files (/etc walk)
+	cf, err := readConfigFiles(root, keep, opts)
+	if d := handleSource(opts, res, filepath.Join(root, "etc"), diag.DomainFiles, err); d != nil {
+		return nil, d
+	} else if err == nil && cf != nil && len(cf.Elements) > 0 {
+		res.Manifest.ConfigFiles = cf
 	}
 
-	// 4a. full-scan integrity (only under scope=full).
+	// 4a. full-scan integrity
 	if opts.Scope == ScopeFull {
-		changed, unmanaged, ferr := fullScan(opts.Root, r, opts.KeepList)
-		if ferr != nil {
-			if d := unreadable(manifest.DomainFiles, "full-scan: "+ferr.Error()); d != nil {
-				return nil, d
-			}
-		} else {
-			if len(changed.Elements) > 0 {
+		changed, unmanaged, ferr := readFullScan(root, keep, opts)
+		if d := handleSource(opts, res, "full scan", diag.DomainFiles, ferr); d != nil {
+			return nil, d
+		}
+		if ferr == nil {
+			if changed != nil && len(changed.Elements) > 0 {
 				res.Manifest.ChangedManagedFiles = changed
 			}
-			if len(unmanaged.Elements) > 0 {
+			if unmanaged != nil && len(unmanaged.Elements) > 0 {
 				res.Manifest.UnmanagedFiles = unmanaged
 			}
 		}
@@ -142,35 +154,63 @@ func Describe(opts Options) (*Result, *manifest.Diagnostic) {
 	return res, nil
 }
 
-// ReadPackages queries the rpmdb under root and returns a fully populated
-// PackagesScope. A genuine failure to read the rpmdb is returned as an error.
-func ReadPackages(root string, r sysexec.CommandRunner) (*manifest.PackagesScope, *manifest.Diagnostic) {
+func mergeKeep(extra map[string]bool) map[string]bool {
+	m := map[string]bool{}
+	for k := range keepListDefault {
+		m[k] = true
+	}
+	for k := range extra {
+		m[k] = true
+	}
+	return m
+}
+
+// handleSource maps a source read error to either a returned error (strict) or
+// an appended warn diagnostic (warn). A nil err is a no-op.
+func handleSource(opts Options, res *Result, source string, domain diag.Domain, err error) *diag.Diagnostic {
+	if err == nil {
+		return nil
+	}
+	if opts.OnUnreadable == OnUnreadableWarn {
+		res.Diagnostics = append(res.Diagnostics, diag.Warn(domain, "unreadable scope source: %s: %v", source, err))
+		return nil
+	}
+	return diag.New(domain, "unreadable scope source: %s: %v", source, err)
+}
+
+// readPackages queries the rpmdb under root for the installed set. An empty or
+// absent rpmdb under a synthetic root is treated as "no packages readable here"
+// (a genuinely empty scope), not an error.
+func readPackages(root string, opts Options) (*manifest.PackagesScope, error) {
+	dbPaths := []string{
+		filepath.Join(root, "usr/lib/sysimage/rpm"),
+		filepath.Join(root, "var/lib/rpm"),
+	}
+	hasDB := false
+	for _, p := range dbPaths {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			hasDB = true
+			break
+		}
+	}
+	if !hasDB {
+		// No rpmdb under this root: a readable-but-empty packages scope.
+		return &manifest.PackagesScope{Attributes: map[string]interface{}{"package_system": manifest.PackageSystemRPM}, Elements: []manifest.PackageRecord{}}, nil
+	}
+	args := []string{"-qa", "--dbpath", filepath.Join(root, "usr/lib/sysimage/rpm"),
+		"--qf", "%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n"}
+	stdout, stderr, err := opts.Runner.Run("rpm", args...)
+	if err != nil {
+		// rpm exits non-zero only on a genuine failure here; report it.
+		return nil, &runError{msg: strings.TrimSpace(stderr), err: err}
+	}
 	scope := &manifest.PackagesScope{
-		Attributes: map[string]interface{}{"package_system": "rpm"},
+		Attributes: map[string]interface{}{"package_system": manifest.PackageSystemRPM},
 		Elements:   []manifest.PackageRecord{},
 	}
-	if r == nil {
-		return scope, nil
-	}
-	args := []string{"-qa", "--qf", "%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n"}
-	if root != "" && root != "/" {
-		args = append([]string{"--root", root}, args...)
-	}
-	stdout, _, err := r.Run("rpm", args)
-	if err != nil {
-		// A genuine failure to read the rpmdb is an unreadable source. We
-		// distinguish "rpm not present" (env without rpm) from a real I/O
-		// error by checking whether any output was produced; with no rpm at
-		// all, treat as unreadable.
-		if stdout == "" {
-			return nil, manifest.NewError(manifest.DomainPackages, "rpmdb unreadable")
-		}
-	}
-	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
-		if line == "" {
-			continue
-		}
-		f := strings.Split(line, "\t")
+	sc := bufio.NewScanner(strings.NewReader(stdout))
+	for sc.Scan() {
+		f := strings.Split(sc.Text(), "\t")
 		if len(f) < 4 {
 			continue
 		}
@@ -181,51 +221,45 @@ func ReadPackages(root string, r sysexec.CommandRunner) (*manifest.PackagesScope
 	return scope, nil
 }
 
+// readRepositories reads <root>/etc/zypp/repos.d/*.repo directly (INI sections).
 func readRepositories(root string) (*manifest.RepositoriesScope, error) {
-	scope := &manifest.RepositoriesScope{
-		Attributes: map[string]interface{}{"repository_system": "zypp"},
-		Elements:   []manifest.RepositoryRecord{},
-	}
-	dir := filepath.Join(root, "etc", "zypp", "repos.d")
+	dir := filepath.Join(root, "etc/zypp/repos.d")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Genuinely-empty readable scope: directory absent is treated as
-			// no repositories configured (readable, empty) -> omitted by caller.
-			return scope, nil
+			// No repos.d under this root: a readable-but-empty repositories scope.
+			return &manifest.RepositoriesScope{Attributes: map[string]interface{}{"repository_system": manifest.RepositorySystemZypp}, Elements: []manifest.RepositoryRecord{}}, nil
 		}
-		// Permission denied or other I/O failure is unreadable.
 		return nil, err
+	}
+	scope := &manifest.RepositoriesScope{
+		Attributes: map[string]interface{}{"repository_system": manifest.RepositorySystemZypp},
+		Elements:   []manifest.RepositoryRecord{},
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".repo") {
 			continue
 		}
-		recs, perr := parseRepoFile(filepath.Join(dir, e.Name()))
-		if perr != nil {
-			return nil, perr
+		data, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if rerr != nil {
+			return nil, rerr
 		}
-		scope.Elements = append(scope.Elements, recs...)
+		scope.Elements = append(scope.Elements, parseRepoFile(data)...)
 	}
 	return scope, nil
 }
 
-func parseRepoFile(path string) ([]manifest.RepositoryRecord, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var out []manifest.RepositoryRecord
+// parseRepoFile parses an INI .repo file into RepositoryRecord entries.
+func parseRepoFile(data []byte) []manifest.RepositoryRecord {
+	var recs []manifest.RepositoryRecord
 	var cur *manifest.RepositoryRecord
 	flush := func() {
 		if cur != nil {
-			out = append(out, *cur)
+			recs = append(recs, *cur)
 			cur = nil
 		}
 	}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -234,156 +268,132 @@ func parseRepoFile(path string) ([]manifest.RepositoryRecord, error) {
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			flush()
 			alias := strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
-			cur = &manifest.RepositoryRecord{Alias: alias, Type: "rpm-md", Enabled: true}
+			cur = &manifest.RepositoryRecord{Alias: alias, Type: "rpm-md"}
 			continue
 		}
 		if cur == nil {
 			continue
 		}
-		k, v, ok := splitKV(line)
-		if !ok {
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
 			continue
 		}
-		switch k {
+		key := strings.TrimSpace(kv[0])
+		val := strings.TrimSpace(kv[1])
+		switch key {
 		case "name":
-			cur.Name = v
-		case "baseurl", "url":
-			cur.URL = v
+			cur.Name = val
+		case "baseurl":
+			cur.URL = val
 		case "type":
-			cur.Type = v
+			cur.Type = val
 		case "enabled":
-			cur.Enabled = toBool(v)
+			cur.Enabled = toBool(val)
 		case "gpgcheck":
-			cur.GPGCheck = toBool(v)
+			cur.GPGCheck = toBool(val)
 		case "autorefresh":
-			cur.AutoRefresh = toBool(v)
+			cur.Autorefresh = toBool(val)
 		case "priority":
-			if n, err := strconv.Atoi(v); err == nil {
+			if n, err := strconv.Atoi(val); err == nil {
 				cur.Priority = n
 			}
 		}
 	}
 	flush()
-	return out, sc.Err()
+	return recs
 }
 
-func readServices(root string, r sysexec.CommandRunner) (*manifest.ServicesScope, error) {
+func toBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// readServices queries unit enablement under root. On a synthetic root with no
+// systemd present, it returns a readable-but-empty services scope.
+func readServices(root string, opts Options) (*manifest.ServicesScope, error) {
+	unitDir := filepath.Join(root, "etc/systemd/system")
+	if _, err := os.Stat(unitDir); err != nil {
+		// No systemd unit tree under this root: readable-but-empty.
+		return &manifest.ServicesScope{Attributes: map[string]interface{}{"init_system": manifest.InitSystemSystemd}, Elements: []manifest.ServiceRecord{}}, nil
+	}
 	scope := &manifest.ServicesScope{
-		Attributes: map[string]interface{}{"init_system": "systemd"},
+		Attributes: map[string]interface{}{"init_system": manifest.InitSystemSystemd},
 		Elements:   []manifest.ServiceRecord{},
 	}
-	if r == nil {
-		return scope, nil
+	stdout, _, err := opts.Runner.Run("systemctl", "--root", root, "list-unit-files", "--no-legend", "--no-pager")
+	if err != nil {
+		return nil, &runError{msg: "unit enablement query failed", err: err}
 	}
-	args := []string{"list-unit-files", "--no-legend", "--no-pager"}
-	if root != "" && root != "/" {
-		args = append([]string{"--root", root}, args...)
-	}
-	stdout, _, err := r.Run("systemctl", args)
-	if err != nil && stdout == "" {
-		// No systemd available in this environment: treat as readable-empty so
-		// the scope is omitted, not as an unreadable error, because list-unit-files
-		// returning nothing is a normal (empty) outcome. A genuine I/O failure
-		// on a real systemd host surfaces as an error from the runner with output.
-		return scope, nil
-	}
-	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 {
+	sc := bufio.NewScanner(strings.NewReader(stdout))
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 2 {
 			continue
 		}
-		name, st := f[0], f[1]
-		var norm string
-		switch st {
-		case "enabled", "enabled-runtime":
-			norm = "enabled"
-		case "disabled":
-			norm = "disabled"
-		case "masked", "masked-runtime":
-			norm = "masked"
+		state := fields[1]
+		switch state {
+		case "enabled", "disabled", "masked":
+			scope.Elements = append(scope.Elements, manifest.ServiceRecord{Name: fields[0], State: state})
 		default:
-			continue // static and others are not declarable
+			// static and others are observational; omitted.
 		}
-		scope.Elements = append(scope.Elements, manifest.ServiceRecord{Name: name, State: norm})
 	}
 	return scope, nil
 }
 
-// readConfigFiles enumerates only <root>/etc and reports changed-from-package
-// and unpackaged /etc files (minus the keep-list and the syncpoint). Bounded to
-// /etc; it does not read, hash, or verify files outside /etc, and never runs a
-// whole-system package verification.
-//
-// To consult package metadata for only the /etc files enumerated here while
-// keeping the cost bounded to /etc (not the installed base), the owning-package
-// set for /etc and the changed-/etc set are each gathered in a single bulk rpm
-// query, rather than one rpm invocation per file.
-func readConfigFiles(root string, r sysexec.CommandRunner, keep map[string]bool) (*manifest.ConfigFilesScope, error) {
-	scope := &manifest.ConfigFilesScope{
-		Attributes: nil,
-		Elements:   []manifest.ManagedFileRecord{},
-	}
+// readConfigFiles walks <root>/etc, classifying each entry by its own type
+// without following symlinks. It emits changed-or-unpackaged regular files and
+// symlinks only; directories are traversed, special files skipped.
+func readConfigFiles(root string, keep map[string]bool, opts Options) (*manifest.ConfigFilesScope, error) {
 	etc := filepath.Join(root, "etc")
-	info, err := os.Stat(etc)
-	if err != nil {
+	if _, err := os.Stat(etc); err != nil {
 		if os.IsNotExist(err) {
-			return scope, nil // readable-empty (no /etc): omitted by caller
+			return &manifest.ConfigFilesScope{Attributes: nil, Elements: []manifest.ManagedFileRecord{}}, nil
 		}
 		return nil, err
 	}
-	if !info.IsDir() {
-		return scope, nil
-	}
+	owners := packageOwnersEtc(root, opts)
+	scope := &manifest.ConfigFilesScope{Attributes: nil, Elements: []manifest.ManagedFileRecord{}}
 
-	owned := ownedEtcSet(root, r)            // path -> owning package (bulk, one rpm call)
-	changed := changedEtcSet(root, r, owned) // changed /etc paths (verify owners only)
-
-	walkErr := filepath.WalkDir(etc, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			// Permission denial on a required /etc path is unreadable.
-			return werr
+	walkErr := filepath.WalkDir(etc, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if d.IsDir() {
+		logical := "/" + strings.TrimPrefix(strings.TrimPrefix(p, root), "/")
+		if logical == diagSyncpoint || keep[logical] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(path, root), "/")
-		if rel == "/etc/etc.syncpoint" || keep[rel] {
+		typ := d.Type()
+		switch {
+		case typ.IsDir():
+			return nil // traverse, do not emit
+		case typ&fs.ModeSymlink != 0:
+			target, lerr := os.Readlink(p)
+			if lerr != nil {
+				return lerr
+			}
+			rec := buildRec(p, logical, "link", owners)
+			rec.Target = target // verbatim, not resolved
+			scope.Elements = append(scope.Elements, rec)
 			return nil
-		}
-		fi, ierr := d.Info()
-		if ierr != nil {
-			return ierr
-		}
-		ftype := "file"
-		if fi.Mode()&os.ModeSymlink != 0 {
-			ftype = "link"
-		}
-		pkg := owned[rel]
-		if pkg != "" {
-			// Package-owned: include only if it differs from the package
-			// baseline. A verifier returning non-zero (differences) is the
-			// normal changed-file result, not an unreadable source.
-			if !changed[rel] {
-				return nil // package-pristine: omitted
+		case typ.IsRegular():
+			sum, herr := hashFile(p)
+			if herr != nil {
+				return herr
 			}
+			rec := buildRec(p, logical, "file", owners)
+			rec.SHA256 = sum
+			scope.Elements = append(scope.Elements, rec)
+			return nil
+		default:
+			return nil // special file: skip
 		}
-		sum := ""
-		if ftype == "file" {
-			if h, herr := hashFile(path); herr == nil {
-				sum = h
-			}
-		}
-		scope.Elements = append(scope.Elements, manifest.ManagedFileRecord{
-			Name:        rel,
-			Type:        ftype,
-			Mode:        modeString(fi.Mode()),
-			User:        "root",
-			Group:       "root",
-			SHA256:      sum,
-			ContentRef:  "",
-			PackageName: pkg,
-		})
-		return nil
 	})
 	if walkErr != nil {
 		return nil, walkErr
@@ -391,145 +401,159 @@ func readConfigFiles(root string, r sysexec.CommandRunner, keep map[string]bool)
 	return scope, nil
 }
 
-// ownedEtcSet returns a map of /etc path -> owning package, gathered in a
-// single bulk rpm query (rpm -qla with package+path), filtered to /etc. This
-// keeps the per-file cost out of the walk while consulting package metadata
-// only for /etc.
-func ownedEtcSet(root string, r sysexec.CommandRunner) map[string]string {
-	out := map[string]string{}
-	if r == nil {
-		return out
+const diagSyncpoint = "/etc/etc.syncpoint"
+
+// buildRec constructs a ManagedFileRecord with mode/user/group from lstat.
+func buildRec(path, logical, typ string, owners map[string]string) manifest.ManagedFileRecord {
+	rec := manifest.ManagedFileRecord{
+		Name:        logical,
+		Type:        typ,
+		User:        "root",
+		Group:       "root",
+		PackageName: owners[logical],
 	}
-	args := []string{"-qa", "--qf", "[%{FILENAMES}\t%{NAME}\n]"}
-	if root != "" && root != "/" {
-		args = append([]string{"--root", root}, args...)
+	if fi, err := os.Lstat(path); err == nil {
+		rec.Mode = fmtMode(fi.Mode().Perm())
+	} else {
+		rec.Mode = "0644"
 	}
-	stdout, _, err := r.Run("rpm", args)
-	if err != nil && stdout == "" {
-		return out
-	}
-	for _, line := range strings.Split(stdout, "\n") {
-		f := strings.SplitN(line, "\t", 2)
-		if len(f) != 2 {
-			continue
-		}
-		path := strings.TrimSpace(f[0])
-		if strings.HasPrefix(path, "/etc/") {
-			out[path] = strings.TrimSpace(f[1])
-		}
-	}
-	return out
+	return rec
 }
 
-// changedEtcSet returns the set of package-owned /etc paths that differ from
-// their package baseline. It verifies only the packages that own an /etc file
-// (the owners gathered by ownedEtcSet), never a whole-system verification, so
-// the cost is bounded by the packages touching /etc rather than the installed
-// base. A non-zero exit reporting differences is the normal changed-file
-// result, not an unreadable source.
-func changedEtcSet(root string, r sysexec.CommandRunner, owned map[string]string) map[string]bool {
-	out := map[string]bool{}
-	if r == nil || len(owned) == 0 {
-		return out
-	}
-	pkgSet := map[string]bool{}
-	for _, pkg := range owned {
-		if pkg != "" {
-			pkgSet[pkg] = true
-		}
-	}
-	pkgs := make([]string, 0, len(pkgSet))
-	for p := range pkgSet {
-		pkgs = append(pkgs, p)
-	}
-	if len(pkgs) == 0 {
-		return out
-	}
-	args := append([]string{"-V"}, pkgs...)
-	if root != "" && root != "/" {
-		args = append([]string{"--root", root}, args...)
-	}
-	stdout, _, _ := r.Run("rpm", args)
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-		// rpm -V output: "<flags> [c] /path". The path is the last field.
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		p := fields[len(fields)-1]
-		if strings.HasPrefix(p, "/etc/") {
-			out[p] = true
-		}
-	}
-	return out
+func fmtMode(p os.FileMode) string {
+	return "0" + strconv.FormatUint(uint64(p), 8)
 }
 
-func owningPackage(root, rel string, r sysexec.CommandRunner) string {
-	if r == nil {
-		return ""
+// packageOwnersEtc returns a map logical-path -> owning package for /etc paths,
+// derived from the rpmdb. Empty when no rpmdb is present under root.
+func packageOwnersEtc(root string, opts Options) map[string]string {
+	owners := map[string]string{}
+	dbpath := filepath.Join(root, "usr/lib/sysimage/rpm")
+	if fi, err := os.Stat(dbpath); err != nil || !fi.IsDir() {
+		return owners
 	}
-	args := []string{"-qf", rel}
-	if root != "" && root != "/" {
-		args = append([]string{"--root", root}, args...)
-	}
-	stdout, _, err := r.Run("rpm", args)
+	stdout, _, err := opts.Runner.Run("rpm", "-qa", "--dbpath", dbpath, "--qf", "[%{FILENAMES}\t%{NAME}\n]")
 	if err != nil {
-		return "" // not owned by any package (or rpm unavailable): unpackaged
+		return owners
 	}
-	name := strings.TrimSpace(strings.SplitN(stdout, "\n", 2)[0])
-	if strings.Contains(name, "not owned") {
-		return ""
+	sc := bufio.NewScanner(strings.NewReader(stdout))
+	for sc.Scan() {
+		f := strings.SplitN(sc.Text(), "\t", 2)
+		if len(f) == 2 && strings.HasPrefix(f[0], "/etc/") {
+			owners[f[0]] = f[1]
+		}
 	}
-	return name
-}
-
-// packagedFileChanged reports whether a package-owned /etc file differs from
-// its package baseline. It verifies only this file (rpm -V <pkg> filtered),
-// never a whole-system verification. A non-zero exit reporting differences is
-// the normal changed result.
-func packagedFileChanged(root, rel string, r sysexec.CommandRunner) bool {
-	if r == nil {
-		return false
-	}
-	args := []string{"-Vf", rel}
-	if root != "" && root != "/" {
-		args = append([]string{"--root", root}, args...)
-	}
-	stdout, _, _ := r.Run("rpm", args)
-	// rpm -V prints a line per changed file; empty output (and possibly exit 0)
-	// means pristine. Non-empty output naming the file means changed.
-	return strings.TrimSpace(stdout) != ""
+	return owners
 }
 
 func hashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-func splitKV(line string) (string, string, bool) {
-	i := strings.IndexByte(line, '=')
-	if i < 0 {
-		return "", "", false
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	buf := make([]byte, 64*1024)
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			h.Write(buf[:n])
+		}
+		if rerr != nil {
+			break
+		}
 	}
-	return strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:]), true
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func toBool(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
+// readFullScan scans the package-managed trees outside /etc under scope=full.
+func readFullScan(root string, keep map[string]bool, opts Options) (*manifest.ChangedManagedFilesScope, *manifest.UnmanagedFilesScope, error) {
+	trees := []string{"usr", "bin", "sbin", "lib", "lib64", "boot"}
+	changed := &manifest.ChangedManagedFilesScope{Attributes: nil, Elements: []manifest.ManagedBaselineRecord{}}
+	unmanaged := &manifest.UnmanagedFilesScope{Attributes: nil, Elements: []manifest.UnmanagedFileRecord{}}
+	owned := ownedPathSet(root, opts)
+	for _, t := range trees {
+		base := filepath.Join(root, t)
+		fi, err := os.Lstat(base)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
+		werr := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			logical := "/" + strings.TrimPrefix(strings.TrimPrefix(p, root), "/")
+			if keep[logical] {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			typ := d.Type()
+			if typ.IsDir() {
+				return nil
+			}
+			if !typ.IsRegular() && typ&fs.ModeSymlink == 0 {
+				return nil // special file
+			}
+			if _, ok := owned[logical]; ok {
+				// Owned: would compare to baseline; baseline comparison via rpm -V
+				// is reserved for the live milestone. Skip pristine here.
+				return nil
+			}
+			// Unmanaged addition.
+			rec := manifest.UnmanagedFileRecord{Name: logical, User: "root", Group: "root"}
+			if typ&fs.ModeSymlink != 0 {
+				if target, lerr := os.Readlink(p); lerr == nil {
+					rec.Type = "link"
+					rec.Target = target
+				}
+			} else {
+				rec.Type = "file"
+				if sum, herr := hashFile(p); herr == nil {
+					rec.SHA256 = sum
+				}
+			}
+			if lfi, lerr := os.Lstat(p); lerr == nil {
+				rec.Mode = fmtMode(lfi.Mode().Perm())
+			}
+			unmanaged.Elements = append(unmanaged.Elements, rec)
+			return nil
+		})
+		if werr != nil {
+			return nil, nil, werr
+		}
 	}
-	return false
+	return changed, unmanaged, nil
 }
 
-func modeString(m os.FileMode) string {
-	return "0" + strconv.FormatUint(uint64(m.Perm()), 8)
+// ownedPathSet returns the set of package-owned paths from the rpmdb under root.
+func ownedPathSet(root string, opts Options) map[string]bool {
+	owned := map[string]bool{}
+	dbpath := filepath.Join(root, "usr/lib/sysimage/rpm")
+	if fi, err := os.Stat(dbpath); err != nil || !fi.IsDir() {
+		return owned
+	}
+	stdout, _, err := opts.Runner.Run("rpm", "-qa", "--dbpath", dbpath, "--qf", "[%{FILENAMES}\n]")
+	if err != nil {
+		return owned
+	}
+	sc := bufio.NewScanner(strings.NewReader(stdout))
+	for sc.Scan() {
+		owned[strings.TrimSpace(sc.Text())] = true
+	}
+	return owned
+}
+
+// runError wraps an external command failure as a source-read error.
+type runError struct {
+	msg string
+	err error
+}
+
+func (e *runError) Error() string {
+	if e.msg != "" {
+		return e.msg + ": " + e.err.Error()
+	}
+	return e.err.Error()
 }

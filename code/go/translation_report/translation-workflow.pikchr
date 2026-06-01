@@ -1,22 +1,14 @@
-# generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
-#
-# Translation workflow for zypper-declarative (cli-tool, Go, single-LLM run).
-
-down
-box "spec + template" "+ hints (Go)" fit
-arrow
-box "resolve module" "identity (META Module)" fit
-arrow
-box "Phase 1:" "independent_tests/" "claude-opus-4-8/ (Tests First)" fit
-arrow
-box "Tests-First guard:" "test files present" "gofmt + go vet pass" fit
-arrow
-box "Phase 2: core impl" "cmd/ + internal/* packages" fit
-arrow
-box "Phase 3: packaging" "Makefile, RPM .spec," "debian/*, LICENSE" fit
-arrow
-box "Phase 5: docs" "README.md, man page" fit
-arrow
-box "Phase 6: compile gate" "go mod tidy / build /" "go test (all pass)" fit
-arrow
-box "Phase 7:" "TRANSLATION_REPORT.md" fit
+# Translation workflow for zypper-declarative (cli-tool, Go).
+# Rendered with pikchr (https://pikchr.org).
+arrow right 200%
+box "spec" "zypper-declarative.spec.md" fit
+arrow right 150%
+box "tests first" "independent_tests/" "claude-opus-4-8/" fit
+arrow right 150%
+box "implementation" "cmd/ + internal/" fit
+arrow right 150%
+box "compile gate" "build + vet + go test" fit
+arrow right 150%
+box "packaging" "Makefile, RPM, DEB" fit
+arrow right 150%
+box "report" "TRANSLATION_REPORT.md" fit

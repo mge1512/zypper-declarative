@@ -1,170 +1,87 @@
-// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 //
-// Dispatch: the top-level CLI contract. Bare invocation and help print usage to
-// stdout and exit 0; version prints program name, version, and the embedded
-// spec hash and exits 0; an unknown verb, option, value, or missing value
-// prints usage to stderr and exits 2. Exit-code mapping lives only here.
+// Dispatch: the top-level CLI contract. Bare invocation, version, and help
+// print to stdout and exit 0; unknown verb/option/value print usage to stderr
+// and exit 2. Each behaviour verb is dispatched to its implementation.
 package cli
 
 import (
 	"fmt"
-	"io"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
 
-	"github.com/mge1512/zypper-declarative/internal/manifest"
-	"github.com/mge1512/zypper-declarative/internal/meta"
+	"github.com/mge1512/zypper-declarative/internal/diag"
 )
 
-// Run is the single entry point. It parses argv (excluding the program name),
-// dispatches to a verb, and returns the process exit code. stdout and stderr
-// are injected for testability; production passes os.Stdout/os.Stderr.
-func Run(args []string, stdout, stderr io.Writer) int {
-	installSignalHandlers()
-
-	// Tolerated flag aliases for the two global commands.
-	if len(args) == 1 {
-		switch args[0] {
-		case "--version":
-			printVersion(stdout)
-			return 0
-		case "--help", "-h":
-			printUsage(stdout)
-			return 0
-		}
+// Run is the entry point invoked from main(). args excludes the program name.
+func Run(args []string, io IO) int {
+	// Global flag aliases and bare-word global commands are handled first,
+	// since they may appear as the only token.
+	if len(args) == 0 {
+		// Bare invocation: usage to stdout, exit 0 (discovery, never converges).
+		printUsage(io.Stdout)
+		return ExitOK
 	}
 
-	p := parseArgs(args)
-
-	// Bare invocation (no verb): discovery. Usage to stdout, exit 0.
-	if len(p.bareWords) == 0 {
-		// A bare invocation that nonetheless carried a bad option value is
-		// still an invocation error.
-		cfg := defaultConfig()
-		if d := applyOptions(&cfg, p.options); d != nil {
-			fmt.Fprintln(stderr, d.Error())
-			printUsage(stderr)
-			return 2
-		}
-		printUsage(stdout)
-		return 0
+	// The first token is either a verb, a bare-word global command, a tolerated
+	// flag alias, or (if it contains '=') an option preceding no verb.
+	first := args[0]
+	switch first {
+	case "version", "--version":
+		return runVersion(io)
+	case "help", "--help", "-h":
+		printUsage(io.Stdout)
+		return ExitOK
 	}
 
-	verb := p.bareWords[0]
-	extraBare := p.bareWords[1:]
-
-	switch verb {
-	case "version":
-		printVersion(stdout)
-		return 0
-	case "help":
-		printUsage(stdout)
-		return 0
-	case "apply", "diff", "verify", "status", "describe":
-		// fallthrough to verb handling below
-	default:
-		fmt.Fprintf(stderr, "%s: unknown verb: %s\n", meta.Program, verb)
-		printUsage(stderr)
-		return 2
-	}
-
-	// Resolve config from options.
+	// If the first token is an option (key=value) with no verb following, this
+	// is a discovery-style invocation with options but no verb. Per the global
+	// contract a bad option value is exit 2; a well-formed option with no verb
+	// is treated as an invocation error (no verb to act on) — except that a bad
+	// format value must be detected (acceptance gate format=bad_value -> 2).
 	cfg := defaultConfig()
-	if d := applyOptions(&cfg, p.options); d != nil {
-		fmt.Fprintln(stderr, d.Error())
-		printUsage(stderr)
-		return 2
+	bare, d := parseArgs(cfg, args)
+	if d != nil {
+		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
+		printUsage(io.Stderr)
+		return ExitInvocation
+	}
+	if len(bare) == 0 {
+		// Options only, no verb: invocation error.
+		fmt.Fprintln(io.Stderr, "Error [invocation] no verb given")
+		printUsage(io.Stderr)
+		return ExitInvocation
 	}
 
-	// Reject stray bare words after the verb (e.g. status --frobnicate, where
-	// --frobnicate is not a key=value option so it lands as a bare word).
-	if len(extraBare) > 0 {
-		fmt.Fprintf(stderr, "%s: unrecognised argument: %s\n", meta.Program, strings.Join(extraBare, " "))
-		printUsage(stderr)
-		return 2
-	}
-
-	// scope is accepted only on describe and verify.
-	if _, set := p.options["scope"]; set && verb != "describe" && verb != "verify" {
-		fmt.Fprintf(stderr, "%s: scope is accepted only on describe and verify\n", meta.Program)
-		printUsage(stderr)
-		return 2
-	}
-
+	verb := bare[0]
+	rest := bare[1:]
 	switch verb {
 	case "apply":
-		return runApply(cfg, stdout, stderr)
+		return runApply(cfg, rest, io)
 	case "diff":
-		return runDiff(cfg, stdout, stderr)
+		return runDiff(cfg, rest, io)
 	case "verify":
-		return runVerify(cfg, stdout, stderr)
+		return runVerify(cfg, rest, io)
 	case "status":
-		return runStatus(cfg, stdout, stderr)
+		return runStatus(cfg, rest, io)
 	case "describe":
-		return runDescribe(cfg, stdout, stderr)
+		return runDescribe(cfg, rest, io)
+	case "version":
+		return runVersion(io)
+	case "help":
+		printUsage(io.Stdout)
+		return ExitOK
+	default:
+		fmt.Fprintf(io.Stderr, "Error [invocation] unknown verb %q\n", verb)
+		printUsage(io.Stderr)
+		return ExitInvocation
 	}
-	return 2
 }
 
-func printVersion(w io.Writer) {
-	fmt.Fprintf(w, "%s %s spec:%s\n", meta.Program, meta.Version, meta.SpecSHA256)
-}
-
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, usageText)
-}
-
-const usageText = `usage: zypper-declarative <verb> [key=value ...]
-
-Verbs:
-  apply       converge the system to the desired manifest in a snapshot
-  diff        dry run: print what apply would change
-  verify      check the actual state against the applied declaration
-  status      print the applied declaration and a drift summary
-  describe    emit the actual state as a manifest (json default, yaml optional)
-  version     print program name, version, and embedded spec hash
-  help        print this usage
-
-Options (key=value; precede any bare-word argument):
-  mode=auto|external|internal        transaction binding (default auto)
-  manifest-path=<path>               desired manifest (default from CONFIG)
-  manifest-format=json|yaml          default serialisation (default json)
-  format=json|yaml                   serialisation for this invocation's I/O
-  state-path=<path>                  state dump as actual-state source (verify)
-  root=<path>                        root to describe (default /)
-  out=<path>                         describe output file (default stdout)
-  on-unreadable=error|warn           describe: fail (default) or omit+warn
-  scope=etc|full                     describe/verify read scope (default etc)
-  repo-lock=<channel>                fallback pinned repo
-  content-store=<path>               base path for content_ref resolution
-  keep-list=<path>                   allowlist of persistent undeclared paths
-  signature-verification=on|off      manifest signature checking (default on)
-  keyring=<path>                     keyring for signature verification
-  activation-policy=reboot|soft-reboot|none
-  applied-root=<path>                generation root for the applied record
-
-Tolerated aliases: --version, --help, -h. No option uses POSIX --flag style.
-`
-
-// installSignalHandlers ensures a clean exit on SIGTERM and SIGINT, leaving no
-// partial output. An interrupted apply discards its transaction (the apply
-// path holds no committed snapshot until its final seal step).
-func installSignalHandlers() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-ch
-		os.Exit(0)
-	}()
-}
-
-// exitFor maps a diagnostic to its exit code for the verb layer: invocation
-// and transaction-unavailable are exit 2; all other error domains are exit 1.
-func exitForLoad(d *manifest.Diagnostic) int {
-	if d.Domain == manifest.DomainInvocation {
-		return 2
+// rejectExtra rejects any trailing bare-word arguments a verb does not accept.
+func rejectExtra(io IO, verb string, rest []string) bool {
+	if len(rest) == 0 {
+		return false
 	}
-	return 1
+	fmt.Fprintf(io.Stderr, "Error [invocation] %s: unrecognised argument %q\n", verb, rest[0])
+	printUsage(io.Stderr)
+	return true
 }

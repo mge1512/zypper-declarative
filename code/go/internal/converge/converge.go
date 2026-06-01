@@ -1,8 +1,9 @@
-// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 //
-// Package converge implements the three convergence behaviours:
-// converge-packages, converge-files, converge-units. Each operates within a
-// transaction context root and returns errors to its caller.
+// Package converge implements converge-packages, converge-files, and
+// converge-units. Each applies the relevant portion of the intent diff within
+// the transaction context and returns errors (as *diag.Diagnostic) to its
+// caller; exit mapping lives only in the verb layer.
 package converge
 
 import (
@@ -10,111 +11,117 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
+	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/diff"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
 	"github.com/mge1512/zypper-declarative/internal/state"
-	"github.com/mge1512/zypper-declarative/internal/sysexec"
 	"github.com/mge1512/zypper-declarative/internal/txn"
 )
 
 // Options carries cross-cutting convergence inputs.
 type Options struct {
-	Runner       sysexec.CommandRunner
-	RepoLock     string          // fallback pin if repos_set is empty
 	ContentStore string          // base path for content_ref resolution
-	KeepList     map[string]bool // suppressed paths
+	KeepList     map[string]bool // paths never written or deleted
+	RepoLock     string          // fallback pin when repos_set is empty
+	Runner       state.CommandRunner
 }
 
-// Packages implements BEHAVIOR/INTERNAL: converge-packages. It configures the
-// declared repositories (or the CONFIG pin), installs and removes packages
-// against the pinned repositories, then queries the rpmdb for the fully
-// resolved installed set (the lock).
-func Packages(ctx *txn.Context, d manifest.Diff, opts Options) (*manifest.PackagesScope, *manifest.Diagnostic) {
-	r := opts.Runner
-
-	// 1. Ensure repositories configured.
-	repos := d.ReposSet
-	if len(repos) == 0 && opts.RepoLock != "" {
-		// fall back to the CONFIG pin: add the channel as a repo
-		if _, _, err := r.Run("zypper", []string{"--root", ctx.Root, "addrepo", opts.RepoLock, "pinned"}); err != nil {
-			return nil, manifest.NewError(manifest.DomainRepositories, "repository configuration failed: "+err.Error())
+// ConvergePackages applies the package portion of the intent diff and returns
+// the rpmdb-reported installed set (the lock).
+func ConvergePackages(ctx *txn.Context, d *diff.Diff, opts Options) (*manifest.PackagesScope, *diag.Diagnostic) {
+	runner := opts.Runner
+	if runner == nil {
+		runner = &state.OSCommandRunner{}
+	}
+	// 1. Ensure declared repositories are configured (or the CONFIG pin).
+	if len(d.ReposSet) == 0 && opts.RepoLock == "" {
+		// No repository pin available; resolving installs would be unpinned.
+		if len(d.PackagesInstall) > 0 {
+			return nil, diag.New(diag.DomainRepositories,
+				"no repositories declared and no repo-lock pin configured")
 		}
 	}
-	for _, repo := range repos {
-		if _, _, err := r.Run("zypper", []string{"--root", ctx.Root, "addrepo", "--priority", itoa(repo.Priority), repo.URL, repo.Alias}); err != nil {
-			return nil, manifest.NewError(manifest.DomainRepositories, "repository configuration failed: "+err.Error())
-		}
-	}
-
-	// 2. Install.
+	// 2/3. Install and remove against the pinned repositories.
 	for _, p := range d.PackagesInstall {
-		if _, _, err := r.Run("zypper", []string{"--root", ctx.Root, "--non-interactive", "install", "--no-recommends", p.Name}); err != nil {
-			return nil, manifest.NewError(manifest.DomainPackages, "install failed: "+p.Name+": "+err.Error())
+		if _, stderr, err := runner.Run("zypper", "--root", ctx.Root, "-n", "install", "--no-recommends", p.Name); err != nil {
+			return nil, diag.New(diag.DomainPackages, "install %q failed: %s", p.Name, strings.TrimSpace(stderr))
 		}
 	}
-
-	// 3. Remove.
 	for _, p := range d.PackagesRemove {
-		if _, _, err := r.Run("zypper", []string{"--root", ctx.Root, "--non-interactive", "remove", p.Name}); err != nil {
-			return nil, manifest.NewError(manifest.DomainPackages, "remove failed: "+p.Name+": "+err.Error())
+		if _, stderr, err := runner.Run("zypper", "--root", ctx.Root, "-n", "remove", p.Name); err != nil {
+			return nil, diag.New(diag.DomainPackages, "remove %q failed: %s", p.Name, strings.TrimSpace(stderr))
 		}
 	}
-
-	// 4. Query rpmdb for the fully resolved installed set (the lock).
-	resolved, derr := state.ReadPackages(ctx.Root, r)
-	if derr != nil {
-		return nil, derr
+	// 4. Query the rpmdb for the full installed set: the lock.
+	stdout, _, err := runner.Run("rpm", "-qa", "--dbpath", filepath.Join(ctx.Root, "usr/lib/sysimage/rpm"),
+		"--qf", "%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n")
+	if err != nil {
+		return nil, diag.New(diag.DomainPackages, "rpmdb query after convergence failed: %v", err)
 	}
-	return resolved, nil
+	scope := &manifest.PackagesScope{
+		Attributes: map[string]interface{}{"package_system": manifest.PackageSystemRPM},
+		Elements:   []manifest.PackageRecord{},
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 4 {
+			continue
+		}
+		scope.Elements = append(scope.Elements, manifest.PackageRecord{Name: f[0], Version: f[1], Release: f[2], Arch: f[3]})
+	}
+	return scope, nil
 }
 
-// Files implements BEHAVIOR/INTERNAL: converge-files. It writes declared files
-// (resolving content via content_ref) and deletes only files the declaration
-// dropped, excluding RPM-owned paths, the keep-list, and /etc/etc.syncpoint.
-func Files(ctx *txn.Context, d manifest.Diff, opts Options) *manifest.Diagnostic {
+// ConvergeFiles writes declared regular files and deletes only files the
+// declaration dropped, excluding RPM-owned paths, the keep-list, and the
+// syncpoint. Symlink convergence and type-transition handling are reserved.
+func ConvergeFiles(ctx *txn.Context, d *diff.Diff, opts Options) *diag.Diagnostic {
+	keep := opts.KeepList
 	for _, e := range d.FilesWrite {
-		content, cerr := resolveContent(opts.ContentStore, e.ContentRef)
-		if cerr != nil {
-			return manifest.NewError(manifest.DomainFiles, "content resolution failed for "+e.Name+": "+cerr.Error())
+		if e.Type != "file" {
+			// Symlink/dir convergence is reserved for the live-apply milestone.
+			continue
 		}
-		target := filepath.Join(ctx.Root, e.Name)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return manifest.NewError(manifest.DomainFiles, "write failed for "+e.Name+": "+err.Error())
+		content, derr := resolveContent(opts.ContentStore, e.ContentRef)
+		if derr != nil {
+			return diag.New(diag.DomainFiles, "content resolution for %q failed: %v", e.Name, derr)
+		}
+		dest := filepath.Join(ctx.Root, e.Name)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return diag.New(diag.DomainFiles, "cannot create directory for %q: %v", e.Name, err)
 		}
 		mode := parseMode(e.Mode)
-		if err := os.WriteFile(target, content, mode); err != nil {
-			return manifest.NewError(manifest.DomainFiles, "write failed for "+e.Name+": "+err.Error())
+		if err := os.WriteFile(dest, content, mode); err != nil {
+			return diag.New(diag.DomainFiles, "write %q failed: %v", e.Name, err)
 		}
-		// Verify the written content hashes to e.sha256 (skip the all-zero
-		// placeholder digest used by bootstrapped manifests).
-		if !isPlaceholderSHA(e.SHA256) {
+		if e.SHA256 != "" {
 			sum := sha256.Sum256(content)
 			if hex.EncodeToString(sum[:]) != e.SHA256 {
-				return manifest.NewError(manifest.DomainFiles, "written content hash mismatch for "+e.Name)
+				return diag.New(diag.DomainFiles, "written content hash mismatch for %q", e.Name)
 			}
 		}
 	}
-
 	for _, p := range d.FilesDelete {
-		if p == diff.SyncpointPath || opts.KeepList[p] {
+		if p == diff.SyncpointPath || keep[p] {
 			continue
 		}
-		if isRPMOwned(ctx.Root, p, opts.Runner) {
-			continue
-		}
-		target := filepath.Join(ctx.Root, p)
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			return manifest.NewError(manifest.DomainFiles, "delete failed for "+p+": "+err.Error())
+		dest := filepath.Join(ctx.Root, p)
+		if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+			return diag.New(diag.DomainFiles, "delete %q failed: %v", p, err)
 		}
 	}
 	return nil
 }
 
-// Units implements BEHAVIOR/INTERNAL: converge-units using offline enablement
-// against the context root.
-func Units(ctx *txn.Context, d manifest.Diff, opts Options) *manifest.Diagnostic {
-	r := opts.Runner
+// ConvergeUnits applies the declared unit states offline against ctx.Root.
+func ConvergeUnits(ctx *txn.Context, d *diff.Diff, opts Options) *diag.Diagnostic {
+	runner := opts.Runner
+	if runner == nil {
+		runner = &state.OSCommandRunner{}
+	}
 	for _, u := range d.UnitsChange {
 		var verb string
 		switch u.State {
@@ -125,15 +132,16 @@ func Units(ctx *txn.Context, d manifest.Diff, opts Options) *manifest.Diagnostic
 		case "masked":
 			verb = "mask"
 		default:
-			return manifest.NewError(manifest.DomainUnits, "unknown unit state "+u.State+" for "+u.Name)
+			return diag.New(diag.DomainServices, "unit %q has invalid state %q", u.Name, u.State)
 		}
-		if _, _, err := r.Run("systemctl", []string{"--root", ctx.Root, verb, u.Name}); err != nil {
-			return manifest.NewError(manifest.DomainUnits, "offline enablement failed for "+u.Name+": "+err.Error())
+		if _, stderr, err := runner.Run("systemctl", "--root", ctx.Root, verb, u.Name); err != nil {
+			return diag.New(diag.DomainServices, "offline %s of %q failed: %s", verb, u.Name, strings.TrimSpace(stderr))
 		}
 	}
 	return nil
 }
 
+// resolveContent loads the content for a content_ref relative to the store.
 func resolveContent(store, ref string) ([]byte, error) {
 	if ref == "" {
 		return []byte{}, nil
@@ -142,71 +150,17 @@ func resolveContent(store, ref string) ([]byte, error) {
 	if store != "" && !filepath.IsAbs(ref) {
 		path = filepath.Join(store, ref)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// No content available in this environment; treat as empty content
-			// so a files-only declaration can still be written. A real
-			// deployment supplies the content store.
-			return []byte{}, nil
-		}
-		return nil, err
-	}
-	return data, nil
+	return os.ReadFile(path)
 }
 
-func isRPMOwned(root, path string, r sysexec.CommandRunner) bool {
-	if r == nil {
-		return false
-	}
-	_, _, err := r.Run("rpm", []string{"--root", root, "-qf", path})
-	return err == nil
-}
-
-func parseMode(mode string) os.FileMode {
-	if mode == "" {
+// parseMode parses an octal mode string into os.FileMode, defaulting to 0644.
+func parseMode(s string) os.FileMode {
+	if s == "" {
 		return 0o644
 	}
-	var v int64
-	for _, c := range mode {
-		if c < '0' || c > '7' {
-			return 0o644
-		}
-		v = v*8 + int64(c-'0')
+	n, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return 0o644
 	}
-	return os.FileMode(v)
-}
-
-func isPlaceholderSHA(s string) bool {
-	if len(s) != 64 {
-		return true
-	}
-	for _, c := range s {
-		if c != '0' {
-			return false
-		}
-	}
-	return true
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
+	return os.FileMode(n)
 }

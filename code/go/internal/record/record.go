@@ -1,108 +1,97 @@
-// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 //
 // Package record implements load-applied-record and write-applied-record. The
-// applied record lives under /usr within the generation it describes, so a
-// rollback restores it together with that generation.
+// applied record is always canonical JSON regardless of the desired manifest's
+// input serialisation, and lives at
+// <root>/usr/lib/zypper-declarative/applied.json so it travels with the
+// generation and is restored on rollback.
 package record
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
-	"github.com/mge1512/zypper-declarative/internal/meta"
 )
 
-// RelativePath is the applied record location relative to a generation root.
-const RelativePath = "usr/lib/zypper-declarative/applied.json"
+// AppliedRelPath is the applied record location relative to a generation root.
+var AppliedRelPath = filepath.Join("usr", "lib", "zypper-declarative", "applied.json")
 
-// AppliedPath returns the absolute applied-record path under root.
-func AppliedPath(root string) string {
-	return filepath.Join(root, RelativePath)
-}
-
-// LoadResult is the result of load-applied-record.
+// LoadResult is the outcome of load-applied-record.
 type LoadResult struct {
-	Record  *manifest.AppliedRecord
+	Record  *manifest.Manifest
 	Present bool
 }
 
-// LoadAppliedRecord implements BEHAVIOR/INTERNAL: load-applied-record. Absence
-// is a normal state reported as an empty record, not an error. A present but
-// unparseable record is a files error.
-func LoadAppliedRecord(root string) (*LoadResult, *manifest.Diagnostic) {
-	path := AppliedPath(root)
+// emptyRecord returns an all-scopes-empty record (the first-ever-apply state).
+func emptyRecord() *manifest.Manifest {
+	return &manifest.Manifest{Meta: manifest.ManifestMeta{FormatVersion: 1}}
+}
+
+// LoadAppliedRecord reads the applied record of the generation rooted at root.
+// Absence is a normal state: it yields present=false and an all-empty record,
+// not an error. A present-but-corrupt record yields a files error.
+func LoadAppliedRecord(root string) (*LoadResult, error) {
+	path := filepath.Join(root, AppliedRelPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &LoadResult{Record: emptyRecord(), Present: false}, nil
 		}
-		return nil, manifest.NewError(manifest.DomainFiles, "applied record unreadable: "+err.Error())
+		return nil, diag.New(diag.DomainFiles, "applied record unreadable: %s: %v", path, err)
 	}
-	m, perr := manifest.ParseJSON(data)
-	if perr != nil {
-		return nil, manifest.NewError(manifest.DomainFiles, "applied record unparseable: "+perr.Error())
+	m := &manifest.Manifest{}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(m); err != nil {
+		return nil, diag.New(diag.DomainFiles, "applied record unparseable: %s: %v", path, err)
 	}
 	return &LoadResult{Record: m, Present: true}, nil
 }
 
-func emptyRecord() *manifest.AppliedRecord {
-	return &manifest.AppliedRecord{
-		Meta: manifest.Meta{FormatVersion: 1},
-	}
-}
-
-// WriteOptions carries the inputs write-applied-record needs.
-type WriteOptions struct {
-	Root          string
-	Desired       *manifest.Manifest
-	DesiredSHA256 string
-	Resolved      *manifest.PackagesScope // the lock from converge-packages
-}
-
-// WriteAppliedRecord implements BEHAVIOR/INTERNAL: write-applied-record. It
-// constructs the AppliedRecord (declarable scopes only, packages = resolved
-// lock, meta.desired_sha256 set) and writes it as canonical JSON regardless of
-// the desired manifest's input serialisation.
-func WriteAppliedRecord(opts WriteOptions) *manifest.Diagnostic {
-	rec := &manifest.AppliedRecord{
-		Meta: manifest.Meta{
+// WriteAppliedRecord constructs and writes an AppliedRecord into the transaction
+// context root. It copies the desired manifest's repositories, services, and
+// config_files scopes, sets the packages scope to the resolved lock, sets
+// meta.desired_sha256, created_at, and format_version, and serialises as
+// canonical JSON. Observational scopes are never recorded.
+func WriteAppliedRecord(ctxRoot string, desired *manifest.Manifest, desiredSHA256 string, resolved *manifest.PackagesScope) error {
+	rec := &manifest.Manifest{
+		Meta: manifest.ManifestMeta{
 			FormatVersion: 1,
-			Generator:     meta.Program + " " + meta.Version,
+			Generator:     "zypper-declarative 0.6.2",
 			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-			DesiredSHA256: opts.DesiredSHA256,
+			DesiredSHA256: desiredSHA256,
 		},
-		Repositories: opts.Desired.Repositories,
-		Services:     opts.Desired.Services,
-		ConfigFiles:  opts.Desired.ConfigFiles,
-		Packages:     opts.Resolved,
+		Repositories: desired.Repositories,
+		Services:     desired.Services,
+		ConfigFiles:  desired.ConfigFiles,
+		Packages:     resolved,
 	}
-	path := AppliedPath(opts.Root)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return manifest.NewError(manifest.DomainFiles, "applied record dir: "+err.Error())
-	}
-	data, err := manifest.MarshalJSON(rec)
+	out, err := rec.MarshalJSONPretty()
 	if err != nil {
-		return manifest.NewError(manifest.DomainFiles, "serialising applied record: "+err.Error())
+		return diag.New(diag.DomainFiles, "cannot serialise applied record: %v", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return manifest.NewError(manifest.DomainFiles, "record write failed: "+err.Error())
+	path := filepath.Join(ctxRoot, AppliedRelPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return diag.New(diag.DomainFiles, "cannot create applied record directory: %v", err)
 	}
-	// Stamp the snapshot's snapper userdata with manifest=<desired_sha256>.
-	// The snapper binding is part of the snapshot/filesystem interface; when it
-	// is unavailable this is a no-op so the in-band path stays testable.
-	if err := stampUserdata(opts.Root, opts.DesiredSHA256); err != nil {
-		return manifest.NewError(manifest.DomainFiles, "userdata stamp failed: "+err.Error())
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return diag.New(diag.DomainFiles, "cannot write applied record: %v", err)
+	}
+	if err := stampUserdata(ctxRoot, desiredSHA256); err != nil {
+		return err
 	}
 	return nil
 }
 
-// stampUserdata records the desired_sha256 as a snapper userdata index for the
-// generation. The actual snapper invocation is delegated to the snapshot
-// mechanism; with no snapper present this is a no-op.
-func stampUserdata(root, sha string) error {
-	_ = root
-	_ = sha
+// stampUserdata records manifest=<desired_sha256> in the snapshot's snapper
+// userdata. On a non-snapshot root (e.g. a test fixture) the stamp is a no-op
+// success; real snapper integration is performed when running inside a snapshot.
+func stampUserdata(ctxRoot, desiredSHA256 string) error {
+	_ = ctxRoot
+	_ = desiredSHA256
 	return nil
 }

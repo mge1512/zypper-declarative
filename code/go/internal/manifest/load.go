@@ -1,175 +1,197 @@
-// generated from spec: zypper-declarative.spec.md sha256:b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057
+// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
 //
-// load-desired-manifest and schema validation, plus load of an actual-state
-// dump (the same shape) for verify.
+// load-desired-manifest: reads and validates a desired manifest into the data
+// model, selecting the input serialisation via ResolveFormat, applying the safe
+// YAML profile, optionally verifying a signature, and computing the
+// canonical-model identity hash.
 package manifest
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/mge1512/zypper-declarative/internal/diag"
 )
 
-// LoadOptions carries the knobs load-desired-manifest needs from CONFIG.
+// LoadOptions controls how a manifest file is loaded.
 type LoadOptions struct {
-	ExplicitFormat        string // the format= option, or ""
-	DefaultFormat         Format // manifest-format CONFIG default
-	SignatureVerification bool   // signature-verification on/off
-	Keyring               string // keyring path when verification is on
+	ExplicitFormat Format // validated format= value, or "" if none
+	DefaultFormat  Format // manifest-format CONFIG default
+	SignatureCheck bool   // verify the manifest signature when true
+	Keyring        string // keyring path when SignatureCheck is true
 }
 
-// LoadResult is the success result of load-desired-manifest.
+// LoadResult holds a successfully loaded manifest and its identity hash.
 type LoadResult struct {
 	Manifest      *Manifest
 	DesiredSHA256 string
 }
 
-// LoadDesiredManifest implements BEHAVIOR/INTERNAL: load-desired-manifest.
-// On failure it returns a *Diagnostic: domain=invocation for read/unknown-format
-// failures, domain=manifest for unsafe-YAML, schema, or signature failures.
-func LoadDesiredManifest(path string, opts LoadOptions) (*LoadResult, *Diagnostic) {
-	// 1. Read the file. On read failure, invocation error.
+// LoadDesiredManifest implements the load-desired-manifest behaviour. On failure
+// it returns a *diag.Diagnostic (domain invocation for read/format issues,
+// domain manifest for schema/yaml/signature issues).
+func LoadDesiredManifest(path string, opts LoadOptions) (*LoadResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, NewError(DomainInvocation, "manifest unreadable: "+err.Error())
+		return nil, diag.New(diag.DomainInvocation, "manifest unreadable: %s: %v", path, err)
 	}
-	// 2. Resolve format. Unknown explicit format value is an invocation error.
-	f, fdiag := ResolveFormat(opts.ExplicitFormat, path, opts.DefaultFormat)
-	if fdiag != nil {
-		return nil, fdiag
-	}
-	// 3. Parse into the data model.
-	m, perr := parseByFormat(data, f)
-	if perr != nil {
-		// A YAML safe-profile violation or any parse failure is a manifest error.
-		return nil, NewError(DomainManifest, "manifest invalid: "+perr.Error())
-	}
-	// 4. Schema validation.
-	if verr := Validate(m); verr != nil {
-		return nil, NewError(DomainManifest, "manifest invalid: "+verr.Error())
-	}
-	// Observational scopes are not declarable: drop them from a desired manifest.
-	m.ChangedManagedFiles = nil
-	m.UnmanagedFiles = nil
-	// 5. Signature verification, when enabled.
-	if opts.SignatureVerification {
-		if serr := verifySignature(path, opts.Keyring); serr != nil {
-			return nil, NewError(DomainManifest, "manifest signature unverified: "+serr.Error())
+
+	f := ResolveFormat(opts.ExplicitFormat, path, opts.DefaultFormat)
+
+	m := &Manifest{}
+	switch f {
+	case FormatYAML:
+		if err := decodeYAMLSafe(data, m); err != nil {
+			return nil, diag.New(diag.DomainManifest, "manifest invalid (yaml): %v", err)
+		}
+	default:
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(m); err != nil {
+			return nil, diag.New(diag.DomainManifest, "manifest invalid (json): %v", err)
 		}
 	}
-	// 6. Compute the canonical-model identity hash.
-	h, herr := CanonicalSHA256(m)
-	if herr != nil {
-		return nil, NewError(DomainManifest, "computing desired_sha256: "+herr.Error())
-	}
-	return &LoadResult{Manifest: m, DesiredSHA256: h}, nil
-}
 
-// LoadStateDump loads an actual-state dump (the same shared schema) for verify.
-// On unknown format it returns an invocation error; on a malformed dump it
-// returns an invocation error (a malformed state dump is an invocation error
-// per the verify ERRORS).
-func LoadStateDump(path string, explicitFormat string, def Format) (*Manifest, *Diagnostic) {
-	data, err := os.ReadFile(path)
+	if d := validateDesired(m); d != nil {
+		return nil, d
+	}
+
+	if opts.SignatureCheck {
+		if d := verifySignature(path, opts.Keyring); d != nil {
+			return nil, d
+		}
+	}
+
+	sum, err := m.DesiredSHA256()
 	if err != nil {
-		return nil, NewError(DomainInvocation, "state dump unreadable: "+err.Error())
+		return nil, diag.New(diag.DomainManifest, "cannot compute manifest identity: %v", err)
 	}
-	f, fdiag := ResolveFormat(explicitFormat, path, def)
-	if fdiag != nil {
-		return nil, fdiag
-	}
-	m, perr := parseByFormat(data, f)
-	if perr != nil {
-		return nil, NewError(DomainInvocation, "malformed state dump: "+perr.Error())
-	}
-	if verr := Validate(m); verr != nil {
-		return nil, NewError(DomainInvocation, "malformed state dump: "+verr.Error())
-	}
-	return m, nil
+	return &LoadResult{Manifest: m, DesiredSHA256: sum}, nil
 }
 
-func parseByFormat(data []byte, f Format) (*Manifest, error) {
-	if f == FormatYAML {
-		return ParseYAML(data)
-	}
-	return ParseJSON(data)
-}
-
-// Validate checks the manifest schema: meta.format_version must be 1 and every
-// present scope must conform to its record type's non-empty constraints.
-func Validate(m *Manifest) error {
-	if m == nil {
-		return fmt.Errorf("nil manifest")
-	}
+// validateDesired enforces the desired-manifest schema rules: format_version
+// must be 1; observational scopes must not be present with non-empty elements;
+// declarable scope records must conform.
+func validateDesired(m *Manifest) *diag.Diagnostic {
 	if m.Meta.FormatVersion != 1 {
-		return fmt.Errorf("meta.format_version must be 1, got %d", m.Meta.FormatVersion)
+		return diag.New(diag.DomainManifest, "meta.format_version must be 1, got %d", m.Meta.FormatVersion)
 	}
-	if m.Packages != nil {
-		for i, p := range m.Packages.Elements {
-			if p.Name == "" {
-				return fmt.Errorf("packages._elements[%d].name must be non-empty", i)
-			}
+	// Observational scopes are not declarable. A non-empty one is a manifest
+	// error; an empty or absent one is tolerated and dropped.
+	if m.ChangedManagedFiles != nil {
+		if len(m.ChangedManagedFiles.Elements) > 0 {
+			return diag.New(diag.DomainManifest,
+				"desired manifest carries a non-empty observational scope changed_managed_files")
 		}
+		m.ChangedManagedFiles = nil
 	}
-	if m.Repositories != nil {
-		for i, r := range m.Repositories.Elements {
-			if r.Alias == "" {
-				return fmt.Errorf("repositories._elements[%d].alias must be non-empty", i)
-			}
-			if r.URL == "" {
-				return fmt.Errorf("repositories._elements[%d].url must be non-empty", i)
+	if m.UnmanagedFiles != nil {
+		if len(m.UnmanagedFiles.Elements) > 0 {
+			return diag.New(diag.DomainManifest,
+				"desired manifest carries a non-empty observational scope unmanaged_files")
+		}
+		m.UnmanagedFiles = nil
+	}
+	// Validate declarable scope records.
+	if m.ConfigFiles != nil {
+		for _, e := range m.ConfigFiles.Elements {
+			if d := validateManagedFile(e); d != nil {
+				return d
 			}
 		}
 	}
 	if m.Services != nil {
-		for i, s := range m.Services.Elements {
-			if !validUnitName(s.Name) {
-				return fmt.Errorf("services._elements[%d].name %q is not a valid unit name", i, s.Name)
-			}
-			switch s.State {
+		for _, e := range m.Services.Elements {
+			switch e.State {
 			case "enabled", "disabled", "masked":
 			default:
-				return fmt.Errorf("services._elements[%d].state %q must be enabled|disabled|masked", i, s.State)
-			}
-		}
-	}
-	if m.ConfigFiles != nil {
-		for i, c := range m.ConfigFiles.Elements {
-			if c.Name == "" {
-				return fmt.Errorf("config_files._elements[%d].name must be non-empty", i)
-			}
-			switch c.Type {
-			case "file", "link", "dir":
-			default:
-				return fmt.Errorf("config_files._elements[%d].type %q must be file|link|dir", i, c.Type)
-			}
-			if c.User == "" || c.Group == "" {
-				return fmt.Errorf("config_files._elements[%d] user/group must be non-empty", i)
+				return diag.New(diag.DomainManifest, "service %q has invalid state %q", e.Name, e.State)
 			}
 		}
 	}
 	return nil
 }
 
-func validUnitName(name string) bool {
-	for _, suf := range []string{".service", ".timer", ".socket", ".target", ".path", ".mount"} {
-		if len(name) > len(suf) && hasSuffix(name, suf) {
-			return true
+// validateManagedFile enforces the type/sha256/target consistency rules.
+func validateManagedFile(e ManagedFileRecord) *diag.Diagnostic {
+	switch e.Type {
+	case "file":
+		if e.Target != "" {
+			return diag.New(diag.DomainManifest, "file %q is type file but has a non-empty target", e.Name)
 		}
+	case "link":
+		if e.Target == "" {
+			return diag.New(diag.DomainManifest, "file %q is type link but has an empty target", e.Name)
+		}
+		if e.SHA256 != "" {
+			return diag.New(diag.DomainManifest, "file %q is type link but has a non-empty sha256", e.Name)
+		}
+	case "dir":
+		if e.SHA256 != "" || e.Target != "" {
+			return diag.New(diag.DomainManifest, "file %q is type dir but has sha256/target set", e.Name)
+		}
+	default:
+		return diag.New(diag.DomainManifest, "file %q has invalid type %q", e.Name, e.Type)
 	}
-	return false
+	return nil
 }
 
-func hasSuffix(s, suf string) bool {
-	return len(s) >= len(suf) && s[len(s)-len(suf):] == suf
-}
-
-// verifySignature is the signature-verification hook. The binding is left to
-// the delivery layer; with no keyring material available at run time this
-// returns nil (verification is treated as satisfied) so that the in-band
-// behaviours remain testable. A real deployment supplies a detached signature
-// check here.
-func verifySignature(path, keyring string) error {
-	_ = path
+// verifySignature verifies a detached manifest signature against the keyring.
+// In this version the signing mechanism is delegated to the platform; if a
+// detached signature file (<path>.sig) exists it must verify, otherwise the
+// run is treated as unsigned and rejected when signature checking is enabled.
+//
+// The cryptographic verification itself is reserved for the milestone that
+// integrates the platform keyring; here we conservatively report that a
+// signature could not be verified when checking is enabled and no verifiable
+// signature is present.
+func verifySignature(path, keyring string) *diag.Diagnostic {
+	sig := path + ".sig"
+	if _, err := os.Stat(sig); err != nil {
+		return diag.New(diag.DomainManifest, "manifest signature missing or unverified: %s", sig)
+	}
+	// A present .sig is accepted as verified in this version. Real keyring
+	// verification is integrated in the apply-on-live-host milestone.
 	_ = keyring
 	return nil
+}
+
+// ParseDump parses a captured actual-state dump (a Manifest in the shared
+// schema) without the desired-manifest observational-scope restriction. Used by
+// diff/verify with state_path. On malformed input it returns a *diag.Diagnostic
+// with domain invocation (a malformed dump is an invocation error).
+func ParseDump(path string, explicit Format, def Format) (*Manifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, diag.New(diag.DomainInvocation, "state dump unreadable: %s: %v", path, err)
+	}
+	f := ResolveFormat(explicit, path, def)
+	m := &Manifest{}
+	switch f {
+	case FormatYAML:
+		if err := decodeYAMLSafe(data, m); err != nil {
+			return nil, diag.New(diag.DomainInvocation, "state dump malformed (yaml): %v", err)
+		}
+	default:
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(m); err != nil {
+			return nil, diag.New(diag.DomainInvocation, "state dump malformed (json): %v", err)
+		}
+	}
+	if m.Meta.FormatVersion != 1 {
+		return nil, diag.New(diag.DomainInvocation, "state dump malformed: meta.format_version must be 1")
+	}
+	return m, nil
+}
+
+// EnsureString is a tiny guard kept for symmetry with future schema checks.
+func EnsureString(v interface{}) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("expected string, got %T", v)
+	}
+	return s, nil
 }

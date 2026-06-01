@@ -1,448 +1,275 @@
 # TRANSLATION_REPORT.md — zypper-declarative
 
-- **Spec-SHA256:** `b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057` (merged)
-- **Spec-SHA256 (host):** `b2d0de88fbed1163678e59e931c741b9d999b71f902f6eb01db8790bb813d057`
-- **Included-Specs:**
+- **Spec-SHA256:** `f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e`
+  (merged spec text; host has no `Includes:` directives, so this equals the host hash)
+- **Spec-SHA256 (host):** `f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e`
+- **Included-Specs:** (none)
 
   | Path | SHA256 |
   |------|--------|
-  | *(none — the spec META declares no `Includes:` directives)* | |
-
-  The host spec declares no `Includes:`, so the merged hash equals the host
-  hash and the inclusions table is empty (the v0.3.x-compatible case). The spec
-  declares `Spec-Schema: 0.4.0`; the merge logic was applied and found no
-  includes, satisfying the forward-compatibility requirement.
+  | — | — |
 
 - **LLM-Name:** `claude-opus-4-8`
 - **Mode:** `translator`
+- **Tests-First-Compliance:** `yes` — every file under
+  `independent_tests/claude-opus-4-8/` was written and the Tests-First structural
+  guard (a non-empty test directory) was satisfied before any implementation
+  source file in `cmd/` or `internal/` was written.
+- **Continuity-Check:** not applicable — no test-author input. The input
+  directory contained no `independent_tests/<other-role-llm-name>/` directory and
+  no `TEST_REPORT.md`. This is a single-LLM run (a fully supported invocation).
 - **Deployment-Template:** `cli-tool.template.md v0.3.29`
-- **Tests-First-Compliance:** `yes`. Phase 1 wrote the entire test suite under
-  `independent_tests/claude-opus-4-8/` before any implementation source file was
-  written. The structural Tests-First guard (test directory non-empty,
-  `gofmt -l` empty, `go vet` clean) passed before Phase 2 began.
-- **Continuity-Check:** not applicable — no test-author input. No
-  `independent_tests/<other-role-llm-name>/` directory and no `TEST_REPORT.md`
-  were present in the input directory. This is a single-LLM translator run,
-  which is a fully supported invocation.
+- **Delivery mode:** Filesystem. Source files written directly to
+  `/tmp/pcd-output/`. No remote push performed.
 
-## Language and module identity
+## Language resolution
 
-- **Target language resolved:** Go. The cli-tool template `LANGUAGE` default is
-  Go (constraint `default`). No preset files were present at any layer
-  (`/usr/share/pcd/presets/`, `/etc/pcd/presets/`, `~/.config/pcd/presets/`,
-  `<project>/.pcd/`) and the spec declares no LANGUAGE in META (and may not, per
-  the template POSTCONDITIONS). Go is therefore the resolved language. No
-  deviation from the template default.
-- **Module identity resolved:** `github.com/mge1512/zypper-declarative`.
-  Authoritative source **1** (spec META `Module:` field). Source 2 (the Go
-  decisions hints file `zypper-declarative.go.decisions.hints.md`) independently
-  states the same value (`[spec]` Go module path is
-  `github.com/mge1512/zypper-declarative`); sources 1 and 2 agree, so the
-  agreed value was used. The `MODULE-IDENTITY: host-specified` constraint
-  applies and was satisfied without the spec-title fallback. The identity is
-  propagated to `go.mod`, all internal import paths, the RPM `URL:`/`Source0:`,
-  the DEB `Homepage:`/`Source:`, and the README/man Homepage line.
+- **Resolved language:** Go. This is the cli-tool template default
+  (`LANGUAGE | Go | default`). No preset file was present and the spec does not
+  declare LANGUAGE in META (per the template's POSTCONDITION, a cli-tool spec may
+  not declare LANGUAGE in META). No deviation from the template default.
+- **BINARY-TYPE:** `static` (template default; required for Go).
+  `CGO_ENABLED=0` is set in the Makefile `build:` target, the RPM `%build`, and
+  `debian/rules`.
 
-## Delivery mode
+## Module identity resolution
 
-Filesystem (delivery mode 1). All source, packaging, documentation, tests, and
-this report were written directly to `/tmp/pcd-output/`. The compile gate ran in
-the local environment. Dual-LLM was not in effect (single-LLM run), which is
-compatible with the filesystem delivery mode.
+- **Resolved module identity:** `github.com/mge1512/zypper-declarative`.
+- **Authoritative source:** source (1), the spec META `Module:` field
+  (`Module: github.com/mge1512/zypper-declarative`). The language-specific
+  decisions hints file (`zypper-declarative.go.decisions.hints.md`) independently
+  confirms the same value, so sources (1) and (2) agree. No conflict; no halt.
+  The spec-title fallback (source 4) was **not** used.
 
 ## Active MILESTONE
 
-The spec contains seven `## MILESTONE:` sections (0.0.0 through 0.6.0). **Every
-milestone has `Status: pending`; none is `active`.** Per the universal-principles
-rule "If no MILESTONE section is present, or no milestone has `Status: active`,
-translate the full spec as normal", the full spec was translated. The
-`cli-tool.go.milestones.hints.md` (scaffold-first pattern) and
-`zypper-declarative.go.decisions.hints.md` (guided-regeneration decisions) were
-both read before any code was written and applied throughout (single
-live-state reader, pure `compute-drift`, shared `resolve-format`, abstract
-transaction binding, applied-record-always-JSON, canonical-model hashing,
-exec-based system integration for a static `CGO_ENABLED=0` binary).
+The spec declares MILESTONEs `0.0.0`–`0.6.0`, but **every** milestone has
+`Status: pending`; none is `Status: active`. Per the prompt ("If no MILESTONE
+section is present, or no milestone has `Status: active`, translate the full spec
+as normal"), the full spec was translated. All five CLI verbs and all eleven
+BEHAVIOR/INTERNAL behaviours were implemented. The M0 scaffold acceptance
+criteria are nonetheless all satisfied by the full build (see Compile gate).
 
-The spec Version is 0.6.0, which corresponds to the final milestone's BEHAVIOR
-set (all behaviours included). All BEHAVIORs are implemented; none is left as an
-unimplemented stub and none is "not yet scheduled".
+## Delivery phases (per template EXECUTION)
+
+1. **Phase 1 — Tests first:** `independent_tests/claude-opus-4-8/` with four test
+   files (32 black-box tests), written before any implementation source.
+2. **Phase 2 — Core implementation:** `cmd/zypper-declarative/main.go` (entry
+   point, CLI dispatch wiring only) plus `internal/` packages (behaviour), and
+   `go.mod` (direct deps only).
+3. **Phase 3 — Build and packaging:** `Makefile`, `zypper-declarative.spec`,
+   `debian/{control,changelog,rules,copyright}`, `LICENSE`,
+   `zypper-declarative.1.md` + `zypper-declarative.1`.
+4. **Phase 4 — Auxiliary:** `translation_report/translation-workflow.pikchr`.
+5. **Phase 5 — Documentation:** `README.md`.
+6. **Phase 6 — Compile gate:** executed (see below).
+7. **Phase 7 — Report:** this file, written last.
+
+The `zypper-declarative` binary itself is a **build output** (not a named
+deliverable) and is therefore not committed; `make build` and the tests'
+`TestMain` build it at the project root (the `BINARY-LOCATION: project-root`
+contract — `../../zypper-declarative` from the test directory).
+
+## Source partitioning (SOURCE-PARTITIONING: modular, one-entry-one-implementation)
+
+The entry-point module (`cmd/zypper-declarative/main.go`) contains only signal
+setup and a call into `internal/cli`. Behaviour is partitioned by domain, one
+internal package per concern, mirroring the spec's behaviour grouping and the
+decisions hints layout:
+
+| Package | Behaviours |
+|---------|-----------|
+| `internal/cli` | Verb dispatch, key=value parsing, the global CLI contract, exit-code mapping, and the five verbs (apply, diff, verify, status, describe). |
+| `internal/manifest` | Data model TYPES; JSON/YAML edges; `resolve-format`; `load-desired-manifest`; canonical-model hashing; dump parsing. |
+| `internal/state` | `describe-actual-state` — the single live-state reader (rpmdb, repos.d, systemd, /etc walk, full scan). |
+| `internal/diff` | `compute-intent-diff`, `compute-drift` (pure, no I/O). |
+| `internal/converge` | `converge-packages`, `converge-files`, `converge-units`. |
+| `internal/txn` | `acquire-transaction-context` + the auto/external/internal binding. |
+| `internal/record` | `load-applied-record`, `write-applied-record`. |
+| `internal/diag` | The `Diagnostic` value (severity, domain, message). |
+| `internal/meta` | Embedded spec SHA256 and version. |
 
 ## STEPS ordering per BEHAVIOR
 
-Each BEHAVIOR's STEPS were implemented in the order written:
+Each verb implements its spec STEPS in declared order:
 
-- **apply** (`internal/cli/verbs.go` `runApply`): load desired → load applied →
-  intent diff → empty-diff-and-drift "nothing to do" short-circuit → acquire
-  transaction context → converge repositories+packages → converge files →
-  converge units → write applied record → post-converge verify (describe + drift)
-  → seal/activate summary. Exit-code mapping (2 for invocation/transaction-
-  unavailable, 1 for logical failures) lives only in this verb layer.
-- **diff** (`runDiff`): load desired → load applied → intent diff → live
-  actual state on "/" (scope=etc, on_unreadable=error) → drift → print plan → 0.
-- **verify** (`runVerify`): load applied (absent → exit 2 "no declaration
-  applied") → actual state (state dump via state-path, or live on "/" with the
-  requested scope) → drift → 0 / 1.
-- **status** (`runStatus`): reject stray arguments (handled at dispatch) → load
-  applied (absent → "no declaration applied", exit 0) → print desired_sha256,
-  format_version, generation, created_at, package count → live drift summary.
-- **describe** (`runDescribe`): reject unknown verb/format (dispatch + resolve-
-  format) → describe-actual-state on root with on_unreadable and scope →
-  resolve-format(format, out) → serialise → write to out or stdout (unwritable
-  → exit 2).
-- **describe-actual-state** (`internal/state`): packages (rpmdb) → repositories
-  (on-disk `/etc/zypp/repos.d`) → services (unit enablement) → config_files
-  (bounded to `/etc`) → 4a full-scan integrity (scope=full only) → assemble →
-  unreadable-source handling per `on_unreadable`.
-- **resolve-format / load-desired-manifest / load-applied-record /
-  compute-intent-diff / compute-drift / acquire-transaction-context /
-  converge-packages / converge-files / converge-units / write-applied-record**:
-  implemented step-for-step in `internal/manifest`, `internal/record`,
-  `internal/diff`, `internal/txn`, and `internal/converge`. Internal behaviours
-  return `*manifest.Diagnostic` (which implements `error`) to their caller and
-  never call `os.Exit`; the verb layer maps diagnostics to exit codes.
+- **apply** (`internal/cli/verbs.go runApply`): (1) load desired → (2) load
+  applied → (3) intent diff → (4) if empty, describe-actual-state + compute-drift
+  and "nothing to do" → (5) acquire-transaction-context → (6) converge-packages
+  → (7) converge-files → (8) converge-units → (9) write-applied-record → (10)
+  post-converge describe + compute-drift → (11) summary + exit 0. Each failing
+  step discards (returns without committing) and exits 1, except read/format and
+  transaction-availability failures which exit 2.
+- **diff** (`runDiff`): (1) load desired → (2) load applied → (3) intent diff →
+  (4) actual state (supplied dump or live) → compute-drift → (5) print plan,
+  exit 0.
+- **verify** (`runVerify`): (1) determine reference (manifest-path else applied
+  record; absent applied record → exit 2) → (2) actual state (state-path else
+  live with scope) → (3) compute-drift → (4) empty → "system matches
+  declaration"/0, else one diagnostic per item to stderr/1.
+- **status** (`runStatus`): (1) reject unrecognised argument → (2) load applied
+  (none → "no declaration applied"/0) → (3) print hash/format_version/generation/
+  created_at/package count → (4) drift summary line.
+- **describe** (`runDescribe`): (1) reject unknown arg/format → (2)
+  describe-actual-state with on_unreadable/scope → (3) resolve-format(out) → (4)
+  serialise → (5) write to out or stdout.
 
-## INTERFACES test doubles produced
+Internal behaviours return `*diag.Diagnostic` to their caller; exit-code mapping
+lives **only** in `internal/cli`, as the spec requires.
 
-The spec's `## INTERFACES` section names abstract external systems (package
+## INTERFACES test doubles
+
+The spec's `## INTERFACES` section describes abstract external systems (package
 manager, snapshot/filesystem, init system, transaction mechanism, optional
-external state producer). These are realised as two seams with both a production
-implementation and a declared test double:
-
-- `internal/sysexec`: `CommandRunner` interface, production `OSCommandRunner`
-  (fully implemented in M-equivalent terms per the milestone hints — it is not a
-  stub), and the declared test double `FakeCommandRunner` (records calls, replies
-  from a scripted map). Independent tests are black-box and exercise the built
-  binary, so they use neither directly; the double is available for any in-process
-  consumer and is never the production implementation.
-- `internal/txn`: `Binding` interface with the production `EnvBinding`; the
-  transaction binding is deliberately deferred per the spec, so `EnvBinding`
-  detects an external transaction from the environment and reports the internal
-  mechanism as unavailable where the zypper-merged machinery is not present.
+external state producer), not a set of named INTERFACE production/double types
+to implement. The one programmatic seam introduced is `state.CommandRunner` (with
+the production `state.OSCommandRunner`), which lets external-command-driven code
+(rpm, systemctl, zypper) be exercised without a live host. No production
+implementation is used by the independent tests — they are black-box and invoke
+the built binary only, so no test double is needed in the test layer.
 
 ## TYPE-BINDINGS / GENERATED-FILE-BINDINGS
 
 The cli-tool template contains no `## TYPE-BINDINGS` and no
-`## GENERATED-FILE-BINDINGS` sections, so neither mechanical mapping applied.
-Logical types were realised idiomatically in Go (the `ScopeWrapper[T]` generic,
-`*ScopeWrapper` pointers to distinguish absent from present-but-empty scopes,
-and `json:"underscore_style"` struct tags per the Go milestone hints).
+`## GENERATED-FILE-BINDINGS` section, so neither was applied. Logical TYPES were
+mapped to idiomatic Go structs with explicit `json:` tags using underscore_style
+keys (per the Go hints file). The `ScopeWrapper<T>` idiom is realised as a
+concrete struct per scope (`{_attributes, _elements}` with `json` tags). Optional
+declarable scopes are pointers so an absent scope (nil) is distinguished from a
+present-but-empty scope.
 
-## BEHAVIOR Constraint handling
+## Constraint: supported / forbidden BEHAVIORs
 
 All BEHAVIOR and BEHAVIOR/INTERNAL sections in the spec carry
-`Constraint: required` and were implemented unconditionally. No BEHAVIOR is
-`supported` or `forbidden`, so no conditional or omitted code generation
-occurred.
+`Constraint: required`; all were implemented unconditionally. No BEHAVIOR is
+`supported` or `forbidden`, so no behaviour was conditionally activated or
+suppressed.
 
-## COMPONENT → filename mapping (template DELIVERABLES)
+## COMPONENT → filename mapping
 
-| Template OUTPUT-FORMAT | Constraint | Files produced |
-|---|---|---|
-| source | required | `cmd/zypper-declarative/main.go` (entry-point: dispatch only) + `internal/{cli,manifest,state,diff,converge,txn,record,sysexec,meta}/*.go` (implementation) + `go.mod`/`go.sum` |
-| public-api | required | `## Public API Surface` section below |
-| build | required | `Makefile` (`build test install clean man` targets; `test` is executable) |
-| docs | required | `README.md` (OBS install via zypper/apt/dnf; usage, options, exit codes; no curl) |
-| man | required | `zypper-declarative.1.md` + generated `zypper-declarative.1` |
-| license | required | `LICENSE` (SPDX `GPL-2.0-or-later` + authoritative URL; full text not reproduced) |
-| RPM | required | `zypper-declarative.spec` |
-| DEB | required | `debian/{control,changelog,rules,copyright}` (copyright is DEP-5) |
-| OCI | supported | *not produced* — no OCI preset active in the resolved preset |
-| PKG | supported | *not produced* — PLATFORM is Linux only; macOS not declared |
-| binary | supported | *not produced as a descriptor* — the raw binary at the project root is the build output |
-| report | required | this `TRANSLATION_REPORT.md` |
-| spec-hash | required | embedded in every artefact (see below) |
-| (aux) | — | `translation_report/translation-workflow.pikchr` (Phase 4 auxiliary artefact in the template EXECUTION phase list) |
+The spec has no DELIVERABLES section with COMPONENT entries; deliverable
+filenames were taken from the cli-tool template's DELIVERABLES table and the
+per-language source-layout table (Go: `cmd/<n>/main.go` entry point,
+`internal/<n>/`-style packages, `go.mod`).
 
-Source partitioning: `SOURCE-PARTITIONING: modular` and
-`one-entry-one-implementation` are satisfied — the entry point
-(`cmd/zypper-declarative/main.go`) contains only dispatch
-(`os.Exit(cli.Run(...))`); behaviour lives in nine `internal/` packages,
-partitioned `by-behaviour-domain` to mirror the spec's behaviour grouping (per
-the decisions hints layout).
+## Output formats produced
 
-Spec hash embedding (`spec-hash` deliverable): the SHA256 appears in every Go
-source header comment, `internal/meta/meta.go` `SpecSHA256`, the binary
-`version`/`--version` output (`spec:<hash>`), `Makefile` `SPEC_SHA256`,
-`zypper-declarative.spec` `# pcd-spec-sha256:` comment, `debian/control`
-`X-PCD-Spec-SHA256:`, `debian/rules` header, the test files' header comments,
-and this report's `Spec-SHA256:` field. No OCI Containerfile was produced, so no
-`LABEL pcd.spec.sha256` was needed.
+Required OUTPUT-FORMATs were all produced: `source`, `public-api`, `build`
+(Makefile), `docs` (README.md), `man` (`.1.md` + `.1`), `license` (LICENSE),
+`RPM` (`zypper-declarative.spec`), `DEB` (`debian/`), `report`, and `spec-hash`
+(embedded). The `supported` formats `OCI`, `PKG`, and `binary` were **not**
+produced because no resolved preset activates them (no preset files present;
+PLATFORM resolves to Linux only, so PKG is not required).
 
 ## Parsing approach
 
-- **Argument parsing** (`internal/cli/args.go`): the tool parses `key=value`
-  options itself (a token containing `=` and not starting with `-`), treating all
-  other tokens as bare-word verbs. Only the explicit alias tokens `--version`,
-  `--help`, `-h` are recognised as POSIX-style conveniences for the `version`/
-  `help` global commands; no option uses POSIX `--flag` style. Unknown keys,
-  unknown values, and stray post-verb bare words are invocation errors (exit 2).
-  `scope` is accepted only on `describe` and `verify`. Behaviour is never read
-  from environment variables.
-- **Manifest parsing** (`internal/manifest`): JSON via `encoding/json`. YAML via
-  `gopkg.in/yaml.v3` decoded into a `yaml.Node`, validated against the safe
-  profile (single document only — a second decode rejected; alias nodes
-  rejected; explicit application/executable tags rejected; bounded depth), then
-  converted to a JSON-typed value and decoded through `encoding/json` so typing
-  is explicit JSON typing rather than YAML implicit coercion. This satisfies the
-  spec's safe-profile constraints (no code-executing tags, bounded/disabled
-  aliases, single document, explicit typing).
-- **Repo file parsing** (`internal/state`): on-disk `/etc/zypp/repos.d/*.repo`
-  INI files are parsed directly (alias from the section header; `baseurl`/`url`
-  mapped to `RepositoryRecord.url`), never via a network refresh or privileged
-  cache.
+- **CLI:** hand-written `key=value` parser (`internal/cli`). A token containing
+  `=` is always an option (wherever it appears relative to the verb — the spec's
+  invocation examples place options after the verb); any other token is a bare
+  word. Unknown option keys, unknown option values, and unrecognised verb
+  positionals produce a `domain=invocation` diagnostic to stderr and exit 2.
+  `version`/`help` are bare-word global commands; `--version`/`--help`/`-h` are
+  tolerated aliases. Bare invocation prints usage to stdout and exits 0.
+- **JSON:** `encoding/json` with `DisallowUnknownFields` on load of a desired
+  manifest and a state dump, so schema-foreign keys are rejected.
+- **YAML (safe profile):** `gopkg.in/yaml.v3` (a non-code-executing loader). The
+  loader decodes a single document into a `yaml.Node`, then the implementation
+  (`internal/manifest/yaml.go`):
+  - rejects a **second document** (single-document streams only);
+  - rejects any **anchor** or **alias** node (defends against alias-expansion
+    denial of service — aliases are disabled, not merely bounded);
+  - rejects any explicit **non-core/custom tag** (executable or arbitrary tags);
+  - converts the safe node to a generic value, marshals it to JSON, and
+    re-decodes that JSON with `DisallowUnknownFields`, so **JSON typing** governs
+    (values such as `NO` or `1.10` are not YAML-coerced — explicit typing per the
+    schema).
+  This route demonstrably meets every safe-profile constraint in the spec and the
+  decisions hints. A JSON dump is still accepted as YAML input (JSON is valid
+  YAML 1.2).
 
-## Signal handling approach
+## Signal handling
 
-`internal/cli/dispatch.go` installs a handler for `SIGTERM` and `SIGINT` at the
-start of `Run`. On receipt it calls `os.Exit(0)` for a clean exit with no
-partial output. Because `apply` holds no committed snapshot until its final
-seal/activate step and the transaction is opened by an abstract binding, an
-interrupted converge leaves no new snapshot as the default boot target — the
-seal step is never reached. The signal approach is documented here per the spec
-and the template.
+`main()` installs a `signal.Notify` handler for `SIGTERM` and `SIGINT` and exits
+cleanly (exit 0) on receipt, before any partial output. An interrupted `apply`
+discards the transaction by simply not committing/sealing it: convergence
+mutates only the transaction-context root, and sealing/activation occurs only at
+the final step, so an interrupt leaves no new snapshot as the default boot
+target. (Live snapshot opening/sealing is delegated to the platform transaction
+mechanism and is exercised on a live host.)
 
-## Specification ambiguities and conservative interpretations
+## Dependency versions
 
-1. **Live-state read root for `diff`/`status`/`verify` (live).** The spec
-   hardcodes `describe-actual-state` on `"/"` for these verbs. On a host with a
-   large `/etc` and many installed packages, reading config_files (owning-package
-   and changed-file determination) is expensive. The bounded `/etc`-only
-   constraint (v0.5.2) was honoured: no file outside `/etc` is read/hashed and no
-   whole-system `rpm -Va` is run. To keep the cost a function of `/etc` rather
-   than the installed base, owning packages for `/etc` and changed `/etc` files
-   are each determined with a single bulk `rpm` query (owners filtered to `/etc`;
-   verification scoped to the owning packages), not one `rpm` invocation per file.
-2. **`config_files` user/group.** The Machinery record carries `user`/`group`;
-   the spec does not pin how actual ownership is read. Conservatively reported as
-   `root`/`root` for `/etc` files in the live reader. A future revision can read
-   `stat` ownership; this does not affect the identity comparison (drift uses
-   `sha256`).
-3. **Signature verification binding.** The spec leaves the keyring/signature
-   mechanism to the delivery layer. With `signature-verification=on` (default) and
-   no keyring material available at run time, the verification hook returns
-   success so the in-band behaviours remain exercisable; a real deployment
-   supplies the detached-signature check at `internal/manifest.verifySignature`.
-4. **Transaction mechanism.** The internal opener is deliberately deferred
-   (SLES 16.1 zypper-merged machinery). `EnvBinding.OpenInternal` reports the
-   mechanism as unavailable (transaction error → exit 2) where it is not present;
-   `mode=external` resolves against the new-generation root an external opener
-   presents. This matches the spec's "decision left open" and the
-   `apply_transaction_unavailable` EXAMPLE.
-5. **Content resolution for `converge-files`.** `content_ref` is resolved against
-   `content-store`; if the referenced content is absent in the environment, empty
-   content is written so a files-only declaration still converges. The hash-verify
-   step skips the all-zero placeholder digest used by bootstrapped manifests.
+- `gopkg.in/yaml.v3 v3.0.1` — the only direct third-party dependency, resolved
+  via `go mod tidy` and vendored with `go mod vendor`. This version is the
+  current stable release and was available in the local module cache; it is not
+  fabricated. The `go.sum` lock file was produced by the resolver.
+- The spec's DEPENDENCIES section notes that bindings to libzypp, snapper/btrfs,
+  and systemd require verified version strings *if a binding library is used*.
+  Per the decisions hints (`exec`-based integration to keep `CGO_ENABLED=0`),
+  **no** cgo binding to libzypp/snapper/systemd is taken; these systems are
+  driven through their command-line interfaces (`rpm`, `zypper`, `systemctl`) and
+  repos.d files are read directly. There is therefore no binding dependency
+  version to verify. This is flagged here as the deliberate integration choice.
 
-## Rules that could not be implemented exactly as written, and why
+## Compile gate (Phase 6)
 
-None of the spec's logic rules were left unimplemented. The system-touching
-endpoints (rpmdb query, zypp repo configuration, systemd offline enablement,
-snapper userdata stamping, the snapshot transaction itself) are delegated to the
-external tools via the `CommandRunner` seam and the `txn.Binding` seam, as the
-spec INTERFACES section and the Go decisions hints prescribe (exec-based
-integration for a static `CGO_ENABLED=0` binary). Their full end-to-end effect is
-verifiable only on a SUSE host with privilege and the snapshot machinery present;
-that is an environment property, not an unimplemented rule. The black-box test
-suite verifies every spec EXAMPLE that does not require privileged, live SUSE
-infrastructure.
+Executed in `/tmp/pcd-output` with `GOPATH`/`GOCACHE` under `$HOME` and no root.
 
-## DEPENDENCIES — version verification notes
+| Step | Command | Result |
+|------|---------|--------|
+| 1 — dependency resolution | `go mod tidy`; `go mod vendor` | pass (go.sum + vendor/ written) |
+| 2 — compilation | `go build ./...` | pass |
+| static analysis | `go vet ./...` | pass |
+| formatting | `gofmt -l internal cmd independent_tests` | pass (no files listed) |
+| binary build | `CGO_ENABLED=0 go build -o zypper-declarative ./cmd/zypper-declarative` | pass (`file` reports "statically linked") |
+| 3 — translator test run | `go test ./independent_tests/claude-opus-4-8/...` | pass (32/32) |
+| 4 — test-author test run | n/a (single-LLM) | not applicable |
 
-- `gopkg.in/yaml.v3 v3.0.1`: the YAML library, a direct dependency, driven under
-  the safe profile described above. No language-specific hints file pinned a YAML
-  version; v3.0.1 is the current stable tagged release and was resolved and
-  locked by `go mod tidy` (recorded in `go.sum`, vendored via `go mod vendor`).
-- libzypp / snapper / btrfs / systemd: no Go binding library is linked. The tool
-  drives `zypper`, `rpm`, `systemctl`, and `snapper` via their command-line
-  interfaces (no cgo), so there are **no Go-module bindings to version-verify**.
-  The runtime presence of these tools is a packaging/runtime concern recorded in
-  the RPM `BuildRequires` is not needed for them (they are runtime tools, not
-  build deps); they are flagged here as the runtime integration surface to verify
-  on the target (SL Micro 6.2 / SLES 16.1).
+M0 scaffold acceptance criteria (all pass):
 
-## Public API Surface
-
-The exported symbols of each implementation module. This surface must remain
-stable across translations of spec Version 0.6.0; a translation may add to it
-but may not remove or rename entries without a Version increment.
-
-### internal/meta
-- `const Program = "zypper-declarative"`
-- `const Version = "0.6.0"`
-- `const SpecSHA256 string`
-
-### internal/manifest
-- `const DomainPackages, DomainRepositories, DomainFiles, DomainUnits, DomainManifest, DomainTransaction, DomainInvocation string`
-- `const SeverityError, SeverityWarning Severity`
-- `const FormatJSON, FormatYAML Format`
-- `type Severity string`
-- `type Format string`
-- `type Diagnostic struct { Severity Severity; Domain string; Message string }`
-- `func (d *Diagnostic) Error() string`
-- `func NewError(domain, message string) *Diagnostic`
-- `func NewWarning(domain, message string) *Diagnostic`
-- `type ScopeWrapper[T any] struct { Attributes map[string]interface{} ; Elements []T }`
-- `type PackageRecord struct { Name, Version, Release, Arch string }`
-- `type RepositoryRecord struct { Alias, Name, URL, Type string; Enabled, GPGCheck, AutoRefresh bool; Priority int }`
-- `type ServiceRecord struct { Name, State string }`
-- `type ManagedFileRecord struct { Name, Type, Mode, User, Group, SHA256, ContentRef, PackageName string }`
-- `type ManagedBaselineRecord struct { Name, Type, Mode, User, Group, SHA256, PackageName string; Changes []string }`
-- `type UnmanagedFileRecord struct { Name, Type, Mode, User, Group, SHA256 string }`
-- `type PackagesScope = ScopeWrapper[PackageRecord]` (and RepositoriesScope, ServicesScope, ConfigFilesScope, ChangedManagedFilesScope, UnmanagedFilesScope aliases)
-- `type Meta struct { FormatVersion int; Generator, CreatedAt, DesiredSHA256 string }`
-- `type Manifest struct { Meta Meta; Packages *PackagesScope; Repositories *RepositoriesScope; Services *ServicesScope; ConfigFiles *ConfigFilesScope; ChangedManagedFiles *ChangedManagedFilesScope; UnmanagedFiles *UnmanagedFilesScope }`
-- `type AppliedRecord = Manifest`
-- `type Diff struct { PackagesInstall, PackagesRemove []PackageRecord; ReposSet []RepositoryRecord; FilesWrite []ManagedFileRecord; FilesDelete []string; UnitsChange []ServiceRecord }`
-- `func (d Diff) Empty() bool`
-- `type DriftReport struct { FilesModified, FilesExtra []string; UnitsDivergent []ServiceRecord; PackagesDivergent []PackageRecord; ManagedFilesModified, UnmanagedFilesPresent []string }`
-- `func (r DriftReport) Empty() bool`
-- `func ResolveFormat(explicit string, path string, def Format) (Format, *Diagnostic)`
-- `func ParseJSON(data []byte) (*Manifest, error)`
-- `func ParseYAML(data []byte) (*Manifest, error)`
-- `func MarshalJSON(m *Manifest) ([]byte, error)`
-- `func MarshalYAML(m *Manifest) ([]byte, error)`
-- `func Serialise(m *Manifest, f Format) ([]byte, error)`
-- `func CanonicalSHA256(m *Manifest) (string, error)`
-- `type LoadOptions struct { ExplicitFormat string; DefaultFormat Format; SignatureVerification bool; Keyring string }`
-- `type LoadResult struct { Manifest *Manifest; DesiredSHA256 string }`
-- `func LoadDesiredManifest(path string, opts LoadOptions) (*LoadResult, *Diagnostic)`
-- `func LoadStateDump(path string, explicitFormat string, def Format) (*Manifest, *Diagnostic)`
-- `func Validate(m *Manifest) error`
-
-### internal/diff
-- `const SyncpointPath = "/etc/etc.syncpoint"`
-- `func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.AppliedRecord) manifest.Diff`
-- `func ComputeDrift(actual *manifest.Manifest, reference *manifest.AppliedRecord, keepList map[string]bool) manifest.DriftReport`
-
-### internal/record
-- `const RelativePath = "usr/lib/zypper-declarative/applied.json"`
-- `func AppliedPath(root string) string`
-- `type LoadResult struct { Record *manifest.AppliedRecord; Present bool }`
-- `func LoadAppliedRecord(root string) (*LoadResult, *manifest.Diagnostic)`
-- `type WriteOptions struct { Root string; Desired *manifest.Manifest; DesiredSHA256 string; Resolved *manifest.PackagesScope }`
-- `func WriteAppliedRecord(opts WriteOptions) *manifest.Diagnostic`
-
-### internal/txn
-- `const ModeAuto, ModeExternal, ModeInternal Mode`
-- `type Mode string`
-- `type Context struct { Mode Mode; Root string; OpenedHere bool }`
-- `type Binding interface { DetectInside() bool; ExternalRoot() (string, bool); OpenInternal() (string, error) }`
-- `func Acquire(mode Mode, b Binding) (*Context, *manifest.Diagnostic)`
-- `type EnvBinding struct{}`
-- `func (EnvBinding) DetectInside() bool`
-- `func (EnvBinding) ExternalRoot() (string, bool)`
-- `func (EnvBinding) OpenInternal() (string, error)`
-
-### internal/converge
-- `type Options struct { Runner sysexec.CommandRunner; RepoLock, ContentStore string; KeepList map[string]bool }`
-- `func Packages(ctx *txn.Context, d manifest.Diff, opts Options) (*manifest.PackagesScope, *manifest.Diagnostic)`
-- `func Files(ctx *txn.Context, d manifest.Diff, opts Options) *manifest.Diagnostic`
-- `func Units(ctx *txn.Context, d manifest.Diff, opts Options) *manifest.Diagnostic`
-
-### internal/state
-- `const OnUnreadableError, OnUnreadableWarn OnUnreadable`
-- `const ScopeEtc, ScopeFull Scope`
-- `type OnUnreadable string`
-- `type Scope string`
-- `type Options struct { Root string; OnUnreadable OnUnreadable; Scope Scope; Runner sysexec.CommandRunner; KeepList map[string]bool }`
-- `type Result struct { Manifest *manifest.Manifest; Diagnostics []*manifest.Diagnostic }`
-- `func Describe(opts Options) (*Result, *manifest.Diagnostic)`
-- `func ReadPackages(root string, r sysexec.CommandRunner) (*manifest.PackagesScope, *manifest.Diagnostic)`
-
-### internal/sysexec
-- `type CommandRunner interface { Run(cmd string, args []string) (string, string, error) }`
-- `type OSCommandRunner struct{}`
-- `func (r *OSCommandRunner) Run(cmd string, args []string) (string, string, error)`
-- `type Call struct { Cmd string; Args []string }`
-- `type Response struct { Stdout, Stderr string; Err error }`
-- `type FakeCommandRunner struct { Responses map[string]Response; Calls []Call }`
-- `func NewFakeCommandRunner() *FakeCommandRunner`
-- `func (f *FakeCommandRunner) Run(cmd string, args []string) (string, string, error)`
-
-### internal/cli
-- `type Config struct { ... }` (resolved CONFIG knobs)
-- `func Run(args []string, stdout, stderr io.Writer) int`
-
-## Template constraints compliance
-
-| Constraint | Status | Notes |
-|---|---|---|
-| LANGUAGE | Go (default) | No preset override. |
-| BINARY-TYPE static | met | `CGO_ENABLED=0`; `file` reports "statically linked". |
-| SOURCE-PARTITIONING modular / one-entry-one-implementation | met | Entry point dispatch-only; 9 internal packages. |
-| MODULE-IDENTITY host-specified / propagated / conflict-halts | met | Source 1+2 agree on `github.com/mge1512/zypper-declarative`; propagated. |
-| PUBLIC-API-SURFACE recorded-in-report | met | Section above. |
-| BINARY-COUNT 1 | met | One binary. |
-| BINARY-LOCATION project-root | met | Binary at `./zypper-declarative`; tests invoke `../../zypper-declarative`. |
-| RUNTIME-DEPS none | met | Static binary; drives external tools at runtime via exec (documented deviation in spec). |
-| CLI-ARG-STYLE key=value / bare-words | met | key=value options; bare-word verbs; POSIX flags only as tolerated version/help aliases. |
-| EXIT-CODE-OK/ERROR/INVOCATION 0/1/2 | met | Mapped in the verb layer. |
-| STREAM-DIAGNOSTICS stderr / STREAM-OUTPUT stdout | met | Diagnostics one-per-line to stderr; output to stdout. |
-| SIGNAL-HANDLING SIGTERM/SIGINT | met | Clean exit 0, no partial output. |
-| OUTPUT-FORMAT RPM, DEB (required) | met | `.spec` + `debian/*` produced. |
-| OUTPUT-FORMAT OCI/PKG/binary (supported) | not active | Not produced (no preset; Linux-only). |
-| INSTALL-METHOD OBS / curl forbidden | met | README documents OBS only; no curl. |
-| PLATFORM Linux | met | Linux only. |
-| CONFIG-ENV-VARS forbidden | met | No behaviour read from env (env used only to detect an external transaction binding, not to control behaviour). |
-| NETWORK-CALLS forbidden | met (with documented deviation) | No direct network I/O; package retrieval delegated to the package manager (spec-documented deviation). |
-| FILE-MODIFICATION input-files forbidden | met | Input manifest is never modified. |
-| IDEMPOTENT true | met | apply no-ops on an unchanged manifest + undrifted system; `desired_sha256` is the format-independent canonical-model hash. |
-| spec-hash embedded | met | See spec-hash deliverable above. |
-
-## Compile gate result (template EXECUTION Phase 6)
-
-- **Step 1 — Dependency resolution:** `go mod tidy` — **pass**. `go.sum` written;
-  `go mod vendor` populated `vendor/` (`gopkg.in/yaml.v3 v3.0.1`).
-- **Step 2 — Compilation:** `go build ./...` — **pass**. `go vet ./...` — **pass**.
-  `gofmt -l` over `internal/`, `cmd/`, `independent_tests/` — empty (clean).
-  Static binary built at the project root; `file` reports "statically linked".
-  M0-equivalent acceptance checks pass: `version`, `help`, `--version`, and
-  `format=bad_value` (exit 2), plus bare invocation (usage to stdout, exit 0).
-- **Step 3 — Translator test run:** `make test` (which runs
-  `go test ./independent_tests/claude-opus-4-8/...`) — **pass**, 34/34, ~13s.
-- **Step 4 — Test-author test run:** not applicable (single-LLM run).
+- `zypper-declarative version` → `zypper-declarative 0.6.2 spec:f2cc...` (exit 0)
+- `zypper-declarative help` → usage (exit 0)
+- `zypper-declarative --version` → identical to bare-word version (exit 0)
+- `zypper-declarative format=bad_value` → exit 2
 
 ## Test results — translator suite
 
-`independent_tests/claude-opus-4-8/` — all pass, none skipped (the live "/"
-reads completed within the per-test budget on the build host):
+All 32 tests in `independent_tests/claude-opus-4-8/` pass.
 
 | Test | Result |
-|---|---|
-| TestVersionVerbBareWord | pass |
-| TestVersionFlagAlias | pass |
-| TestVersionStartsWithProgramName | pass |
-| TestHelpVerbBareWord | pass |
-| TestHelpFlagAliases | pass |
-| TestBareInvocationShowsHelp | pass |
-| TestUnknownVerbRejected | pass |
-| TestBadFormatValueExitsTwo | pass |
-| TestDescribeUnknownFormatRejected | pass |
-| TestUnknownOptionRejected | pass |
-| TestStatusUnknownArgument | pass |
-| TestDescribeOutputUnwritable | pass |
-| TestDescribeOutExtensionJSON | pass |
-| TestDescribeOutExtensionYAML | pass |
-| TestDescribeFormatOverridesExtension | pass |
-| TestDescribeFormatYAMLToStdout | pass |
-| TestDescribeDefaultJSONToStdout | pass |
-| TestDescribeOutputAcceptedAsManifest | pass |
-| TestDescribeOmitsGenuinelyEmptyRepositories | pass |
-| TestDescribeDefaultScopeOmitsObservational | pass |
-| TestDiffManifestUnreadable | pass |
-| TestApplyManifestUnreadable | pass |
-| TestApplyManifestInvalidFormatVersion | pass |
-| TestDiffPrintsInstallPlan | pass |
-| TestYAMLManifestAccepted | pass |
-| TestYAMLUnsafeRejected | pass |
-| TestDiffYieldsDeletion | pass |
-| TestStatusNoDeclaration | pass |
-| TestStatusReportsGeneration | pass |
-| TestVerifyNoAppliedRecord | pass |
-| TestVerifyMalformedStateDump | pass |
-| TestVerifyAgainstExternalStateDumpServiceDrift | pass |
-| TestVerifyCleanAgainstMatchingDump | pass |
-| TestVerifyStatePathExtensionYAML | pass |
+|------|--------|
+| TestVersionVerbBareWord | PASS |
+| TestVersionFlagAlias | PASS |
+| TestHelpVerbBareWord | PASS |
+| TestHelpFlagAliases | PASS |
+| TestBareInvocationShowsHelp | PASS |
+| TestUnknownVerbRejected | PASS |
+| TestDescribeUnknownFormat | PASS |
+| TestBadFormatValueExits2 | PASS |
+| TestStatusUnknownArgument | PASS |
+| TestStatusNoDeclaration | PASS |
+| TestApplyManifestUnreadable | PASS |
+| TestDiffManifestUnreadable | PASS |
+| TestApplyManifestInvalid | PASS |
+| TestVerifyMalformedStateDump | PASS |
+| TestVerifyNoAppliedRecord | PASS |
+| TestVerifyOfflineClean | PASS |
+| TestVerifyOfflineServiceDrift | PASS |
+| TestVerifyOfflineFileDrift | PASS |
+| TestDiffOfflineTwoFiles | PASS |
+| TestDiffPrintsPlan | PASS |
+| TestYAMLManifestAccepted | PASS |
+| TestVerifyStatePathExtensionYAML | PASS |
+| TestYAMLUnsafeRejected | PASS |
+| TestApplyRejectsFullDescribeDump | PASS |
+| TestYAMLFormatIdentityStable | PASS |
+| TestDescribeRepositoriesFromReposd | PASS |
+| TestDescribeOmitsGenuinelyEmptyScope | PASS |
+| TestDescribeOutExtensionJSON | PASS |
+| TestDescribeOutExtensionYAML | PASS |
+| TestDescribeFormatOverridesExtension | PASS |
+| TestDescribeOutputUnwritable | PASS |
+| TestDescribeTraversesEtcSubdirectories | PASS |
 
 ## Test results — test-author suite
 
@@ -450,62 +277,281 @@ Not present (single-LLM run). No test-author cross-check suite was supplied.
 
 ## Test Refinements
 
+Two implementation defects were found by the first test run and fixed in the
+**implementation** (no test was edited). Both rows are `code fixed`.
+
 | Test | Result before | Action | Rationale |
-|---|---|---|---|
-| TestDescribeOutExtensionJSON / YAML / FormatOverridesExtension / FormatYAMLToStdout / DefaultJSONToStdout / OutputAcceptedAsManifest | first run timed out against `describe` on `/` | test edited | The first test run hung because `describe` defaulted to root `/`, where the size of the real `/etc` plus per-file rpm queries make the read host-dependent and slow — an environment property, not a spec violation. The tests were changed to point `describe` at a controlled small root via the spec-declared `root=` option (`describe` INPUTS: `root`), which exercises the same resolve-format and read-only/output behaviour deterministically. No assertion semantics changed. |
-| TestDiffPrintsInstallPlan / TestDiffYieldsDeletion / TestYAMLManifestAccepted / TestStatusReportsGeneration / TestDescribeOutputAcceptedAsManifest (diff leg) | first run could hang on a slow `/` live read | test edited | `diff`/`status` read live actual state on `/` per the spec (hardcoded root), which cannot be redirected. A `runWithTimeout` harness helper was added so these tests `t.Skip` if the host's `/` read exceeds a 25s budget, rather than hang. No assertion was weakened; the conditional `exitCode==0` assertions match the spec EXAMPLEs (diff_prints_plan, intent_diff_yields_deletion, status_reports_generation, describe_bootstraps_desired_manifest). On the build host the reads completed (~2.6s each) so none skipped. |
-| (implementation) describe-actual-state config_files reader | n/a | code fixed | After the first timeout the implementation was changed to determine owning packages and changed `/etc` files with a single bulk `rpm` query each, rather than one `rpm` invocation per `/etc` file, keeping the cost a function of `/etc` (per the v0.5.2 bounded-/etc invariant) instead of the per-file subprocess count. Behaviour (which files are reported) is unchanged. |
+|------|---------------|--------|-----------|
+| TestApplyRejectsFullDescribeDump | failed (exit 2, "unrecognised argument") | code fixed | The key=value parser stopped consuming options once the verb (a bare word) was seen, so options *after* the verb were rejected as positionals. The spec's invocation examples (e.g. `apply manifest-path=…`) place options after the verb; the parser now treats any `key=value` token as an option regardless of position. |
+| TestYAMLFormatIdentityStable | failed (exit 2) | code fixed | Same parsing defect: `verify manifest-path=… state-path=…` had its options rejected. Fixed by the same parser change. |
+| (all other 30 tests) | passed | none | — |
 
 ## Per-example confidence
 
-Confidence definitions per the prompt: **High** = Tests-First `yes` and a named
-test passes without a live external service; **Medium** = passes but needs a live
-service / no test-author cross-check; **Low** = reasoning/review only.
+Confidence definitions per the prompt. **High** requires Tests-First-Compliance
+`yes` (satisfied) AND a named passing test that needs no live external service.
+Many spec EXAMPLEs require a live host (snapshot transaction, populated rpmdb,
+privileged enablement) and so cannot be black-box verified during translation;
+those are **Low** (code review / reasoning only) and their unverified claims are
+listed explicitly.
 
 | EXAMPLE | Confidence | Verification method | Unverified claims |
-|---|---|---|---|
+|---------|-----------|---------------------|-------------------|
 | version_verb_bare_word | High | TestVersionVerbBareWord | — |
 | version_flag_alias | High | TestVersionFlagAlias | — |
 | help_verb_bare_word | High | TestHelpVerbBareWord | — |
 | bare_invocation_shows_help | High | TestBareInvocationShowsHelp | — |
 | unknown_verb_rejected | High | TestUnknownVerbRejected | — |
+| describe_unknown_format | High | TestDescribeUnknownFormat | — |
 | status_unknown_argument | High | TestStatusUnknownArgument | — |
-| describe_unknown_format | High | TestDescribeUnknownFormatRejected | — |
-| describe_output_unwritable | High | TestDescribeOutputUnwritable | — |
+| status_no_declaration | High | TestStatusNoDeclaration | — |
+| apply_manifest_unreadable | High | TestApplyManifestUnreadable | — |
+| diff_manifest_unreadable | High | TestDiffManifestUnreadable | — |
+| apply_manifest_invalid | High | TestApplyManifestInvalid | — |
+| verify_malformed_state_dump | High | TestVerifyMalformedStateDump | — |
+| verify_no_applied_record | High | TestVerifyNoAppliedRecord | — |
+| verify_offline_manifest_and_state | High | TestVerifyOfflineClean | — |
+| verify_offline_no_applied_record_ok | High | TestVerifyOfflineClean | — |
+| verify_against_external_state_dump | High | TestVerifyOfflineServiceDrift | — |
+| verify_detects_drift | High | TestVerifyOfflineFileDrift | — |
+| diff_offline_two_files | High | TestDiffOfflineTwoFiles | — |
+| diff_prints_plan | High | TestDiffPrintsPlan, TestDiffOfflineTwoFiles | — |
+| intent_diff_yields_deletion | High | TestDiffOfflineTwoFiles (files-to-delete) | — |
+| yaml_manifest_accepted | High | TestYAMLManifestAccepted | — |
+| verify_state_path_extension_yaml | High | TestVerifyStatePathExtensionYAML | — |
+| yaml_unsafe_rejected | High | TestYAMLUnsafeRejected (multi-doc) | other unsafe features (custom tags, unbounded aliases) verified by code review only |
+| yaml_format_identity_stable | High | TestYAMLFormatIdentityStable | desired_sha256 byte-equality verified indirectly (identical verify verdict); direct hash equality is code-review |
+| apply_rejects_full_describe_dump | High | TestApplyRejectsFullDescribeDump | — |
+| describe_repositories_from_reposd | High | TestDescribeRepositoriesFromReposd | — |
+| describe_omits_genuinely_empty_scope | High | TestDescribeOmitsGenuinelyEmptyScope | — |
 | describe_out_extension_json | High | TestDescribeOutExtensionJSON | — |
 | describe_out_extension_yaml | High | TestDescribeOutExtensionYAML | — |
 | describe_format_overrides_extension | High | TestDescribeFormatOverridesExtension | — |
-| describe_format_yaml | High | TestDescribeFormatYAMLToStdout | — |
-| describe_emits_manifest | Medium | TestDescribeDefaultJSONToStdout (controlled root); the live-/ nginx/changed-file specifics need a real SUSE host | resolved-package and rpm-owned config_file fields on a live SUSE system |
-| describe_omits_genuinely_empty_scope | High | TestDescribeOmitsGenuinelyEmptyRepositories | — |
-| describe_scope_full_emits_observational_scopes | Medium | TestDescribeDefaultScopeOmitsObservational verifies the scope=etc half; the scope=full half needs out-of-/etc files | observational scope emission under scope=full on a live host |
-| describe_bootstraps_desired_manifest | High | TestDescribeOutputAcceptedAsManifest | — |
-| describe_config_files_bounded_to_etc | Medium | code review + bounded reader design; no test asserts the negative (nothing outside /etc read) without a live host | that no /usr file is hashed on a live host |
-| describe_verify_differences_not_unreadable | Medium | code review (verifier non-zero treated as changed-file result) | live rpm verify behaviour |
-| describe_repositories_from_reposd | High | TestDescribeOmitsGenuinelyEmptyRepositories exercises the repos.d reader path (empty case); a populated case is covered by reader design | populated repos.d on a live host |
-| diff_prints_plan | High | TestDiffPrintsInstallPlan (passed, exit 0, nginx in plan) | — |
-| diff_manifest_unreadable | High | TestDiffManifestUnreadable | — |
-| intent_diff_yields_deletion | High | TestDiffYieldsDeletion (passed, /etc/bar.conf in plan) | — |
-| apply_manifest_unreadable | High | TestApplyManifestUnreadable | — |
-| apply_manifest_invalid | High | TestApplyManifestInvalidFormatVersion | — |
-| apply_no_op_when_converged / idempotent_second_apply | Medium | apply path reaches "nothing to do" via compute-intent-diff/compute-drift (unit-level logic exercised through diff/verify tests); the full apply no-op needs a privileged SUSE host | snapshot no-op on a live host |
-| apply_writes_and_deletes_etc_file / apply_absent_scope_unmanaged / apply_package_failure_rolls_back / apply_transaction_unavailable | Medium | converge/txn code review; the transaction-unavailable path returns exit 2 by design | end-to-end converge on a live host with snapshot machinery |
-| verify_clean | High | TestVerifyCleanAgainstMatchingDump | — |
-| verify_against_external_state_dump | High | TestVerifyAgainstExternalStateDumpServiceDrift | — |
-| verify_malformed_state_dump | High | TestVerifyMalformedStateDump | — |
-| verify_detects_drift | High | TestVerifyAgainstExternalStateDumpServiceDrift (units drift) + compute-drift logic | live /etc edit detection needs a host |
-| verify_no_applied_record | High | TestVerifyNoAppliedRecord | — |
-| verify_state_path_extension_yaml | High | TestVerifyStatePathExtensionYAML | — |
-| verify_default_scope_ignores_usr / verify_scope_full_detects_* | Medium | scope plumbing + compute-drift integrity categories reviewed; needs a live host with /usr additions | live full-scan integrity detection |
-| status_reports_generation | High | TestStatusReportsGeneration (desired_sha256 printed) | live drift line needs a host |
-| status_no_declaration | High | TestStatusNoDeclaration | — |
-| yaml_manifest_accepted | High | TestYAMLManifestAccepted | — |
-| yaml_unsafe_rejected | High | TestYAMLUnsafeRejected | — |
-| yaml_format_identity_stable | Medium | CanonicalSHA256 is format-independent by construction (round-trips YAML and JSON through the same canonical model); no direct black-box test asserts equal hashes | direct hash-equality assertion |
-| lock_is_fully_resolved_packages_scope | Medium | converge-packages queries rpmdb for the resolved set by design | live resolution on a host |
+| describe_output_unwritable | High | TestDescribeOutputUnwritable | — |
+| describe_traverses_etc_subdirectories | High | TestDescribeTraversesEtcSubdirectories | — |
+| describe_records_symlink_verbatim | Low | code review (`internal/state` Readlink, verbatim target) | not black-box tested (symlink fixture under a synthetic root depends on owner classification; recorded only on changed/unpackaged entries) |
+| describe_skips_special_file | Low | code review (lstat classification skips non-regular/non-symlink) | mkfifo fixture not constructed in tests |
+| drift_type_transition_is_modified | Low | code review (`compute-drift` type-as-identity) | not covered by a named test; offline drift tests cover sha256 and unit drift only |
+| drift_ignores_unmanaged_packaged_file | Low | code review (`files_extra` requires package_name=="") | not covered by a named test |
+| describe_actual_state_omits_pristine | Low | code review (only changed/unpackaged /etc entries emitted; pristine skipped via owner+digest comparison reserved for live host) | requires a populated rpmdb; not verifiable offline |
+| describe_config_files_bounded_to_etc | Low | code review (walk rooted at `<root>/etc`; no read outside /etc) | requires a large installed base; not verifiable offline |
+| describe_verify_differences_not_unreadable | Low | code review (verifier non-zero treated as changed-file result, not unreadable) | requires a live rpm/verification command |
+| verify_default_scope_ignores_usr | Low | code review (scope=etc never scans outside /etc) | requires a live host |
+| verify_scope_full_detects_unmanaged_addition | Low | code review (`readFullScan` emits unmanaged_files; compute-drift surfaces it) | requires a live host / populated rpmdb |
+| verify_scope_full_detects_modified_package_file | Low | code review | managed_files_modified baseline comparison reserved for live host (rpm -V); see "Rules not implemented exactly" |
+| describe_scope_full_emits_observational_scopes | Low | code review (scope=full assembles the two observational scopes) | requires a live host |
+| describe_scope_full_boot_generated_files_unmanaged | Low | code review (/boot scanned under full; keep-list honoured) | requires a live host |
+| lock_is_fully_resolved_packages_scope | Low | code review (`converge-packages` queries rpmdb for the lock; `write-applied-record` stores it) | requires a live host / zypper / rpmdb |
+| apply_no_op_when_converged | Low | code review (apply step 4 "nothing to do") | requires a live host |
+| apply_writes_and_deletes_etc_file | Low | code review (`converge-files`) | requires a live snapshot transaction |
+| apply_absent_scope_unmanaged | Low | code review (absent scope → no diff entries) | requires a live host |
+| apply_transaction_unavailable | Low | code review (`acquire-transaction-context` external/internal failure → domain=transaction, exit 2) | requires a live transaction mechanism |
+| apply_package_failure_rolls_back | Low | code review (converge-packages failure → exit 1, no commit) | requires a live host |
+| describe_emits_manifest | Low | code review (describe assembles a format_version 1 Manifest) | populated rpmdb/services not present under a synthetic root |
+| describe_bootstraps_desired_manifest | Low | code review (describe output is a valid desired manifest) | requires a live host |
+| verify_clean | Low | code review (live verify path mirrors the offline path, which is tested) | requires a live host; offline equivalent is High (TestVerifyOfflineClean) |
+| status_reports_generation | Low | code review (status prints hash/generation/count) | requires an applied record + live drift read |
+| idempotent_second_apply | Low | code review (empty intent + empty drift → no new generation) | requires a live host |
 
-Per-EXAMPLE rows marked Medium are so marked because the path requires a live,
-privileged SUSE environment (rpmdb, snapper/btrfs transaction, systemd offline
-enablement) that the black-box test environment cannot provide; their logic is
-implemented per the spec STEPS and reviewed. All Tests-First-Compliance is `yes`,
-so no High row was demoted for post-hoc tuning risk.
+## Rules that could not be implemented exactly as written, and why
+
+These are reserved by the spec itself for the live-host milestone and are
+implemented as conservative, no-op-safe placeholders that never silently corrupt
+state:
+
+- **converge-files symlink/dir convergence and type-transition handling:** the
+  spec explicitly defers symlink creation/update/removal and type-transition
+  handling ("Reserved for a later version"). `converge-files` writes/deletes
+  regular files only and skips non-`file` write records. The read/drift side
+  (classification, verbatim symlink target, type-as-identity in `compute-drift`)
+  is fully implemented as the spec requires.
+- **changed_managed_files (full scan) baseline comparison:** detecting *modified*
+  packaged files outside /etc requires comparing on-disk digests to the
+  rpm-recorded baseline (`rpm -V` scoped to the trees) on a live host. The full
+  scan implements **unmanaged_files** (additions, by subtracting the rpmdb-owned
+  path set) fully; the `changed_managed_files` scope is assembled but its element
+  population is reserved for the live milestone (it remains empty under a
+  synthetic root). This is documented rather than fabricated.
+- **acquire-transaction-context internal open / seal / activation / snapper
+  userdata stamp:** opening and sealing a real btrfs/snapper snapshot and writing
+  snapper userdata are platform operations performed only inside a real snapshot
+  transaction. `internal/txn` resolves auto/external/internal and detects a
+  surrounding transaction; the internal-open path reports the mechanism
+  unavailable (domain=transaction, exit 2) when no writable new-generation root
+  is present, so the running system is never mutated outside a transaction.
+- **signature verification:** `load-desired-manifest` honours
+  `signature-verification`; when on, a missing/absent detached signature is a
+  manifest error. Cryptographic verification against the platform keyring is
+  integrated in the live-apply milestone (a present `<path>.sig` is accepted in
+  this version). Documented here so the maintainer wires the keyring before
+  enabling signature checking in production.
+
+## Specification ambiguities encountered
+
+- **`status` drift summary on a host with no applied record but live drift:** the
+  spec routes `status` to "no declaration applied" / exit 0 when no record
+  exists, so the drift line is only printed when a record is present. Implemented
+  accordingly.
+- **`applied-root` for the post-converge verification in `apply`:** the spec says
+  step 10 reads the *context root*. Implemented as reading `ctx.Root` (not
+  `applied-root`), since the verification is of the converged tree, not the prior
+  generation.
+- **package-owner determination for the bounded /etc reader:** the spec requires
+  consulting package metadata only for the enumerated /etc entries and emitting
+  only changed-or-unpackaged files. Under a synthetic root with no rpmdb, no
+  entry has an owner and digests cannot be baseline-compared, so describe emits
+  all readable /etc entries (the conservative interpretation: nothing is wrongly
+  suppressed). On a live host the rpmdb owner/digest comparison applies. This is
+  the most conservative interpretation that keeps the read deterministic and
+  bounded to /etc.
+
+## Public API Surface
+
+The exported symbols of each implementation module. The next translation of this
+spec at Version 0.6.2 must preserve these (additions allowed; no removals or
+incompatible renames without a spec Version increment).
+
+### Module `internal/meta`
+```
+const ProgramName string = "zypper-declarative"
+const Version string = "0.6.2"
+const SpecSHA256 string
+func VersionLine() string
+```
+
+### Module `internal/diag`
+```
+type Severity string
+const SeverityError, SeverityWarning Severity
+type Domain string
+const DomainPackages, DomainRepositories, DomainServices, DomainFiles, DomainManifest, DomainTransaction, DomainInvocation Domain
+type Diagnostic struct { Severity Severity; Domain Domain; Message string }
+func (d *Diagnostic) Error() string
+func New(domain Domain, format string, args ...interface{}) *Diagnostic
+func Warn(domain Domain, format string, args ...interface{}) *Diagnostic
+```
+
+### Module `internal/manifest`
+```
+const PackageSystemRPM, RepositorySystemZypp, InitSystemSystemd string
+type PackageRecord struct { Name, Version, Release, Arch string }
+type PackagesScope struct { Attributes map[string]interface{}; Elements []PackageRecord }
+type RepositoryRecord struct { Alias, Name, URL, Type string; Enabled, GPGCheck, Autorefresh bool; Priority int }
+type RepositoriesScope struct { Attributes map[string]interface{}; Elements []RepositoryRecord }
+type ServiceRecord struct { Name, State string }
+type ServicesScope struct { Attributes map[string]interface{}; Elements []ServiceRecord }
+type ManagedFileRecord struct { Name, Type, Mode, User, Group, SHA256, Target, ContentRef, PackageName string }
+type ConfigFilesScope struct { Attributes map[string]interface{}; Elements []ManagedFileRecord }
+type ManagedBaselineRecord struct { Name, Type, Mode, User, Group, SHA256, Target, PackageName string; Changes []string }
+type ChangedManagedFilesScope struct { Attributes map[string]interface{}; Elements []ManagedBaselineRecord }
+type UnmanagedFileRecord struct { Name, Type, Mode, User, Group, SHA256, Target string }
+type UnmanagedFilesScope struct { Attributes map[string]interface{}; Elements []UnmanagedFileRecord }
+type ManifestMeta struct { FormatVersion int; Generator, CreatedAt, DesiredSHA256 string }
+type Manifest struct { Meta ManifestMeta; Packages *PackagesScope; Repositories *RepositoriesScope; Services *ServicesScope; ConfigFiles *ConfigFilesScope; ChangedManagedFiles *ChangedManagedFilesScope; UnmanagedFiles *UnmanagedFilesScope }
+type Format string
+const FormatJSON, FormatYAML Format
+var ErrUnknownFormat, ErrUnsafeYAML error
+func ParseFormat(s string) (Format, error)
+func ResolveFormat(explicit Format, path string, configDefault Format) Format
+func (m *Manifest) MarshalJSONPretty() ([]byte, error)
+func (m *Manifest) Serialise(f Format) ([]byte, error)
+func (m *Manifest) DesiredSHA256() (string, error)
+type LoadOptions struct { ExplicitFormat, DefaultFormat Format; SignatureCheck bool; Keyring string }
+type LoadResult struct { Manifest *Manifest; DesiredSHA256 string }
+func LoadDesiredManifest(path string, opts LoadOptions) (*LoadResult, error)
+func ParseDump(path string, explicit Format, def Format) (*Manifest, error)
+func EnsureString(v interface{}) (string, error)
+```
+
+### Module `internal/diff`
+```
+const SyncpointPath string = "/etc/etc.syncpoint"
+type Diff struct { PackagesInstall, PackagesRemove []manifest.PackageRecord; ReposSet []manifest.RepositoryRecord; FilesWrite []manifest.ManagedFileRecord; FilesDelete []string; UnitsChange []manifest.ServiceRecord }
+func (d *Diff) Empty() bool
+type DriftReport struct { FilesModified, FilesExtra []string; UnitsDivergent []manifest.ServiceRecord; PackagesDivergent []manifest.PackageRecord; ManagedFilesModified, UnmanagedFilesPresent []string }
+func (r *DriftReport) Empty() bool
+func ComputeIntentDiff(desired *manifest.Manifest, applied *manifest.Manifest) *Diff
+func ComputeDrift(actual *manifest.Manifest, reference *manifest.Manifest, keepList map[string]bool) *DriftReport
+```
+
+### Module `internal/state`
+```
+type OnUnreadable string
+const OnUnreadableError, OnUnreadableWarn OnUnreadable
+type Scope string
+const ScopeEtc, ScopeFull Scope
+type CommandRunner interface { Run(cmd string, args ...string) (string, string, error) }
+type OSCommandRunner struct{}
+func (r *OSCommandRunner) Run(cmd string, args ...string) (string, string, error)
+type Options struct { OnUnreadable OnUnreadable; Scope Scope; KeepList map[string]bool; Runner CommandRunner }
+type Result struct { Manifest *manifest.Manifest; Diagnostics []*diag.Diagnostic }
+func DescribeActualState(root string, opts Options) (*Result, error)
+```
+
+### Module `internal/txn`
+```
+type Mode string
+const ModeAuto, ModeExternal, ModeInternal Mode
+func ParseMode(s string) (Mode, *diag.Diagnostic)
+type Context struct { Mode Mode; Root string; OpenedHere bool }
+func Acquire(mode Mode) (*Context, *diag.Diagnostic)
+```
+
+### Module `internal/converge`
+```
+type Options struct { ContentStore string; KeepList map[string]bool; RepoLock string; Runner state.CommandRunner }
+func ConvergePackages(ctx *txn.Context, d *diff.Diff, opts Options) (*manifest.PackagesScope, *diag.Diagnostic)
+func ConvergeFiles(ctx *txn.Context, d *diff.Diff, opts Options) *diag.Diagnostic
+func ConvergeUnits(ctx *txn.Context, d *diff.Diff, opts Options) *diag.Diagnostic
+```
+
+### Module `internal/record`
+```
+var AppliedRelPath string
+type LoadResult struct { Record *manifest.Manifest; Present bool }
+func LoadAppliedRecord(root string) (*LoadResult, error)
+func WriteAppliedRecord(ctxRoot string, desired *manifest.Manifest, desiredSHA256 string, resolved *manifest.PackagesScope) error
+```
+
+### Module `internal/cli`
+```
+const ExitOK, ExitError, ExitInvocation int
+type IO struct { Stdout, Stderr io.Writer }
+type Config struct { /* resolved CONFIG knobs and per-invocation options */ }
+func Run(args []string, io IO) int
+```
+
+## Template constraints compliance
+
+| Constraint | Required value | Status |
+|------------|----------------|--------|
+| LANGUAGE | Go (default) | Go ✓ |
+| BINARY-TYPE | static | static (CGO_ENABLED=0) ✓ |
+| SOURCE-PARTITIONING | modular, one-entry-one-implementation | entry-point `cmd/` + 9 internal packages ✓ |
+| MODULE-IDENTITY | host-specified | spec META `Module:` ✓ |
+| PUBLIC-API-SURFACE | recorded-in-report | this report ✓ |
+| BINARY-COUNT | 1 | one binary ✓ |
+| BINARY-LOCATION | project-root (`../../<n>`) | built at root; tests use `../../zypper-declarative` ✓ |
+| RUNTIME-DEPS | none | static binary; drives system tools via CLI ✓ |
+| CLI-ARG-STYLE | key=value (+ bare-words) | key=value parser; bare-word verbs ✓ |
+| EXIT-CODE-OK / ERROR / INVOCATION | 0 / 1 / 2 | implemented ✓ |
+| STREAM-DIAGNOSTICS / OUTPUT | stderr / stdout | implemented ✓ |
+| SIGNAL-HANDLING | SIGTERM, SIGINT | clean exit ✓ |
+| OUTPUT-FORMAT | RPM, DEB (required) | both produced ✓ |
+| INSTALL-METHOD | OBS (curl forbidden) | README documents OBS only ✓ |
+| PLATFORM | Linux | ExclusiveOS linux; no macOS/Windows ✓ |
+| CONFIG-ENV-VARS | forbidden | no behaviour knob via env var ✓ (see note) |
+| NETWORK-CALLS | forbidden | no direct network I/O; package fetch delegated (documented deviation) |
+| FILE-MODIFICATION input-files | forbidden | inputs (manifests/dumps) never modified ✓ |
+| IDEMPOTENT | true | apply no-ops on empty intent + empty drift ✓ |
+| spec-hash | embedded | embedded in all artefacts ✓ |
+
+**Documented deviations (per spec DEPLOYMENT):** NETWORK-CALLS — the tool makes
+no direct network I/O of its own; package retrieval is delegated to the package
+manager against a declared, pinned, signed repository, honouring the
+supply-chain intent. Privilege — `apply` requires privilege (unlike a typical
+read-only cli-tool); read-only verbs need only read access. CONFIG-ENV-VARS — no
+behaviour is controlled via environment variables; the single env read
+(`TRANSACTIONAL_UPDATE_NEWROOT` in `internal/txn`) is *detection of a surrounding
+transaction*, not a behaviour knob, and is consistent with the spec's
+`mode=external` description.
