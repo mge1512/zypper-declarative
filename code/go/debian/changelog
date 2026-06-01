@@ -1,6 +1,5 @@
-zypper-declarative (0.6.2-1) unstable; urgency=medium
+zypper-declarative (0.6.5-0) unstable; urgency=medium
 
-  * Generated from zypper-declarative.spec.md v0.6.2
-    (sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e).
+  * Initial package generated from zypper-declarative.spec.md (PCD translator).
 
- -- Matthias G. Eckermann <pcd@mailbox.org>  Mon, 01 Jun 2026 00:00:00 +0000
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Tue, 02 Jun 2026 00:00:00 +0000

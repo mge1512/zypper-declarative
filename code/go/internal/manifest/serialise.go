@@ -1,149 +1,130 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
 //
-// Serialisation edges: JSON and YAML encode/decode of the data model, the
-// resolve-format authority, and the canonical-model identity hash.
+// resolve-format and (de)serialisation of the Manifest model in JSON and YAML.
+// resolve-format is the single authority for choosing a serialisation; every
+// read and write routes through ResolveFormat.
 package manifest
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"sort"
+	"path/filepath"
 	"strings"
+
+	yaml "gopkg.in/yaml.v3"
 )
 
-// Format is the manifest serialisation.
-type Format string
-
-const (
-	FormatJSON Format = "json"
-	FormatYAML Format = "yaml"
-)
-
-// ErrUnknownFormat is returned by ParseFormat for an unrecognised value.
-var ErrUnknownFormat = errors.New("unknown format value")
-
-// ParseFormat validates an explicit format= value.
-func ParseFormat(s string) (Format, error) {
-	switch s {
-	case "json":
-		return FormatJSON, nil
-	case "yaml":
-		return FormatYAML, nil
-	default:
-		return "", fmt.Errorf("%w: %q", ErrUnknownFormat, s)
-	}
-}
-
-// ResolveFormat is the single authority for choosing a serialisation.
+// ResolveFormat implements BEHAVIOR/INTERNAL: resolve-format.
 //
-//  1. If explicit is non-empty, return it (an explicit format= always wins).
-//  2. Else if path has a recognised extension, return json for .json and yaml
-//     for .yaml/.yml.
-//  3. Else return the manifest-format CONFIG default (configDefault).
+// explicit: the format= option text (or "" if not given).
+// path:     the operative file path (or "" for stdin/stdout).
+// def:      the manifest-format CONFIG default.
 //
-// explicit must already be a validated Format ("" means none given).
-func ResolveFormat(explicit Format, path string, configDefault Format) Format {
+// An explicit format always wins; else a recognised extension decides; else the
+// default. An explicit but unknown format value is an error.
+func ResolveFormat(explicit, path string, def Format) (Format, error) {
 	if explicit != "" {
-		return explicit
-	}
-	if path != "" {
-		lower := strings.ToLower(path)
-		switch {
-		case strings.HasSuffix(lower, ".json"):
-			return FormatJSON
-		case strings.HasSuffix(lower, ".yaml"), strings.HasSuffix(lower, ".yml"):
-			return FormatYAML
+		switch explicit {
+		case "json":
+			return FormatJSON, nil
+		case "yaml":
+			return FormatYAML, nil
+		default:
+			return "", fmt.Errorf("unknown format value %q", explicit)
 		}
 	}
-	if configDefault == "" {
-		return FormatJSON
+	if path != "" {
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".json":
+			return FormatJSON, nil
+		case ".yaml", ".yml":
+			return FormatYAML, nil
+		}
 	}
-	return configDefault
+	return def, nil
 }
 
-// MarshalJSONPretty serialises the manifest as indented JSON for on-disk and
-// stdout readability. It remains Machinery-compatible.
-func (m *Manifest) MarshalJSONPretty() ([]byte, error) {
+// MarshalJSON serialises the manifest as canonical (pretty) JSON suitable for
+// describe output and the on-disk applied record. Scopes are sorted by identity
+// for determinism (see SortScopes).
+func MarshalJSON(m *Manifest) ([]byte, error) {
+	c := m.cloneSorted()
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(m); err != nil {
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(c); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-// Serialise renders the manifest in the resolved format.
-func (m *Manifest) Serialise(f Format) ([]byte, error) {
-	switch f {
-	case FormatYAML:
-		return marshalYAML(m)
-	default:
-		return m.MarshalJSONPretty()
-	}
-}
-
-// DesiredSHA256 is the SHA256 of the canonical JSON serialisation of the parsed
-// data model: object keys sorted, compact separators, scope _elements sorted by
-// identity key. It is format-independent, so the same intent expressed in JSON
-// or YAML yields the same value.
-func (m *Manifest) DesiredSHA256() (string, error) {
-	canon := m.canonical()
-	b, err := canonicalJSON(canon)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-// canonical produces a deep copy with _elements sorted by identity and the meta
-// fields that do not participate in identity (generator, created_at,
-// desired_sha256) zeroed, so the hash depends only on the declarable intent.
-func (m *Manifest) canonical() *Manifest {
-	c := &Manifest{
-		Meta: ManifestMeta{FormatVersion: m.Meta.FormatVersion},
-	}
-	if m.Packages != nil {
-		els := append([]PackageRecord(nil), m.Packages.Elements...)
-		sort.Slice(els, func(i, j int) bool {
-			if els[i].Name != els[j].Name {
-				return els[i].Name < els[j].Name
-			}
-			return els[i].Arch < els[j].Arch
-		})
-		c.Packages = &PackagesScope{Attributes: m.Packages.Attributes, Elements: els}
-	}
-	if m.Repositories != nil {
-		els := append([]RepositoryRecord(nil), m.Repositories.Elements...)
-		sort.Slice(els, func(i, j int) bool { return els[i].Alias < els[j].Alias })
-		c.Repositories = &RepositoriesScope{Attributes: m.Repositories.Attributes, Elements: els}
-	}
-	if m.Services != nil {
-		els := append([]ServiceRecord(nil), m.Services.Elements...)
-		sort.Slice(els, func(i, j int) bool { return els[i].Name < els[j].Name })
-		c.Services = &ServicesScope{Attributes: m.Services.Attributes, Elements: els}
-	}
-	if m.ConfigFiles != nil {
-		els := append([]ManagedFileRecord(nil), m.ConfigFiles.Elements...)
-		sort.Slice(els, func(i, j int) bool { return els[i].Name < els[j].Name })
-		c.ConfigFiles = &ConfigFilesScope{Attributes: m.ConfigFiles.Attributes, Elements: els}
-	}
-	return c
-}
-
-// canonicalJSON marshals v with map keys sorted (encoding/json already sorts map
-// keys) and struct fields in declaration order, compact. encoding/json is
-// deterministic for our struct/map shapes.
-func canonicalJSON(v interface{}) ([]byte, error) {
-	b, err := json.Marshal(v)
+// MarshalYAML serialises the manifest as YAML representing the identical data
+// model. YAML output is not Machinery-compatible.
+func MarshalYAML(m *Manifest) ([]byte, error) {
+	c := m.cloneSorted()
+	// Route through JSON tags by converting to a generic map first so the
+	// underscore_style keys (which carry json tags) are honoured uniformly.
+	jb, err := json.Marshal(c)
 	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	var generic interface{}
+	dec := json.NewDecoder(bytes.NewReader(jb))
+	dec.UseNumber()
+	if err := dec.Decode(&generic); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(generic); err != nil {
+		return nil, err
+	}
+	_ = enc.Close()
+	return buf.Bytes(), nil
+}
+
+// Marshal serialises the manifest in the resolved format.
+func Marshal(m *Manifest, f Format) ([]byte, error) {
+	switch f {
+	case FormatYAML:
+		return MarshalYAML(m)
+	default:
+		return MarshalJSON(m)
+	}
+}
+
+// CanonicalBytes returns the canonical compact JSON serialisation of the parsed
+// data model used for the identity hash: keys sorted (encoding/json sorts map
+// keys; struct field order is canonical), compact separators, scopes sorted by
+// identity, and meta.created_at and meta.desired_sha256 excluded (informational
+// / set elsewhere) so the hash depends only on the declared intent.
+func CanonicalBytes(m *Manifest) ([]byte, error) {
+	c := m.cloneSorted()
+	// Neutralise non-identity meta fields so JSON and YAML of the same manifest
+	// (and re-serialisations with a different created_at) hash equal.
+	c.Meta.CreatedAt = ""
+	c.Meta.DesiredSHA256 = ""
+	c.Meta.Generator = ""
+	// Convert to a generic structure and re-encode with sorted keys + compact
+	// separators for a stable canonical form.
+	jb, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	var generic interface{}
+	dec := json.NewDecoder(bytes.NewReader(jb))
+	dec.UseNumber()
+	if err := dec.Decode(&generic); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(generic); err != nil { // encoding/json sorts object keys
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }

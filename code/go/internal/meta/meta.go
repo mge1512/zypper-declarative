@@ -1,23 +1,32 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
 //
-// Package meta holds the component version and the SHA256 of the specification
-// this binary was generated from. The spec hash is embedded so that the version
-// boundary between two builds is cryptographically verifiable.
+// Package meta carries the program identity: name, version, and the embedded
+// SHA256 of the specification this binary was generated from. The spec hash is
+// surfaced in `version`/`--version` output per the spec's provenance invariant.
 package meta
 
 const (
-	// ProgramName is the canonical binary name.
+	// ProgramName is the canonical program name (and zypper subcommand verb).
 	ProgramName = "zypper-declarative"
 
-	// Version is the spec META Version this implementation targets.
-	Version = "0.6.2"
+	// Version is the spec Version (META) the binary implements.
+	Version = "0.6.5"
 
 	// SpecSHA256 is the SHA256 of zypper-declarative.spec.md as provided as
-	// input to the translator. It is embedded in the --version output.
-	SpecSHA256 = "f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e"
+	// input. Embedded here per the spec-hash invariant.
+	SpecSHA256 = "27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4"
 )
 
-// VersionLine returns the canonical version string printed by `version`.
+// Generator returns the meta.generator string for emitted manifests, e.g.
+// "zypper-declarative 0.6.5". Independent implementations of the same spec
+// version emit the same string.
+func Generator() string {
+	return ProgramName + " " + Version
+}
+
+// VersionLine returns the single-line version banner printed by the version
+// verb and its --version alias, e.g.
+// "zypper-declarative 0.6.5 spec:<sha256>".
 func VersionLine() string {
 	return ProgramName + " " + Version + " spec:" + SpecSHA256
 }

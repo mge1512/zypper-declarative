@@ -1,441 +1,237 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
 //
-// The five behaviour verbs: apply, diff, verify, status, describe. Each
-// orchestrates the internal behaviours in the spec's STEPS order and maps a
-// returned Diagnostic to an exit code.
+// Verb handlers: diff, verify, status. Each parses options, orchestrates the
+// internal behaviours, and maps results to an exit code.
 package cli
 
 import (
 	"fmt"
 	"io"
-	"os"
-	"strings"
+	"time"
 
-	"github.com/mge1512/zypper-declarative/internal/converge"
-	"github.com/mge1512/zypper-declarative/internal/diag"
 	"github.com/mge1512/zypper-declarative/internal/diff"
 	"github.com/mge1512/zypper-declarative/internal/manifest"
 	"github.com/mge1512/zypper-declarative/internal/record"
-	"github.com/mge1512/zypper-declarative/internal/state"
-	"github.com/mge1512/zypper-declarative/internal/txn"
 )
 
-// loadKeepList reads the keep-list file into a path set (empty if unset).
-func (c *Config) loadKeepList() map[string]bool {
-	out := map[string]bool{}
-	if c.KeepList == "" {
-		return out
-	}
-	data, err := os.ReadFile(c.KeepList)
-	if err != nil {
-		return out
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		p := strings.TrimSpace(line)
-		if p != "" && !strings.HasPrefix(p, "#") {
-			out[p] = true
-		}
-	}
-	return out
-}
+func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
-func (c *Config) loadOptions() manifest.LoadOptions {
-	return manifest.LoadOptions{
-		ExplicitFormat: c.explicitFormat(),
-		DefaultFormat:  c.defaultFormat(),
-		SignatureCheck: c.SignatureVerify == "on",
-		Keyring:        c.Keyring,
-	}
-}
-
-// ---- apply ----
-
-func runApply(cfg *Config, rest []string, io IO) int {
-	if rejectExtra(io, "apply", rest) {
+// runDiff implements BEHAVIOR: diff (dry run).
+func runDiff(args []string, stdout, stderr io.Writer) int {
+	cfg := defaultConfig()
+	if _, err := parseArgs(&cfg, args); err != nil {
+		printUsage(stderr)
 		return ExitInvocation
 	}
-	// 1. Load desired manifest.
-	res, err := manifest.LoadDesiredManifest(cfg.ManifestPath, cfg.loadOptions())
-	if err != nil {
-		d := err.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d)
+
+	// 1. load desired manifest
+	desired, _, code := loadDesiredManifest(cfg, cfg.ManifestPath, stderr)
+	if code != ExitOK {
+		return code
 	}
-	desired := res.Manifest
-	desiredSHA := res.DesiredSHA256
-
-	// 2. Load applied record (absence -> empty).
-	ar, err := record.LoadAppliedRecord(cfg.AppliedRoot)
-	if err != nil {
-		d := err.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d)
-	}
-
-	// 3. Compute intent diff.
-	intent := diff.ComputeIntentDiff(desired, ar.Record)
-	keep := cfg.loadKeepList()
-
-	// 4. If intent empty, check drift; if also empty, "nothing to do".
-	if intent.Empty() {
-		sres, derr := state.DescribeActualState("/", state.Options{
-			OnUnreadable: state.OnUnreadableError, Scope: state.ScopeEtc, KeepList: keep,
-		})
-		if derr != nil {
-			d := derr.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
-		}
-		drift := diff.ComputeDrift(sres.Manifest, ar.Record, keep)
-		if drift.Empty() {
-			fmt.Fprintln(io.Stdout, "nothing to do")
-			return ExitOK
-		}
-	}
-
-	// 5. Acquire transaction context.
-	mode, _ := txn.ParseMode(cfg.Mode)
-	ctx, td := txn.Acquire(mode)
-	if td != nil {
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{td})
-		return exitForDomain(td)
-	}
-
-	copts := converge.Options{
-		ContentStore: cfg.ContentStore, KeepList: keep, RepoLock: cfg.RepoLock,
-	}
-
-	// 6. Converge packages (repositories applied within).
-	resolved, pd := converge.ConvergePackages(ctx, intent, copts)
-	if pd != nil {
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{pd})
-		return ExitError // transaction discarded
-	}
-
-	// 7. Converge files.
-	if fd := converge.ConvergeFiles(ctx, intent, copts); fd != nil {
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{fd})
+	// 2. load applied record
+	applied, _, ad := record.Load(cfg.AppliedRoot)
+	if ad != nil {
+		emitDiag(stderr, *ad)
 		return ExitError
 	}
-
-	// 8. Converge units.
-	if ud := converge.ConvergeUnits(ctx, intent, copts); ud != nil {
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{ud})
-		return ExitError
-	}
-
-	// 9. Write applied record.
-	if wd := record.WriteAppliedRecord(ctx.Root, desired, desiredSHA, resolved); wd != nil {
-		d := wd.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return ExitError
-	}
-
-	// 10. Post-converge verification against the new applied record.
-	newAR, _ := record.LoadAppliedRecord(ctx.Root)
-	vres, verr := state.DescribeActualState(ctx.Root, state.Options{
-		OnUnreadable: state.OnUnreadableError, Scope: state.ScopeEtc, KeepList: keep,
-	})
-	if verr != nil {
-		d := verr.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return ExitError
-	}
-	postDrift := diff.ComputeDrift(vres.Manifest, newAR.Record, keep)
-	if !postDrift.Empty() {
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{
-			diag.New(diag.DomainFiles, "post-converge verification found drift"),
-		})
-		return ExitError
-	}
-
-	// 11. Seal and activate (delegated); emit summary.
-	fmt.Fprintf(io.Stdout, "applied: %d package(s) resolved, %d file(s) written, %d unit(s) changed\n",
-		len(resolved.Elements), len(intent.FilesWrite), len(intent.UnitsChange))
-	return ExitOK
-}
-
-// ---- diff ----
-
-func runDiff(cfg *Config, rest []string, io IO) int {
-	if rejectExtra(io, "diff", rest) {
-		return ExitInvocation
-	}
-	// 1. Load desired manifest.
-	res, err := manifest.LoadDesiredManifest(cfg.ManifestPath, cfg.loadOptions())
-	if err != nil {
-		d := err.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d)
-	}
-	desired := res.Manifest
-
-	// 2. Load applied record (absence -> empty).
-	ar, err := record.LoadAppliedRecord(cfg.AppliedRoot)
-	if err != nil {
-		d := err.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d)
-	}
-
-	// 3. Compute intent diff.
-	intent := diff.ComputeIntentDiff(desired, ar.Record)
-	keep := cfg.loadKeepList()
-
-	// 4. Obtain actual state for drift: supplied dump or live read.
+	// 3. intent diff
+	d := diff.ComputeIntentDiff(desired, applied)
+	// 4. actual state for drift
+	keep := readKeepList(cfg)
 	var actual *manifest.Manifest
 	if cfg.StatePath != "" {
-		actual, err = manifest.ParseDump(cfg.StatePath, cfg.explicitFormat(), cfg.defaultFormat())
-		if err != nil {
-			d := err.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
+		var c int
+		actual, c = loadStateDump(cfg, cfg.StatePath, stderr)
+		if c != ExitOK {
+			return c
 		}
 	} else {
-		sres, derr := state.DescribeActualState("/", state.Options{
-			OnUnreadable: state.OnUnreadableError, Scope: state.ScopeEtc, KeepList: keep,
-		})
-		if derr != nil {
-			d := derr.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
+		var c int
+		actual, c = readActualState(cfg, "error", "etc", keep, nowRFC3339(), stderr)
+		if c != ExitOK {
+			return c
 		}
-		actual = sres.Manifest
 	}
-	drift := diff.ComputeDrift(actual, ar.Record, keep)
-
-	// 5. Print the combined plan.
-	printPlan(io.Stdout, intent, drift)
+	report := diff.ComputeDrift(actual, applied, diff.KeepList(keep))
+	// 5. print plan
+	printPlan(stdout, d, report)
 	return ExitOK
 }
 
-// printPlan writes the intent diff and the drift report to w.
-func printPlan(w io.Writer, intent *diff.Diff, drift *diff.DriftReport) {
+// printPlan writes the combined intent diff and drift report to stdout.
+func printPlan(w io.Writer, d manifest.Diff, r manifest.DriftReport) {
 	fmt.Fprintln(w, "packages to install:")
-	for _, p := range intent.PackagesInstall {
-		fmt.Fprintf(w, "  + %s\n", p.Name)
+	for _, p := range d.PackagesInstall {
+		fmt.Fprintf(w, "  %s\n", p.Name)
 	}
 	fmt.Fprintln(w, "packages to remove:")
-	for _, p := range intent.PackagesRemove {
-		fmt.Fprintf(w, "  - %s\n", p.Name)
+	for _, p := range d.PackagesRemove {
+		fmt.Fprintf(w, "  %s\n", p.Name)
 	}
 	fmt.Fprintln(w, "repositories to set:")
-	for _, r := range intent.ReposSet {
-		fmt.Fprintf(w, "  = %s\n", r.Alias)
+	for _, repo := range d.ReposSet {
+		fmt.Fprintf(w, "  %s\n", repo.Alias)
 	}
 	fmt.Fprintln(w, "files to write:")
-	for _, e := range intent.FilesWrite {
-		fmt.Fprintf(w, "  > %s\n", e.Name)
+	for _, f := range d.FilesWrite {
+		fmt.Fprintf(w, "  %s\n", f.Name)
 	}
 	fmt.Fprintln(w, "files to delete:")
-	for _, p := range intent.FilesDelete {
-		fmt.Fprintf(w, "  x %s\n", p)
+	for _, p := range d.FilesDelete {
+		fmt.Fprintf(w, "  %s\n", p)
 	}
 	fmt.Fprintln(w, "units to change:")
-	for _, u := range intent.UnitsChange {
-		fmt.Fprintf(w, "  ! %s -> %s\n", u.Name, u.State)
+	for _, u := range d.UnitsChange {
+		fmt.Fprintf(w, "  %s -> %s\n", u.Name, u.State)
 	}
-	fmt.Fprintln(w, "current drift:")
-	for _, p := range drift.FilesModified {
-		fmt.Fprintf(w, "  ~ %s (modified)\n", p)
-	}
-	for _, p := range drift.FilesExtra {
-		fmt.Fprintf(w, "  ? %s (extra)\n", p)
-	}
-	for _, u := range drift.UnitsDivergent {
-		fmt.Fprintf(w, "  ! %s (divergent)\n", u.Name)
-	}
-}
-
-// emitDrift writes one diagnostic per drift item to stderr.
-func emitDrift(w io.Writer, r *diff.DriftReport) {
+	fmt.Fprintln(w, "drift:")
 	for _, p := range r.FilesModified {
-		fmt.Fprintln(w, diag.New(diag.DomainFiles, "drift: %s modified", p).Error())
+		fmt.Fprintf(w, "  modified: %s\n", p)
 	}
 	for _, p := range r.FilesExtra {
-		fmt.Fprintln(w, diag.New(diag.DomainFiles, "drift: %s extra (unpackaged, undeclared)", p).Error())
+		fmt.Fprintf(w, "  extra: %s\n", p)
 	}
 	for _, u := range r.UnitsDivergent {
-		fmt.Fprintln(w, diag.New(diag.DomainServices, "drift: %s state divergent (declared %s)", u.Name, u.State).Error())
+		fmt.Fprintf(w, "  unit divergent: %s\n", u.Name)
 	}
 	for _, p := range r.PackagesDivergent {
-		fmt.Fprintln(w, diag.New(diag.DomainPackages, "drift: %s package divergent", p.Name).Error())
+		fmt.Fprintf(w, "  package divergent: %s\n", p.Name)
 	}
 	for _, p := range r.ManagedFilesModified {
-		fmt.Fprintln(w, diag.New(diag.DomainFiles, "drift: %s managed file modified", p).Error())
+		fmt.Fprintf(w, "  managed file modified: %s\n", p)
 	}
 	for _, p := range r.UnmanagedFilesPresent {
-		fmt.Fprintln(w, diag.New(diag.DomainFiles, "drift: %s unmanaged file present", p).Error())
+		fmt.Fprintf(w, "  unmanaged file present: %s\n", p)
 	}
 }
 
-// ---- status ----
-
-func runStatus(cfg *Config, rest []string, io IO) int {
-	// 1. Reject any unrecognised argument.
-	if rejectExtra(io, "status", rest) {
+// runVerify implements BEHAVIOR: verify.
+func runVerify(args []string, stdout, stderr io.Writer) int {
+	cfg := defaultConfig()
+	seen, err := parseArgs(&cfg, args)
+	if err != nil {
+		printUsage(stderr)
 		return ExitInvocation
 	}
-	// 2. Load applied record.
-	ar, err := record.LoadAppliedRecord(cfg.AppliedRoot)
-	if err != nil {
-		d := err.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d)
+
+	keep := readKeepList(cfg)
+
+	// 1. determine reference
+	var reference *manifest.Manifest
+	if seen["manifest-path"] {
+		var code int
+		reference, _, code = loadDesiredManifest(cfg, cfg.ManifestPath, stderr)
+		if code != ExitOK {
+			// verify maps a manifest read/format error to exit 2, else 1.
+			if code == ExitInvocation {
+				return ExitInvocation
+			}
+			return ExitError
+		}
+	} else {
+		rec, present, rd := record.Load(cfg.AppliedRoot)
+		if rd != nil {
+			emitDiag(stderr, *rd)
+			return ExitError
+		}
+		if !present {
+			emitDiag(stderr, manifest.NewError(manifest.DomainInvocation, "no declaration applied"))
+			return ExitInvocation
+		}
+		reference = rec
 	}
-	if !ar.Present {
-		fmt.Fprintln(io.Stdout, "no declaration applied")
+
+	// 2. actual state
+	var actual *manifest.Manifest
+	if cfg.StatePath != "" {
+		var c int
+		actual, c = loadStateDump(cfg, cfg.StatePath, stderr)
+		if c != ExitOK {
+			return c
+		}
+	} else {
+		var c int
+		actual, c = readActualState(cfg, "error", cfg.Scope, keep, nowRFC3339(), stderr)
+		if c != ExitOK {
+			return c
+		}
+	}
+
+	// 3. drift
+	report := diff.ComputeDrift(actual, reference, diff.KeepList(keep))
+
+	// 4. result
+	if report.Empty() {
+		fmt.Fprintln(stdout, "system matches declaration")
 		return ExitOK
 	}
-	// 3. Print record summary.
-	rec := ar.Record
+	emitDriftDiagnostics(stderr, report)
+	return ExitError
+}
+
+// emitDriftDiagnostics writes one diagnostic per drift item to stderr.
+func emitDriftDiagnostics(stderr io.Writer, r manifest.DriftReport) {
+	for _, p := range r.FilesModified {
+		emitDiag(stderr, manifest.NewError(manifest.DomainFiles, "modified: "+p))
+	}
+	for _, p := range r.FilesExtra {
+		emitDiag(stderr, manifest.NewError(manifest.DomainFiles, "extra: "+p))
+	}
+	for _, u := range r.UnitsDivergent {
+		emitDiag(stderr, manifest.NewError(manifest.DomainUnits, "divergent service: "+u.Name))
+	}
+	for _, p := range r.PackagesDivergent {
+		emitDiag(stderr, manifest.NewError(manifest.DomainPackages, "divergent package: "+p.Name))
+	}
+	for _, p := range r.ManagedFilesModified {
+		emitDiag(stderr, manifest.NewError(manifest.DomainFiles, "managed file modified: "+p))
+	}
+	for _, p := range r.UnmanagedFilesPresent {
+		emitDiag(stderr, manifest.NewError(manifest.DomainFiles, "unmanaged file present: "+p))
+	}
+}
+
+// runStatus implements BEHAVIOR: status.
+func runStatus(args []string, stdout, stderr io.Writer) int {
+	cfg := defaultConfig()
+	// status accepts no options beyond CONFIG; reject any unrecognised argument.
+	if _, err := parseArgs(&cfg, args); err != nil {
+		printUsage(stderr)
+		return ExitInvocation
+	}
+
+	rec, present, rd := record.Load(cfg.AppliedRoot)
+	if rd != nil {
+		emitDiag(stderr, *rd)
+		return ExitError
+	}
+	if !present {
+		fmt.Fprintln(stdout, "no declaration applied")
+		return ExitOK
+	}
+
 	pkgCount := 0
 	if rec.Packages != nil {
 		pkgCount = len(rec.Packages.Elements)
 	}
-	fmt.Fprintf(io.Stdout, "desired_sha256: %s\n", rec.Meta.DesiredSHA256)
-	fmt.Fprintf(io.Stdout, "format_version: %d\n", rec.Meta.FormatVersion)
-	fmt.Fprintf(io.Stdout, "generation: %s\n", cfg.AppliedRoot)
-	fmt.Fprintf(io.Stdout, "created_at: %s\n", rec.Meta.CreatedAt)
-	fmt.Fprintf(io.Stdout, "packages: %d resolved\n", pkgCount)
+	fmt.Fprintf(stdout, "desired_sha256: %s\n", rec.Meta.DesiredSHA256)
+	fmt.Fprintf(stdout, "format_version: %d\n", rec.Meta.FormatVersion)
+	fmt.Fprintf(stdout, "generation: %s\n", cfg.AppliedRoot)
+	fmt.Fprintf(stdout, "created_at: %s\n", rec.Meta.CreatedAt)
+	fmt.Fprintf(stdout, "packages: %d resolved\n", pkgCount)
 
-	// 4. Drift summary.
-	keep := cfg.loadKeepList()
-	sres, derr := state.DescribeActualState("/", state.Options{
-		OnUnreadable: state.OnUnreadableError, Scope: state.ScopeEtc, KeepList: keep,
-	})
-	if derr != nil {
-		d := derr.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d)
+	// drift summary line via the live reader.
+	keep := readKeepList(cfg)
+	actual, c := readActualState(cfg, "error", "etc", keep, nowRFC3339(), stderr)
+	if c != ExitOK {
+		return c
 	}
-	drift := diff.ComputeDrift(sres.Manifest, rec, keep)
-	n := driftCount(drift)
-	if n == 0 {
-		fmt.Fprintln(io.Stdout, "clean")
+	report := diff.ComputeDrift(actual, rec, diff.KeepList(keep))
+	if report.Empty() {
+		fmt.Fprintln(stdout, "clean")
 	} else {
-		fmt.Fprintf(io.Stdout, "%d drift item(s)\n", n)
+		fmt.Fprintf(stdout, "%d drift item(s)\n", report.Count())
 	}
 	return ExitOK
-}
-
-// ---- verify ----
-
-func runVerify(cfg *Config, rest []string, io IO) int {
-	if rejectExtra(io, "verify", rest) {
-		return ExitInvocation
-	}
-	keep := cfg.loadKeepList()
-
-	// 1. Determine the reference.
-	var reference *manifest.Manifest
-	if cfg.ManifestPath != "" {
-		res, err := manifest.LoadDesiredManifest(cfg.ManifestPath, cfg.loadOptions())
-		if err != nil {
-			d := err.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
-		}
-		reference = res.Manifest
-	} else {
-		ar, err := record.LoadAppliedRecord(cfg.AppliedRoot)
-		if err != nil {
-			d := err.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
-		}
-		if !ar.Present {
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{
-				diag.New(diag.DomainInvocation, "no declaration applied"),
-			})
-			return ExitInvocation
-		}
-		reference = ar.Record
-	}
-
-	// 2. Obtain the actual state.
-	var actual *manifest.Manifest
-	if cfg.StatePath != "" {
-		m, err := manifest.ParseDump(cfg.StatePath, cfg.explicitFormat(), cfg.defaultFormat())
-		if err != nil {
-			d := err.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
-		}
-		actual = m
-	} else {
-		sres, derr := state.DescribeActualState("/", state.Options{
-			OnUnreadable: state.OnUnreadableError, Scope: cfg.scopeVal(), KeepList: keep,
-		})
-		if derr != nil {
-			d := derr.(*diag.Diagnostic)
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-			return exitForDomain(d)
-		}
-		actual = sres.Manifest
-	}
-
-	// 3. Compute drift.
-	drift := diff.ComputeDrift(actual, reference, keep)
-
-	// 4. Report.
-	if drift.Empty() {
-		fmt.Fprintln(io.Stdout, "system matches declaration")
-		return ExitOK
-	}
-	emitDrift(io.Stderr, drift)
-	return ExitError
-}
-
-// ---- describe ----
-
-func runDescribe(cfg *Config, rest []string, io IO) int {
-	// 1. Reject unrecognised argument or unknown format (format validated in parse).
-	if rejectExtra(io, "describe", rest) {
-		return ExitInvocation
-	}
-	keep := cfg.loadKeepList()
-
-	// 2. Obtain actual state.
-	sres, derr := state.DescribeActualState(cfg.Root, state.Options{
-		OnUnreadable: cfg.onUnreadable(), Scope: cfg.scopeVal(), KeepList: keep,
-	})
-	if derr != nil {
-		d := derr.(*diag.Diagnostic)
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{d})
-		return exitForDomain(d) // unreadable source under error -> exit 1 (files/etc domain)
-	}
-	// Emit any warn diagnostics.
-	emitDiagnostics(io.Stderr, sres.Diagnostics)
-
-	// 3. Resolve output format.
-	f := manifest.ResolveFormat(cfg.explicitFormat(), cfg.Out, cfg.defaultFormat())
-
-	// 4. Serialise.
-	out, serr := sres.Manifest.Serialise(f)
-	if serr != nil {
-		emitDiagnostics(io.Stderr, []*diag.Diagnostic{
-			diag.New(diag.DomainInvocation, "cannot serialise manifest: %v", serr),
-		})
-		return ExitInvocation
-	}
-
-	// 5. Write to out or stdout.
-	if cfg.Out != "" {
-		if werr := os.WriteFile(cfg.Out, out, 0o644); werr != nil {
-			emitDiagnostics(io.Stderr, []*diag.Diagnostic{
-				diag.New(diag.DomainInvocation, "output path unwritable: %s: %v", cfg.Out, werr),
-			})
-			return ExitInvocation
-		}
-		return ExitOK
-	}
-	io.Stdout.Write(out)
-	return ExitOK
-}
-
-// driftCount counts the total drift items in a report.
-func driftCount(r *diff.DriftReport) int {
-	return len(r.FilesModified) + len(r.FilesExtra) + len(r.UnitsDivergent) +
-		len(r.PackagesDivergent) + len(r.ManagedFilesModified) + len(r.UnmanagedFilesPresent)
 }

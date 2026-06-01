@@ -1,121 +1,115 @@
-<!-- generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e -->
+<!-- generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4 -->
 
 # zypper-declarative
 
-A reconciling declarative converger for SUSE systems, surfaced as a `zypper`
-subcommand and also directly invocable. It converges a system to a desired
-manifest inside a single snapshot transaction and records what was applied.
+Declarative system convergence for zypper-managed systems.
 
-The manifest is the **declarable subset of the SUSE Machinery system
-description** — `packages`, `repositories`, `services`, `config_files` — using
-the `ScopeWrapper` (`_attributes`/`_elements`) idiom and `underscore_style`
-field names. Its canonical serialisation is JSON (Machinery `format_version`
-1); YAML is an opt-in serialisation of the identical data model.
+`zypper-declarative` converges a SUSE system to a **desired manifest** — the
+declarable subset of the SUSE Machinery system description (`packages`,
+`repositories`, `services`, `config_files`) — inside a single snapshot
+transaction, recording what was applied. It is surfaced as the
+`zypper declarative` subcommand and is also invocable directly.
 
-This binary embeds the SHA256 of the specification it was generated from; see
-`zypper-declarative version`.
+The manifest's canonical serialisation is JSON (Machinery `format_version` 1).
+YAML is an opt-in alternative serialisation of the identical data model.
+
+- **Module:** `github.com/mge1512/zypper-declarative`
+- **Spec:** `zypper-declarative.spec.md` (sha256 `27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4`)
+- **License:** GPL-2.0-or-later
 
 ## Installation
 
-Distributed via the [openSUSE Build Service](https://build.opensuse.org). Install
-with your platform package manager:
+`zypper-declarative` is distributed as an OBS package via
+[build.opensuse.org](https://build.opensuse.org). Install it with your
+distribution's package manager:
 
+```sh
+# openSUSE / SLES / SL Micro
+sudo zypper install zypper-declarative
+
+# Fedora / RHEL (dnf)
+sudo dnf install zypper-declarative
+
+# Debian / Ubuntu (apt)
+sudo apt install zypper-declarative
 ```
-# openSUSE / SLE
-zypper install zypper-declarative
 
-# Debian / Ubuntu
-apt install zypper-declarative
-
-# Fedora / RHEL
-dnf install zypper-declarative
-```
-
-curl-based installation is intentionally **not** provided (supply-chain
-security requirement).
+There is no `curl`-based installation: software is delivered through signed
+distribution packages only.
 
 ## Usage
 
-```
-zypper declarative <verb> [key=value ...]
-zypper-declarative <verb> [key=value ...]
-```
-
-### Verbs
-
-| Verb | Purpose |
-|------|---------|
-| `apply` | Converge the system to the desired manifest inside a snapshot transaction (privileged, idempotent). |
-| `diff` | Print what `apply` would change. Makes no modification, opens no transaction. |
-| `verify` | Check the actual state against a reference declaration, modulo the keep-list. |
-| `status` | Print the applied manifest hash, generation, and a one-line drift summary. |
-| `describe` | Emit the actual state as a Manifest (JSON by default, YAML on request). |
-
-### Global commands
-
-| Command | Purpose |
-|---------|---------|
-| `version` (alias `--version`) | Print program name, version, and embedded spec hash; exit 0. |
-| `help` (aliases `--help`, `-h`) | Print usage; exit 0. |
-
-A bare invocation (no verb) prints usage to stdout and exits 0. It is a
-discovery action and never runs a default verb.
-
-### Options
-
-Options use `key=value` form and may appear before or after the verb. POSIX
-`--flag` style is **not** used for options.
-
-| Option | Values | Meaning |
-|--------|--------|---------|
-| `mode` | `auto`\|`external`\|`internal` | Transaction binding (default `auto`). |
-| `manifest-path` | path | Desired manifest (apply, diff); reference manifest (verify). |
-| `state-path` | path | Captured actual state for verify/diff (offline; default reads live). |
-| `format` | `json`\|`yaml` | Serialisation for this invocation's manifest I/O. |
-| `manifest-format` | `json`\|`yaml` | Default serialisation (default `json`). |
-| `root` | path | Root to describe (default `/`). |
-| `out` | path | describe output file (default stdout). |
-| `on-unreadable` | `error`\|`warn` | describe policy on an unreadable scope source (default `error`). |
-| `scope` | `etc`\|`full` | describe/verify read scope (default `etc`; `full` audits `/usr` and `/boot`). |
-| `applied-root` | path | Generation root for the applied record (default `/`). |
-
-Additional CONFIG knobs accepted as options: `repo-lock`, `content-store`,
-`keep-list`, `signature-verification`, `keyring`, `activation-policy`.
-
-### Examples
-
-```
-zypper declarative apply
-zypper declarative apply manifest-path=/var/lib/zypper-declarative/desired.json
-zypper declarative diff
-zypper declarative describe > desired.json            # bootstrap a manifest
+```sh
+zypper declarative apply                       # converge to the desired manifest
+zypper declarative apply mode=external
+zypper declarative diff                        # dry run: what apply would change
+zypper declarative verify                      # does the system still match?
+zypper declarative verify scope=full           # + /usr,/boot integrity audit
+zypper declarative status                      # current declarative state
+zypper declarative describe                    # emit actual state as a manifest
+zypper declarative describe > desired.json     # bootstrap a manifest (JSON)
 zypper declarative describe format=yaml > desired.yaml
-zypper declarative verify
-zypper declarative verify scope=full                  # + /usr,/boot integrity audit
+zypper declarative diff   manifest-path=baseline.json state-path=after.json   # offline
 zypper declarative verify manifest-path=baseline.json state-path=after.json   # offline
 ```
 
-## Exit codes
+The equivalent direct form is `zypper-declarative <verb> [key=value ...]`.
+
+### Options (key=value; precede any bare-word argument)
+
+| Option | Values | Meaning |
+|--------|--------|---------|
+| `mode` | `auto`\|`external`\|`internal` | transaction binding (default `auto`) |
+| `manifest-path` | path | desired manifest (apply, diff); reference for verify |
+| `format` | `json`\|`yaml` | serialisation for this invocation's manifest I/O |
+| `state-path` | path | captured actual state for verify and diff (offline) |
+| `root` | path | root to describe (default `/`) |
+| `out` | path | describe output file (default stdout) |
+| `on-unreadable` | `error`\|`warn` | describe: fail (default) or omit+warn |
+| `scope` | `etc`\|`full` | describe/verify read scope (default `etc`) |
+
+The CONFIG knobs `manifest-format`, `repo-lock`, `content-store`, `keep-list`,
+`signature-verification`, `keyring`, `activation-policy`, and `applied-root` are
+also accepted as `key=value` options. Behaviour is never controlled via
+environment variables; POSIX `--flag` style is not used for options
+(`--version`, `--help`, `-h` are tolerated aliases for the global commands
+only).
+
+### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success: converged or no-op, system matches declaration, or describe produced output. |
-| `1` | Logical failure: convergence failed and discarded; verify drift; invalid/unsafe-YAML/unverified manifest; state collection failed. |
-| `2` | Invocation error: bad arguments; unknown format value; manifest unreadable; insufficient privilege; transaction mechanism unavailable; output path unwritable; malformed state dump. |
-
-Diagnostics (errors and warnings) are written to **stderr**, one per line.
-Normal output (summaries, the diff plan, the status report, the describe
-document) is written to **stdout**.
+| `0` | success: converged, no-op, system matches declaration, or describe emitted |
+| `1` | logical failure: convergence discarded; verify drift; invalid/unsafe/unverified manifest; state collection failed |
+| `2` | invocation error: bad arguments; unknown format value; manifest unreadable; insufficient privilege; transaction unavailable; output path unwritable; malformed state dump |
 
 ## Building from source
 
-```
-make build      # static binary at ./zypper-declarative (CGO_ENABLED=0)
-make test       # run the test suite
-make man        # generate the troff man page via pandoc
+```sh
+make build      # CGO_ENABLED=0 static binary at ./zypper-declarative
+make test       # run the test suite (go test)
+make man        # generate the man page via pandoc
 make install    # install binary, zypper subcommand, and man page
 ```
 
-## License
+The binary is a single static executable (`CGO_ENABLED=0`) with no runtime
+dependencies of its own beyond the system package manager, snapshot tooling, and
+init system it drives.
 
-GPL-2.0-or-later. See `LICENSE`.
+## Architecture
+
+| Package | Responsibility |
+|---------|----------------|
+| `cmd/zypper-declarative` | thin entry point: dispatch only |
+| `internal/cli` | argument parsing, global contract, verb handlers |
+| `internal/manifest` | the data model, JSON/YAML serialisation, `resolve-format`, canonical-model hashing, diagnostics |
+| `internal/state` | `describe-actual-state` — the single live-state reader |
+| `internal/diff` | `compute-intent-diff`, `compute-drift` (pure, no I/O) |
+| `internal/converge` | `converge-packages`, `-files`, `-units` |
+| `internal/txn` | `acquire-transaction-context` and bindings |
+| `internal/record` | `load-applied-record`, `write-applied-record` |
+| `internal/meta` | embedded spec SHA256 and version |
+
+`describe-actual-state` is the only code that reads live system state; every
+verb obtains actual state through it (or a supplied dump). `compute-drift`
+performs no I/O — it is a pure comparison of two in-memory `Manifest` documents.

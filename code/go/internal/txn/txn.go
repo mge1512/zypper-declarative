@@ -1,18 +1,19 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
 //
-// Package txn implements acquire-transaction-context: it resolves the abstract
-// transaction binding (auto | external | internal) and yields a context the
-// convergence domains operate within. The binding is isolated here so the rest
-// of the code is unaware of which mechanism opened the snapshot.
+// Package txn implements BEHAVIOR/INTERNAL: acquire-transaction-context. The
+// binding between this tool and the snapshot transaction is deliberately
+// abstract: auto detects, external asserts a writable new-generation root,
+// internal opens a snapshot through the zypper-merged machinery. The convergence
+// path is identical regardless of which binding resolves.
 package txn
 
 import (
 	"os"
 
-	"github.com/mge1512/zypper-declarative/internal/diag"
+	"github.com/mge1512/zypper-declarative/internal/manifest"
 )
 
-// Mode is the transaction binding mode.
+// Mode is auto | external | internal.
 type Mode string
 
 const (
@@ -21,81 +22,71 @@ const (
 	ModeInternal Mode = "internal"
 )
 
-// ParseMode validates a mode= value.
-func ParseMode(s string) (Mode, *diag.Diagnostic) {
-	switch Mode(s) {
-	case ModeAuto, ModeExternal, ModeInternal:
-		return Mode(s), nil
-	default:
-		return "", diag.New(diag.DomainInvocation, "unknown transaction mode %q", s)
-	}
-}
-
-// Context is the resolved transaction context.
+// Context is the resolved transaction context the convergence domains operate in.
 type Context struct {
 	Mode       Mode
 	Root       string
 	OpenedHere bool
 }
 
-// envNewRoot is the environment-independent signal a separate mechanism uses to
-// expose the new-generation root. The spec forbids behaviour control via env
-// vars; this is detection of the surrounding transaction, not a behaviour knob.
-const envNewRoot = "TRANSACTIONAL_UPDATE_NEWROOT"
+// Acquirer resolves a transaction context. The default Acquirer detects an
+// external transaction via the TRANSACTIONAL_UPDATE marker environment that the
+// external opener sets, and otherwise reports the internal mechanism as
+// unavailable in this build (the internal binding is host-specific; see
+// INTERFACES). It is injectable so callers/tests can supply a binding.
+type Acquirer interface {
+	Acquire(mode Mode) (*Context, *manifest.Diagnostic)
+}
 
-// Acquire resolves the transaction binding for mode and returns a context.
-func Acquire(mode Mode) (*Context, *diag.Diagnostic) {
-	switch mode {
-	case ModeAuto:
-		if insideTransaction() {
-			return acquireExternal()
+// DefaultAcquirer is the production Acquirer.
+type DefaultAcquirer struct {
+	// ExternalRoot, when non-empty, is the writable new-generation root an
+	// external opener provided. The external opener (transactional-update)
+	// communicates the new root out of band; this is the seam to read it.
+	ExternalRoot string
+}
+
+// Acquire implements acquire-transaction-context.
+func (a *DefaultAcquirer) Acquire(mode Mode) (*Context, *manifest.Diagnostic) {
+	if mode == "" {
+		mode = ModeAuto
+	}
+	resolved := mode
+	if mode == ModeAuto {
+		if a.externalRoot() != "" {
+			resolved = ModeExternal
+		} else {
+			resolved = ModeInternal
 		}
-		return acquireInternal()
+	}
+	switch resolved {
 	case ModeExternal:
-		return acquireExternal()
-	case ModeInternal:
-		return acquireInternal()
-	default:
-		return nil, diag.New(diag.DomainInvocation, "unknown transaction mode %q", mode)
-	}
-}
-
-// insideTransaction detects whether the process already runs inside a fresh
-// snapshot transaction (a new-generation root is exposed).
-func insideTransaction() bool {
-	r := os.Getenv(envNewRoot)
-	if r == "" {
-		return false
-	}
-	fi, err := os.Stat(r)
-	return err == nil && fi.IsDir()
-}
-
-func acquireExternal() (*Context, *diag.Diagnostic) {
-	r := os.Getenv(envNewRoot)
-	if r == "" {
-		return nil, diag.New(diag.DomainTransaction,
-			"external mode but not running inside a snapshot transaction")
-	}
-	fi, err := os.Stat(r)
-	if err != nil || !fi.IsDir() {
-		return nil, diag.New(diag.DomainTransaction,
-			"external mode but the new-generation root %q is not present", r)
-	}
-	return &Context{Mode: ModeExternal, Root: r, OpenedHere: false}, nil
-}
-
-// acquireInternal opens a new snapshot transaction through the zypper-merged
-// transactional machinery. Opening a real snapshot is reserved for the
-// apply-on-live-host milestone; here it reports that the internal mechanism is
-// unavailable unless a transaction root is exposed, so callers fail cleanly
-// rather than mutating the running system.
-func acquireInternal() (*Context, *diag.Diagnostic) {
-	if r := os.Getenv(envNewRoot); r != "" {
-		if fi, err := os.Stat(r); err == nil && fi.IsDir() {
-			return &Context{Mode: ModeInternal, Root: r, OpenedHere: true}, nil
+		root := a.externalRoot()
+		if root == "" {
+			d := manifest.NewError(manifest.DomainTransaction,
+				"external transaction mode requested but not running inside a snapshot transaction")
+			return nil, &d
 		}
+		return &Context{Mode: ModeExternal, Root: root, OpenedHere: false}, nil
+	case ModeInternal:
+		// Opening a snapshot through the zypper-merged transactional machinery is
+		// host-specific (SLES 16.1) and not available in this build environment.
+		d := manifest.NewError(manifest.DomainTransaction,
+			"internal transaction mechanism unavailable in this environment")
+		return nil, &d
+	default:
+		d := manifest.NewError(manifest.DomainTransaction, "unknown transaction mode: "+string(mode))
+		return nil, &d
 	}
-	return nil, diag.New(diag.DomainTransaction,
-		"internal transaction mechanism unavailable: no writable new-generation root")
+}
+
+func (a *DefaultAcquirer) externalRoot() string {
+	if a.ExternalRoot != "" {
+		return a.ExternalRoot
+	}
+	// transactional-update exposes the new snapshot root via this variable when
+	// it has opened a transaction around the invocation. Reading it here is not
+	// configuration-via-env-var (forbidden by the template): it is the contract
+	// by which the external opener hands the tool the writable root.
+	return os.Getenv("TRANSACTIONAL_UPDATE_NEW_ROOT")
 }

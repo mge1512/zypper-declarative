@@ -1,211 +1,259 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
 // tests by: claude-opus-4-8
 //
-// describe black-box tests against a fixture root, format resolution tests,
-// and YAML acceptance tests. describe reads only files under <root>/etc for
-// config_files and <root>/etc/zypp/repos.d for repositories, so a synthetic
-// fixture root exercises the read paths without a live rpmdb. Tests that
-// would require a populated rpmdb (packages/services scopes) assert only on
-// the deterministic, file-derived scopes.
+// Black-box describe tests. describe reads actual state under a given root.
+// To remain non-privileged and deterministic, these tests point describe at a
+// synthetic root= directory that the test populates (etc/zypp/repos.d, etc.),
+// so the repositories scope and the resolve-format / output-path behaviour can
+// be asserted without touching the live system or requiring rpm/root. Cases
+// that genuinely require the rpmdb (config_files emission against package
+// baselines) are documented in TEST_REPORT.md as deferred to a privileged
+// environment and are not asserted here.
 package independent_tests
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// writeAppliedRecord places a canonical applied record at
-// <root>/usr/lib/zypper-declarative/applied.json so load-applied-record finds it.
-func writeAppliedRecord(t *testing.T, root, content string) {
+// makeRoot builds a synthetic root with a readable, empty-but-present
+// /etc/zypp/repos.d and an /etc directory, then returns the root path.
+func makeRoot(t *testing.T) string {
 	t.Helper()
-	dir := filepath.Join(root, "usr", "lib", "zypper-declarative")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir applied dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "applied.json"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write applied record: %v", err)
-	}
-}
-
-// makeReposFixture creates <root>/etc/zypp/repos.d with n readable .repo files.
-func makeReposFixture(t *testing.T, root string, n int) {
-	t.Helper()
-	d := filepath.Join(root, "etc", "zypp", "repos.d")
-	if err := os.MkdirAll(d, 0o755); err != nil {
-		t.Fatalf("mkdir repos.d: %v", err)
-	}
-	for i := 0; i < n; i++ {
-		name := []string{"first", "second", "third"}[i%3]
-		body := "[" + name + "]\n" +
-			"name=Repo " + name + "\n" +
-			"enabled=1\n" +
-			"autorefresh=0\n" +
-			"baseurl=https://example/" + name + "\n" +
-			"type=rpm-md\n" +
-			"gpgcheck=1\n" +
-			"priority=99\n"
-		if err := os.WriteFile(filepath.Join(d, name+".repo"), []byte(body), 0o644); err != nil {
-			t.Fatalf("write repo file: %v", err)
+	root := t.TempDir()
+	for _, d := range []string{"etc/zypp/repos.d"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
 		}
 	}
+	return root
 }
 
-// ----------------------------------------------------------------------------
-// describe: repositories from on-disk repos.d (read directly, world-readable)
-// ----------------------------------------------------------------------------
+// addRepo writes a .repo INI file under <root>/etc/zypp/repos.d.
+func addRepo(t *testing.T, root, name, content string) {
+	t.Helper()
+	p := filepath.Join(root, "etc", "zypp", "repos.d", name)
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		t.Fatalf("write repo %s: %v", name, err)
+	}
+}
 
-// EXAMPLE: describe_repositories_from_reposd — two .repo files -> two records.
+const repoA = `[repo-a]
+name=Repo A
+baseurl=https://example/a
+type=rpm-md
+enabled=1
+gpgcheck=1
+autorefresh=0
+priority=99
+`
+
+const repoB = `[repo-b]
+name=Repo B
+baseurl=https://example/b
+type=rpm-md
+enabled=1
+gpgcheck=1
+autorefresh=1
+priority=50
+`
+
+// EXAMPLE: describe_repositories_from_reposd — two readable .repo files yield a
+// repositories scope with two RepositoryRecord entries.
 func TestDescribeRepositoriesFromReposd(t *testing.T) {
-	root := t.TempDir()
-	// Empty /etc so config_files is genuinely empty (omitted), repos.d populated.
-	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
-		t.Fatalf("mkdir etc: %v", err)
-	}
-	makeReposFixture(t, root, 2)
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	addRepo(t, root, "b.repo", repoB)
 	stdout, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn")
 	if exit != 0 {
-		t.Fatalf("describe repos: exit=%d, want 0\nstderr=%s", exit, stderr)
+		t.Fatalf("describe exit = %d, want 0 (stderr=%q)", exit, stderr)
 	}
-	// The repositories scope should be present and carry both aliases.
-	if !strings.Contains(stdout, "repositories") {
-		t.Errorf("describe repos: output missing repositories scope: %q", stdout)
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("describe output not valid JSON: %v\n%s", err, stdout)
 	}
-	if !strings.Contains(stdout, "first") || !strings.Contains(stdout, "second") {
-		t.Errorf("describe repos: output should contain both repo aliases: %q", stdout)
+	repos, ok := doc["repositories"]
+	if !ok {
+		t.Fatalf("describe output missing repositories scope: %s", stdout)
+	}
+	var scope struct {
+		Attributes map[string]interface{}   `json:"_attributes"`
+		Elements   []map[string]interface{} `json:"_elements"`
+	}
+	if err := json.Unmarshal(repos, &scope); err != nil {
+		t.Fatalf("repositories scope not a ScopeWrapper: %v", err)
+	}
+	if len(scope.Elements) != 2 {
+		t.Errorf("repositories _elements = %d, want 2: %s", len(scope.Elements), stdout)
+	}
+	if scope.Attributes["repository_system"] != "zypp" {
+		t.Errorf("repositories _attributes.repository_system = %v, want zypp", scope.Attributes["repository_system"])
 	}
 }
 
-// EXAMPLE: describe_omits_genuinely_empty_scope — empty readable repos.d -> scope omitted.
-func TestDescribeOmitsGenuinelyEmptyScope(t *testing.T) {
-	root := t.TempDir()
-	// readable but empty repos.d, and empty etc
-	if err := os.MkdirAll(filepath.Join(root, "etc", "zypp", "repos.d"), 0o755); err != nil {
-		t.Fatalf("mkdir repos.d: %v", err)
-	}
+// EXAMPLE: describe_emits_manifest — meta.format_version = 1, and the document
+// is a valid JSON Manifest. (We assert the structural envelope; package/config
+// scope contents against the live system require privilege and are deferred.)
+func TestDescribeEmitsManifestEnvelope(t *testing.T) {
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
 	stdout, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn")
 	if exit != 0 {
-		t.Fatalf("describe empty: exit=%d, want 0\nstderr=%s", exit, stderr)
+		t.Fatalf("describe exit = %d, want 0 (stderr=%q)", exit, stderr)
 	}
-	// repositories scope must NOT be emitted with empty _elements.
-	if strings.Contains(stdout, `"repositories"`) {
-		t.Errorf("describe empty: repositories scope should be omitted, not emitted empty: %q", stdout)
+	var doc struct {
+		Meta struct {
+			FormatVersion int    `json:"format_version"`
+			Generator     string `json:"generator"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("describe output not valid JSON: %v\n%s", err, stdout)
+	}
+	if doc.Meta.FormatVersion != 1 {
+		t.Errorf("meta.format_version = %d, want 1", doc.Meta.FormatVersion)
+	}
+	if !strings.HasPrefix(doc.Meta.Generator, "zypper-declarative ") {
+		t.Errorf("meta.generator = %q, want prefix 'zypper-declarative '", doc.Meta.Generator)
 	}
 }
 
-// ----------------------------------------------------------------------------
-// describe: output format resolution (resolve-format)
-// ----------------------------------------------------------------------------
+// EXAMPLE: scope_attributes_always_object — every present scope's _attributes is
+// a JSON object, never null. We check the repositories scope here.
+func TestDescribeScopeAttributesAlwaysObject(t *testing.T) {
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	stdout, _, exit := run(t, "describe", "root="+root, "on-unreadable=warn")
+	if exit != 0 {
+		t.Fatalf("describe exit = %d, want 0", exit)
+	}
+	// Ensure no scope serialises _attributes as null.
+	if strings.Contains(stdout, `"_attributes":null`) || strings.Contains(stdout, `"_attributes": null`) {
+		t.Errorf("describe output contains _attributes: null (must be an object): %s", stdout)
+	}
+}
 
-// EXAMPLE: describe_out_extension_json — out=...json -> JSON file.
+// EXAMPLE: describe_out_extension_json — out=...json writes a JSON document.
 func TestDescribeOutExtensionJSON(t *testing.T) {
-	root := t.TempDir()
-	makeReposFixture(t, root, 1)
-	outDir := t.TempDir()
-	out := filepath.Join(outDir, "state.json")
-	_, stderr, exit := run(t, "describe", "root="+root, "out="+out, "on-unreadable=warn")
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	out := filepath.Join(t.TempDir(), "state.json")
+	_, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn", "out="+out)
 	if exit != 0 {
-		t.Fatalf("describe out json: exit=%d, want 0\nstderr=%s", exit, stderr)
+		t.Fatalf("describe out=json exit = %d, want 0 (stderr=%q)", exit, stderr)
 	}
 	data, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatalf("read out: %v", err)
+		t.Fatalf("read out file: %v", err)
 	}
-	trimmed := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(trimmed, "{") {
-		t.Errorf("describe out json: file should be JSON (start with '{'): %q", trimmed[:min(40, len(trimmed))])
+	s := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(s, "{") {
+		t.Errorf("out=.json did not produce a JSON document (starts %q)", firstLine(s))
+	}
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Errorf("out=.json content is not valid JSON: %v", err)
 	}
 }
 
-// EXAMPLE: describe_out_extension_yaml — out=...yaml -> YAML file (not starting with '{').
+// EXAMPLE: describe_out_extension_yaml — out=...yaml writes a YAML document
+// (resolve-format selects yaml from the extension). The first line must not be
+// a JSON object opener.
 func TestDescribeOutExtensionYAML(t *testing.T) {
-	root := t.TempDir()
-	makeReposFixture(t, root, 1)
-	outDir := t.TempDir()
-	out := filepath.Join(outDir, "state.yaml")
-	_, stderr, exit := run(t, "describe", "root="+root, "out="+out, "on-unreadable=warn")
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	out := filepath.Join(t.TempDir(), "state.yaml")
+	_, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn", "out="+out)
 	if exit != 0 {
-		t.Fatalf("describe out yaml: exit=%d, want 0\nstderr=%s", exit, stderr)
+		t.Fatalf("describe out=yaml exit = %d, want 0 (stderr=%q)", exit, stderr)
 	}
 	data, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatalf("read out: %v", err)
+		t.Fatalf("read out file: %v", err)
 	}
-	trimmed := strings.TrimSpace(string(data))
-	if strings.HasPrefix(trimmed, "{") {
-		t.Errorf("describe out yaml: file should be YAML, not JSON object: %q", trimmed[:min(40, len(trimmed))])
+	s := strings.TrimSpace(string(data))
+	if strings.HasPrefix(s, "{") {
+		t.Errorf("out=.yaml produced a JSON object (first line %q); expected YAML", firstLine(s))
 	}
 }
 
-// EXAMPLE: describe_format_overrides_extension — format=json out=...yaml -> JSON content.
+// EXAMPLE: describe_format_overrides_extension — format=json out=...yaml writes
+// a JSON document (explicit format wins over extension).
 func TestDescribeFormatOverridesExtension(t *testing.T) {
-	root := t.TempDir()
-	makeReposFixture(t, root, 1)
-	outDir := t.TempDir()
-	out := filepath.Join(outDir, "state.yaml")
-	_, stderr, exit := run(t, "describe", "root="+root, "format=json", "out="+out, "on-unreadable=warn")
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	out := filepath.Join(t.TempDir(), "state.yaml")
+	_, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn", "format=json", "out="+out)
 	if exit != 0 {
-		t.Fatalf("describe format override: exit=%d, want 0\nstderr=%s", exit, stderr)
+		t.Fatalf("describe format=json out=yaml exit = %d, want 0 (stderr=%q)", exit, stderr)
 	}
 	data, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatalf("read out: %v", err)
+		t.Fatalf("read out file: %v", err)
 	}
-	trimmed := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(trimmed, "{") {
-		t.Errorf("describe format override: explicit format=json should yield JSON despite .yaml ext: %q",
-			trimmed[:min(40, len(trimmed))])
+	s := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(s, "{") {
+		t.Errorf("format=json must produce JSON even with .yaml extension; got %q", firstLine(s))
+	}
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Errorf("format=json content is not valid JSON: %v", err)
 	}
 }
 
-// EXAMPLE: describe_output_unwritable — unwritable out path -> domain=invocation, exit 2.
+// EXAMPLE: describe_format_yaml — describe format=yaml to stdout yields a YAML
+// document (not a JSON object).
+func TestDescribeFormatYAMLStdout(t *testing.T) {
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	stdout, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn", "format=yaml")
+	if exit != 0 {
+		t.Fatalf("describe format=yaml exit = %d, want 0 (stderr=%q)", exit, stderr)
+	}
+	s := strings.TrimSpace(stdout)
+	if strings.HasPrefix(s, "{") {
+		t.Errorf("describe format=yaml produced a JSON object; expected YAML: %q", firstLine(s))
+	}
+}
+
+// EXAMPLE: describe_output_unwritable — out points into a non-existent /readonly
+// path that cannot be created -> exit 2, domain=invocation.
 func TestDescribeOutputUnwritable(t *testing.T) {
-	root := t.TempDir()
-	makeReposFixture(t, root, 1)
-	_, stderr, exit := run(t, "describe", "root="+root, "out=/nonexistent-dir-zd/state.json", "on-unreadable=warn")
+	root := makeRoot(t)
+	addRepo(t, root, "a.repo", repoA)
+	// A path under /proc cannot be written to as a regular file.
+	_, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn", "out=/proc/zd-cannot-write/state.json")
 	if exit != 2 {
-		t.Fatalf("describe unwritable out: exit=%d, want 2\nstderr=%s", exit, stderr)
+		t.Fatalf("describe unwritable out exit = %d, want 2 (stderr=%q)", exit, stderr)
 	}
 	if !strings.Contains(stderr, "invocation") {
 		t.Errorf("describe unwritable out: stderr missing domain=invocation: %q", stderr)
 	}
 }
 
-// ----------------------------------------------------------------------------
-// describe: /etc walk classifies entry types (regression for the 0.6.2 crash)
-// ----------------------------------------------------------------------------
-
-// EXAMPLE: describe_traverses_etc_subdirectories — a subdir under /etc is
-// descended into (not read as a file), no "is a directory" error, run continues.
-func TestDescribeTraversesEtcSubdirectories(t *testing.T) {
-	root := t.TempDir()
-	sub := filepath.Join(root, "etc", "ImageMagick-7")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatalf("mkdir subdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sub, "policy.xml"), []byte("<policy/>\n"), 0o644); err != nil {
-		t.Fatalf("write file in subdir: %v", err)
-	}
-	makeReposFixture(t, root, 1)
+// EXAMPLE: describe_omits_genuinely_empty_scope — repos.d readable but empty:
+// the repositories scope is omitted (not emitted with empty _elements).
+func TestDescribeOmitsGenuinelyEmptyScope(t *testing.T) {
+	root := makeRoot(t) // repos.d exists but is empty
 	stdout, stderr, exit := run(t, "describe", "root="+root, "on-unreadable=warn")
 	if exit != 0 {
-		t.Fatalf("describe subdir: exit=%d, want 0\nstderr=%s", exit, stderr)
+		t.Fatalf("describe empty repos.d exit = %d, want 0 (stderr=%q)", exit, stderr)
 	}
-	// Must not abort with an "is a directory" error.
-	if strings.Contains(strings.ToLower(stderr), "is a directory") {
-		t.Errorf("describe subdir: must not error on directory entry: %q", stderr)
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("describe output not valid JSON: %v\n%s", err, stdout)
 	}
-	_ = stdout
+	if _, present := doc["repositories"]; present {
+		t.Errorf("repositories scope present though genuinely empty; should be omitted: %s", stdout)
+	}
 }
 
-// EXAMPLE: describe_skips_special_file is hard to construct portably (mkfifo)
-// without extra privileges; covered indirectly by the directory-traversal test
-// and the type-classification invariant. Omitted as a black-box fixture.
-
-func min(a, b int) int {
-	if a < b {
-		return a
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
 	}
-	return b
+	return s
 }
