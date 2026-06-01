@@ -1,0 +1,19 @@
+# cli-tool template: BINARY-TYPE static (Go/Rust must be static).
+#
+# Setting a default build target makes every `cargo` invocation build for the
+# explicit host triple, which separates host build-dependencies (proc-macros such
+# as serde_derive) from the target crate graph. The target rustflags then apply
+# only to the target binary, linking the Rust standard library statically against
+# glibc, while serde_derive still compiles as a host proc-macro.
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Vendored dependencies for offline (OBS) builds. Populated by `cargo vendor vendor`.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

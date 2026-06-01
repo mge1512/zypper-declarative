@@ -1,0 +1,20 @@
+# generated from spec: zypper-declarative.spec.md sha256:87b9f2f3bf92afd6fe037412d56a23959290e5816d722a3def9505d07aa5acd7
+# tests by: claude-opus-4-8
+#
+# Black-box integration test crate for the zypper-declarative CLI binary.
+# These tests invoke the built binary via std::process::Command at the
+# canonical project-root location (../../zypper-declarative relative to this
+# directory) and assert on stdout, stderr, and exit code only. They never link
+# against or call into the implementation's internal functions.
+
+[package]
+name = "zypper-declarative-blackbox-tests"
+version = "0.6.3"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"
+
+# Integration tests live in tests/ and are discovered automatically by cargo;
+# `cargo test --test '*'` runs every file in tests/ as its own test binary.

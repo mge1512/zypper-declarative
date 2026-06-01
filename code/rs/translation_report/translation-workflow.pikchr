@@ -1,0 +1,19 @@
+# generated from spec: zypper-declarative.spec.md sha256:87b9f2f3bf92afd6fe037412d56a23959290e5816d722a3def9505d07aa5acd7
+# Translation workflow for zypper-declarative (Rust, single-LLM translator run).
+
+down
+box "spec + template + hints" fit
+arrow
+box "Phase 1: tests first" "independent_tests/claude-opus-4-8/" fit
+arrow
+box "Phase 2: core impl" "src/*.rs + Cargo.toml" fit
+arrow
+box "Phase 3: packaging" "Makefile, RPM, debian/" fit
+arrow
+box "Phase 4: aux" "this pikchr" fit
+arrow
+box "Phase 5: docs" "README.md, man page" fit
+arrow
+box "Phase 6: compile gate" "cargo build/test (lib + black-box)" fit
+arrow
+box "Phase 7: TRANSLATION_REPORT.md" fit

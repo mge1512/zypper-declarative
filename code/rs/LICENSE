@@ -1,0 +1,11 @@
+zypper-declarative is licensed under GPL-2.0-or-later.
+
+SPDX-License-Identifier: GPL-2.0-or-later
+
+The full text of the GNU General Public License version 2 is available at:
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+
+"or-later" permits redistribution and/or modification under the terms of the
+GNU General Public License as published by the Free Software Foundation; either
+version 2 of the License, or (at your option) any later version. The text of
+later versions is published at https://www.gnu.org/licenses/.

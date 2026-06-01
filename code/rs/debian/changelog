@@ -1,0 +1,6 @@
+zypper-declarative (0.6.3-1) unstable; urgency=medium
+
+  * Generated from zypper-declarative.spec.md (Version 0.6.3).
+    spec sha256: 87b9f2f3bf92afd6fe037412d56a23959290e5816d722a3def9505d07aa5acd7
+
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Mon, 01 Jun 2026 00:00:00 +0000
