@@ -164,7 +164,12 @@ spec's examples are the shared target and the three-way diff is the check.)
   Emit the on-disk type: a changed regular file is type "file" with real sha256; an
   `L` flag on a package-shipped file is the TYPE-MISMATCH case (e.g.
   `/etc/pam.d/common-auth`, verify shows `....L....  c ...`), emitted as type "link"
-  with the verbatim on-disk target. `package_name` is the BARE name. No digest map,
+  with the verbatim on-disk target. `package_name` is the BARE name. Every changed
+  record MUST carry `status` = "changed" and a non-empty `changes` list built from
+  the flags set (`S`->size, `M`->mode, `5`->md5, `D`->device, `L`->link_path,
+  `U`->user, `G`->group, `T`->time, `P`->caps; a `missing` line -> includes
+  "deleted"); the Go sibling left these null in its first verdict-parse build, do
+  not repeat that. No digest map,
   no algorithm handling, no per-path join.
 - `[spec]` CONTENT-BEARING GHOSTS (the one case `rpm -V` skips): enumerate
   ghost-flagged `/etc` paths (`rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]'`
@@ -180,11 +185,13 @@ spec's examples are the shared target and the three-way diff is the check.)
 - `[spec]` `created_at` is a real RFC3339 timestamp (a properly converted
   `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`),
   informational and excluded from comparison and the hash, but correct.
-- `[spec]` One required self-check test (black-box, runs as root in the test step):
-  run `describe` and assert the pam pair, `common-auth` as type "link",
-  `common-auth-pc` as type "file" with a sha256, and a known-pristine
-  `/etc/ImageMagick-7-SUSE/*.xml` ABSENT. Because `rpm -V` reports only changes,
-  pristine files never appear and the over-emission class cannot recur.
+- `[spec]` Required self-checks (black-box, run as root in the test step): run
+  `describe` and assert (1) the pam pair, `common-auth` as type "link",
+  `common-auth-pc` as type "file" with a sha256; (2) a known-pristine
+  `/etc/ImageMagick-7-SUSE/*.xml` ABSENT; (3) every emitted record with a
+  `package_name` that is not an unpackaged file carries `status` == "changed" and a
+  non-empty `changes` list. Because `rpm -V` reports only changes, pristine files
+  never appear and the over-emission class cannot recur.
 
 ## Integration with the system (Rust-specific)
 

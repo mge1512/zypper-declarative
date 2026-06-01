@@ -150,9 +150,13 @@ The tool runs as root, so `rpm -V` can read everything.
   REGULAR file is type "file" with its real sha256; an `L` flag (link differs) on a
   path the package shipped as a file is the TYPE-MISMATCH case (e.g.
   `/etc/pam.d/common-auth`, verify shows `....L....  c ...`) and is emitted as type
-  "link" with the verbatim on-disk target. `package_name` is the BARE name. This is
-  the whole changed-files mechanism: no digest map, no algorithm handling, no
-  per-path join.
+  "link" with the verbatim on-disk target. `package_name` is the BARE name. Every
+  changed record MUST carry `status` = "changed" and a non-empty `changes` list
+  built from the flags actually set (`S`->size, `M`->mode, `5`->md5, `D`->device,
+  `L`->link_path, `U`->user, `G`->group, `T`->time, `P`->caps; a `missing` line ->
+  `changes` includes "deleted"); build 12 decided emission from the flags correctly
+  but left `changes` and `status` null, do not repeat that. This is the whole
+  changed-files mechanism: no digest map, no algorithm handling, no per-path join.
 - `[spec]` CONTENT-BEARING GHOSTS (the one case `rpm -V` does not cover, it skips
   `%ghost` files): enumerate ghost-flagged paths under `/etc` only, with
   `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]' <path>` or by scanning the
@@ -167,12 +171,14 @@ The tool runs as root, so `rpm -V` can read everything.
   a lookup was skipped.
 - `[spec]` Exclusions: drop the keep-list and `/etc/etc.syncpoint`. Stay bounded to
   `/etc`. `content_ref` is empty in actual state.
-- `[spec]` One required self-check test (black-box, runs as root in the test step):
-  run the binary's `describe` and assert the pam pair is correct, `common-auth`
-  present as type "link", `common-auth-pc` present as type "file" with a sha256,
-  and a known-pristine file (an `/etc/ImageMagick-7-SUSE/*.xml`) ABSENT. Because
-  `rpm -V` reports only changes, pristine files never appear and the over-emission
-  class cannot recur.
+- `[spec]` Required self-checks (black-box, run as root in the test step): run
+  `describe` and assert (1) the pam pair, `common-auth` present as type "link",
+  `common-auth-pc` present as type "file" with a sha256; (2) a known-pristine file
+  (an `/etc/ImageMagick-7-SUSE/*.xml`) ABSENT; (3) every emitted record that has a
+  `package_name` and is NOT an unpackaged file carries `status` == "changed" and a
+  non-empty `changes` list. Assertion (3) binds the field build 12 dropped; without
+  it the records are emitted but unannotated. Because `rpm -V` reports only changes,
+  pristine files never appear and the over-emission class cannot recur.
 
 ## Filesystem object model (the /etc and full-scan walks)
 
