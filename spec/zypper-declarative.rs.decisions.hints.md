@@ -143,75 +143,48 @@ the crate name and embedded spec hash by hand.
   actual is treated as matching. Hardlinks: treat per path by content+type, do not
   detect or preserve hardlink identity.
 
-## config_files: ownership and the pristine/reproducibility rule
+## config_files: let rpm decide (verdict-parse, NOT a self-built baseline)
 
-This is the highest-risk behaviour; the C++/libzypp build is the behavioural oracle
-for it (Go's over-emission was the bug). Verify it during translation using
-read-only rpm, and ship the two self-checks below as tests.
+config_files is the changed-from-package and unpackaged `/etc` files. The spec
+defines the RESULT (the reproducibility emission test); this is the METHOD for Rust.
+Do NOT build a `path -> recorded-baseline` map and compare it yourself: let `rpm -V`
+do the comparison and parse its verdict. This is how the sister tool `sitar` does
+it (working Go and Rust), and it converges where the self-built join did not. The
+tool runs as root, so `rpm -V` reads everything. (C++ takes the libzypp route
+instead; Rust and Go take this CLI route. All three must reach the same result, the
+spec's examples are the shared target and the three-way diff is the check.)
 
-- `[spec]` config_files is the changed-from-package and unpackaged `/etc` files,
-  excluding package-pristine files, the keep-list, and `/etc/etc.syncpoint`; bounded
-  to `/etc` (never read/hash/verify outside it, never a whole-system `rpm -Va`). A
-  package verifier returning non-zero because it found changes is the normal result,
-  not an unreadable source.
-- `[spec]` Determine each path's owning package and recorded baseline (digest, link
-  target, mode, owner, group, and file FLAGS including the GHOST bit) via the rpm
-  database. Never default a path to unpackaged because a lookup was skipped or
-  failed.
-- `[spec]` BULK lookup keyed BY PATH, not by row position. `rpm -qf path1 path2 ...`
-  does not return one block per input path in order (rpm reorders, deduplicates when
-  paths share an owner, drops unowned paths), so a positional zip misaligns owners
-  to files. Query the owning packages' file lists, which emit the absolute path on
-  every line:
-  ```
-  rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS} %{FILELINKTOS} %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILEDIGESTALGO}\n]' <pkglist>
-  ```
-  and build a `path -> attributes` map indexed by that path. (Per-path `rpm -qf` is
-  correct but slow, and was the cause of the first Rust build's slowness; batch as
-  above.)
-- `[spec]` Judge each `/etc` path INDEPENDENTLY against its OWN owning package;
-  never collapse a symlink with the file it points to (e.g. `/etc/pam.d/common-auth`
-  owned by `pam` vs `common-auth-pc` owned by `pam-config` are separate judgements;
-  suppressing the pristine link must not suppress the target); never dereference a
-  symlink to judge it. `package_name` is the BARE name (`openssh-server`), never the
-  NEVRA `rpm -qf` prints.
-- `[spec]` Emission test (reproducibility): emit a path exactly when a fresh install
-  of its owning package (or no owning package) would NOT reproduce its on-disk
-  state. Concretely:
-  - unpackaged -> EMIT;
-  - regular file: pristine iff on-disk digest AND mode/owner/group match -> SUPPRESS;
-    else EMIT;
-  - symlink: pristine iff on-disk target matches the recorded target (mode NOT
-    compared) -> SUPPRESS; else EMIT. An owned distro symlink with the package's
-    target (the `/etc/X11/xim.d/*/40-ibus` links) is suppressed (the first build
-    over-emitted some pristine symlinks);
-  - type mismatch (recorded type differs from on-disk type) -> EMIT as the on-disk
-    type (`/etc/pam.d/common-auth`: pam ships a regular file, disk has a symlink ->
-    emit the link), judged against its own package;
-  - ghost (FLAGS has the ghost bit; no shipped content baseline) with real on-disk
-    content -> EMIT (`/etc/pam.d/common-auth-pc`, a 0-byte ghost holding the real
-    bytes; the v0.6.4 rebuild dropped this, it must be emitted); ghost empty on disk
-    with empty baseline -> SUPPRESS. A ghost is never pristine-by-digest.
-- `[spec]` Digest comparison is algorithm-aware and normalised: read the recorded
-  algorithm (`%{FILEDIGESTALGO}`, 8=SHA256, 1=MD5) and hash the on-disk file with
-  the SAME algorithm; compare lowercase, trimmed. An EMPTY recorded digest
-  (directories, symlinks, ghosts) is no-baseline, route through the type/ghost rule,
-  not a mismatch. The emitted `sha256` is always the real SHA256 of the on-disk file
-  regardless of the recorded algorithm.
-- `[spec]` A file whose CONTENT cannot be read (a protected file an unprivileged
-  reader cannot open) is an `on_unreadable` condition, never silently classified as
-  changed-from-package. Distinguish "read the file, digest differs" (emit) from
-  "could not read it" (on_unreadable). `rpm -V` itself reads content and trips on
-  protected files, so prefer the header-metadata route above for the baseline.
+- `[spec]` CHANGED config files (main case): get config-file owning packages with
+  `rpm -qca --queryformat '%{NAME}\n'`, dedupe into a set (drop blank lines and
+  lines starting with `(`, `error:`, `warning:`), and for each run
+  `rpm -V --nodeps --noscript <pkg>`. Non-zero exit is NORMAL (parse regardless);
+  it is a package error only when stdout is empty AND stderr is non-empty. Each line
+  is `<9 flag chars><space><type><space><path>`; keep only type char `c`. Flags are
+  `S M 5 D L U G T P`; `.`/`?` means unchanged; a leading `missing` means deleted.
+  Emit the on-disk type: a changed regular file is type "file" with real sha256; an
+  `L` flag on a package-shipped file is the TYPE-MISMATCH case (e.g.
+  `/etc/pam.d/common-auth`, verify shows `....L....  c ...`), emitted as type "link"
+  with the verbatim on-disk target. `package_name` is the BARE name. No digest map,
+  no algorithm handling, no per-path join.
+- `[spec]` CONTENT-BEARING GHOSTS (the one case `rpm -V` skips): enumerate
+  ghost-flagged `/etc` paths (`rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]'`
+  or scan owning packages' file lists for FILEFLAGS bit 64). For each ghost path
+  with real on-disk content, EMIT type "file" with real sha256 (e.g.
+  `/etc/pam.d/common-auth-pc`); an empty ghost is suppressed. A small pass over the
+  few ghost paths, not a walk of all `/etc`.
+- `[spec]` UNPACKAGED files: an `/etc` path no package owns is emitted; find these
+  by walking `/etc` and subtracting the rpm-owned path set. Do not mark a file
+  unpackaged because a lookup was skipped.
+- `[spec]` Exclusions: drop the keep-list and `/etc/etc.syncpoint`; stay bounded to
+  `/etc`. `content_ref` is empty in actual state.
 - `[spec]` `created_at` is a real RFC3339 timestamp (a properly converted
-  `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`). It is
-  informational, excluded from comparison and the hash, but must be correct.
-- `[spec]` Two required self-check tests (runnable with read-only rpm during
-  translation): (1) ownership resolves a known file to its known package
-  (`/etc/ssh/sshd_config` -> `openssh-server`, `/etc/pam.d/common-auth` -> `pam`);
-  (2) a known-pristine packaged file (e.g. an `/etc/ImageMagick-7-SUSE/*.xml`) is
-  ABSENT from config_files. The first catches a misaligned join; the second catches
-  a broken digest comparison.
+  `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`),
+  informational and excluded from comparison and the hash, but correct.
+- `[spec]` One required self-check test (black-box, runs as root in the test step):
+  run `describe` and assert the pam pair, `common-auth` as type "link",
+  `common-auth-pc` as type "file" with a sha256, and a known-pristine
+  `/etc/ImageMagick-7-SUSE/*.xml` ABSENT. Because `rpm -V` reports only changes,
+  pristine files never appear and the over-emission class cannot recur.
 
 ## Integration with the system (Rust-specific)
 
@@ -271,11 +244,11 @@ read-only rpm, and ship the two self-checks below as tests.
 
 ## Changelog
 
-- 2026-06-01: Compressed losslessly from the accreted v0.5.0-v0.6.5 file (same rule
-  coverage; post-mortem narration and the per-build changelog diary removed; the
-  duplicate do-not-carry list folded into the rules above). Tracks spec v0.6.5:
-  reproducibility emission rule (type-mismatch and content-bearing ghost emit,
-  empty-ghost suppress), algorithm-aware digest comparison, bulk ownership keyed by
-  path, protected-file handling via on_unreadable. Rust-specific preventive lessons
-  (path-keyed join, algorithm-aware digest) retained inline, since Rust is exec-based
-  and meets both hazards when it batches.
+- 2026-06-01: Switched config_files from a self-built recorded-baseline map to
+  `rpm -V` verdict-parsing, the method the sister tool sitar uses (working Go and
+  Rust) and which converges; the self-built join failed repeatedly in the Go
+  sibling. rpm does the comparison; the code parses the `SM5DLUGTP` flag string
+  (type char `c`). Type-mismatch comes free from the `L` flag; content-bearing
+  `%ghost` files are a tiny separate pass. The tool runs as root, so rpm -V reads
+  everything. C++ keeps the libzypp route; Rust and Go share this CLI route; the
+  spec (result, not method) is unchanged and the three-way diff remains the check.

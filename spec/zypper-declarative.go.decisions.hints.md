@@ -128,75 +128,51 @@ hand after generation (it is a known translator gap).
   unmanaged). `describe` passes its `on_unreadable` option through; every other
   caller passes `on_unreadable=error`.
 
-## config_files: ownership and the pristine/reproducibility rule
+## config_files: let rpm decide (verdict-parse, NOT a self-built baseline)
 
-This scope is the changed-from-package and unpackaged `/etc` files, excluding
-package-pristine files, the keep-list, and `/etc/etc.syncpoint`. `content_ref` is
-empty in actual state. This is the highest-risk behaviour; verify it during
-translation using read-only rpm (available to the build), and ship the two
-self-checks below as tests.
+config_files is the changed-from-package and unpackaged `/etc` files. The spec
+defines the RESULT (the reproducibility emission test); this is the METHOD for Go,
+and the method matters: do NOT build a `path -> recorded-baseline` map and compare
+it yourself. That join failed repeatedly. Instead let `rpm -V` do the comparison
+and parse its verdict (this is how the sister tool `sitar` does it, and it works).
+The tool runs as root, so `rpm -V` can read everything.
 
-- `[spec]` Bound the work to `/etc`: enumerate `/etc` and consult package metadata
-  only for those paths. Do not read, hash, or verify anything outside `/etc`, and
-  do not run a whole-system verification (`rpm -Va`). A package verifier exiting
-  non-zero (it does so when it finds changed files) is the normal result, not an
-  unreadable source.
-- `[spec]` Determine each path's owning package and its package-recorded baseline
-  (digest, link target, mode, owner, group, and the file FLAGS including the GHOST
-  bit). Never default a path to unpackaged because a lookup was skipped.
-- `[spec]` BULK lookup, keyed BY PATH not by row position. `rpm -qf path1 path2 ...`
-  does not return one block per input path in order (rpm reorders, deduplicates
-  when paths share an owner, and drops unowned paths), so a positional zip
-  misaligns owners to files. Instead, query the owning packages' file lists, which
-  emit the absolute path on every line:
-  ```
-  rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS} %{FILELINKTOS} %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILEDIGESTALGO}\n]' <pkglist>
-  ```
-  and build a `path -> {package, flags, digest, algo, linkto, mode, owner, group}`
-  map indexed by that path; look up each `/etc` path in the map. Resolve ownership
-  with `rpm -qf` first if needed, tying each owner to its queried path, never
-  zipping. (Per-path `rpm -qf` is correct but slow; batch as above.)
-- `[spec]` Judge each `/etc` path INDEPENDENTLY against its OWN owning package.
-  Never collapse a symlink with the file it points to: suppressing a pristine
-  symlink must not suppress its target, which is judged separately against its own
-  owner (often a different package, e.g. `/etc/pam.d/common-auth` owned by `pam`
-  vs `common-auth-pc` owned by `pam-config`). Never dereference a symlink to judge
-  it.
-- `[spec]` `package_name` is the BARE name (`openssh-server`), never the NEVRA
-  (`rpm -qf` prints NEVRA; reduce it).
-- `[spec]` Emission test (reproducibility): emit a path exactly when a fresh
-  install of its owning package (or no owning package) would NOT reproduce its
-  on-disk state. Concretely:
-  - unpackaged (no owner) -> EMIT;
-  - regular file: pristine iff on-disk digest AND mode/owner/group match the
-    recorded baseline -> SUPPRESS; else EMIT;
-  - symlink: pristine iff on-disk target matches the recorded target (mode NOT
-    compared) -> SUPPRESS; else EMIT. An owned distro symlink with the package's
-    target (the `/etc/X11/xim.d/*/40-ibus` links) is suppressed;
-  - type mismatch (recorded type differs from on-disk type, e.g. recorded a regular
-    file, disk has a symlink) -> EMIT as the on-disk type, judged against its own
-    package;
-  - ghost (FLAGS has the ghost bit; no shipped content baseline) with real on-disk
-    content -> EMIT (a fresh install ships no content; e.g. `/etc/pam.d/common-auth-pc`,
-    a 0-byte ghost holding the real bytes); ghost empty on disk with empty baseline
-    -> SUPPRESS. A ghost is never pristine-by-digest.
-- `[spec]` Digest comparison is algorithm-aware and normalised: read the recorded
-  algorithm (`%{FILEDIGESTALGO}`, 8=SHA256, 1=MD5) and hash the on-disk file with
-  the SAME algorithm; compare lowercase, trimmed. An EMPTY recorded digest
-  (directories, symlinks, ghosts) is no-baseline, route through the type/ghost rule,
-  not a mismatch. The emitted `sha256` is always the real SHA256 of the on-disk
-  file regardless of the recorded algorithm.
-- `[spec]` A file whose CONTENT cannot be read (a protected file an unprivileged
-  reader cannot open) is an `on_unreadable` condition, never silently classified as
-  changed-from-package. Distinguish "read the file, digest differs" (emit) from
-  "could not read the file" (on_unreadable). Note `rpm -V` itself reads content and
-  trips on protected files, so prefer the header-metadata route above for the
-  baseline.
-- `[spec]` Two required self-check tests (runnable with read-only rpm during
-  translation): (1) ownership resolves a known file to its known package
-  (`/etc/ssh/sshd_config` -> `openssh-server`); (2) a known-pristine packaged file
-  (e.g. an `/etc/ImageMagick-7-SUSE/*.xml`) is ABSENT from config_files. The first
-  catches a misaligned join; the second catches a broken digest comparison.
+- `[spec]` CHANGED config files (the main case): get the config-file owning
+  packages with `rpm -qca --queryformat '%{NAME}\n'`, dedupe into a package set
+  (drop blank lines and lines starting with `(`, `error:`, or `warning:`), and for
+  each package run `rpm -V --nodeps --noscript <pkg>`. `rpm -V` exits non-zero when
+  it finds differences: that is NORMAL, parse the output regardless of exit code;
+  treat it as a package error ONLY when stdout is empty AND stderr is non-empty.
+  Each verify line is `<9 flag chars><space><type><space><path>`; keep only lines
+  whose type char is `c`. The 9 flags are `S M 5 D L U G T P` (size, mode, md5,
+  device, link, user, group, time, caps); `.` or `?` means unchanged. A line
+  beginning `missing` means the file is deleted. Emit the on-disk type: a changed
+  REGULAR file is type "file" with its real sha256; an `L` flag (link differs) on a
+  path the package shipped as a file is the TYPE-MISMATCH case (e.g.
+  `/etc/pam.d/common-auth`, verify shows `....L....  c ...`) and is emitted as type
+  "link" with the verbatim on-disk target. `package_name` is the BARE name. This is
+  the whole changed-files mechanism: no digest map, no algorithm handling, no
+  per-path join.
+- `[spec]` CONTENT-BEARING GHOSTS (the one case `rpm -V` does not cover, it skips
+  `%ghost` files): enumerate ghost-flagged paths under `/etc` only, with
+  `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]' <path>` or by scanning the
+  owning packages' file lists for the ghost bit (FILEFLAGS bit 64). For each ghost
+  path that has real on-disk content (exists and is non-empty), EMIT type "file"
+  with its real sha256 (a fresh install ships no content, so it must be captured;
+  e.g. `/etc/pam.d/common-auth-pc`). A ghost that is empty on disk is suppressed.
+  This is a tiny pass over the few ghost paths, NOT a walk of all `/etc`.
+- `[spec]` UNPACKAGED files: a path under `/etc` that no package owns is emitted as
+  unpackaged. Find these by walking `/etc` and subtracting the rpm-owned path set
+  (the file lists of installed packages); do not mark a file unpackaged just because
+  a lookup was skipped.
+- `[spec]` Exclusions: drop the keep-list and `/etc/etc.syncpoint`. Stay bounded to
+  `/etc`. `content_ref` is empty in actual state.
+- `[spec]` One required self-check test (black-box, runs as root in the test step):
+  run the binary's `describe` and assert the pam pair is correct, `common-auth`
+  present as type "link", `common-auth-pc` present as type "file" with a sha256,
+  and a known-pristine file (an `/etc/ImageMagick-7-SUSE/*.xml`) ABSENT. Because
+  `rpm -V` reports only changes, pristine files never appear and the over-emission
+  class cannot recur.
 
 ## Filesystem object model (the /etc and full-scan walks)
 
@@ -223,9 +199,11 @@ self-checks below as tests.
   package owns). Observational: do NOT feed them to `compute-intent-diff` or
   convergence, and never write them to the applied record; `compute-drift` surfaces
   them under `scope=full` as `managed_files_modified` and `unmanaged_files_present`.
-  In Go, find additions by walking and subtracting the rpmdb-owned path set, and
-  modifications by comparing packaged digests to the baseline; do not run
-  whole-system `rpm -Va`. Scope keys are underscore_style.
+  In Go, find `unmanaged_files` by walking and subtracting the rpm-owned path set;
+  find `changed_managed_files` the same verdict-parse way as config_files but with
+  `rpm -Va --nodeps --noscript` (verify all), keeping the NON-config lines (type
+  char is not `c`) and parsing the same flag string. Do not build a digest baseline
+  map. Scope keys are underscore_style.
 
 ## Integration with the system (Go-specific)
 
@@ -280,9 +258,11 @@ self-checks below as tests.
 
 ## Changelog
 
-- 2026-06-01: Compressed losslessly from the accreted v0.5.0-v0.6.5 file (same rule
-  coverage; post-mortem narration and the per-build changelog diary removed; the
-  duplicate do-not-carry list folded into the rules above). Tracks spec v0.6.5:
-  reproducibility emission rule (type-mismatch and content-bearing ghost emit,
-  empty-ghost suppress), algorithm-aware digest comparison, bulk ownership keyed by
-  path, protected-file handling via on_unreadable.
+- 2026-06-01: Switched config_files (and changed_managed_files) from a self-built
+  recorded-baseline map to `rpm -V`/`rpm -Va` verdict-parsing, the method the sister
+  tool sitar uses and which converges; the self-built join failed repeatedly in Go.
+  rpm does the comparison; the code parses the `SM5DLUGTP` flag string (type char
+  `c` for config). Type-mismatch comes free from the `L` flag; the one case rpm -V
+  does not cover, content-bearing `%ghost` files, is a tiny separate pass over
+  ghost-flagged `/etc` paths. The tool runs as root, so rpm -V reads everything.
+  Spec unchanged (it defines the result, not the method).
