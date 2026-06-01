@@ -240,6 +240,21 @@ That means:
   a bulk verification of the owning packages, NOT `rpm -qf`/`rpm -V` per file. This
   is the performance fix; the result is unchanged and the work stays bounded to
   `/etc`.
+- `[spec]` `[changed-0.6.5]` Reproducibility rule for the hard cases (emit a path
+  exactly when a fresh package install would not reproduce its on-disk state). The
+  batched `rpm` query MUST include the file flags so the ghost bit is visible, for
+  example `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS}
+  %{FILELINKTOS} %{FILEMODES}\n]'` over the enumerated paths (FILEFLAGS bit 64 =
+  ghost, bit 1 = config). Then: (a) a `%ghost` path (flags has the ghost bit) with
+  real on-disk content -> EMIT (a fresh install ships no content for it; e.g.
+  `/etc/pam.d/common-auth-pc`, shipped 0-byte ghost, holds the real 462 bytes on
+  disk); (b) a ghost that is empty on disk and empty in the baseline -> SUPPRESS;
+  (c) a path whose on-disk type differs from the recorded type (recorded a regular
+  file, disk has a symlink) -> EMIT as the on-disk type (e.g.
+  `/etc/pam.d/common-auth`), judged against its own package, not collapsed with the
+  target; (d) otherwise pristine iff digest+mode+owner+group (file) or recorded
+  linkto (symlink) match -> SUPPRESS, else EMIT. A ghost is never pristine-by-digest
+  against a shipped baseline (it has none).
 - `[spec]` `[changed-0.6.2]` Filesystem object model. The `/etc` walk (and the
   scope=full walk over `/usr`/`/boot`) must recurse into directories and classify
   each entry by its own type using lstat (do NOT follow symlinks, do NOT os.ReadFile
@@ -330,7 +345,7 @@ That means:
 
 ---
 
-## Do NOT carry these over from the existing code (v0.5.0 through v0.6.4 changes)
+## Do NOT carry these over from the existing code (v0.5.0 through v0.6.5 changes)
 
 1. `describe` writing JSON regardless of the `out` extension. Output now follows
    `resolve-format`.
@@ -387,6 +402,9 @@ That means:
     links wrongly emits them.
 16. (v0.6.4) putting the full NEVRA in `package_name` (bare name only); and doing
     `rpm -qf`/`rpm -V` per file instead of in bulk (batch the queries).
+17. (v0.6.5) omitting `%{FILEFLAGS}` from the batched query (the ghost bit is
+    required); suppressing a content-bearing ghost or a type-mismatched path (both
+    EMIT); treating a ghost as pristine-by-digest.
 
 ## Slots to fill from /tmp/pcd-original/code/
 
@@ -405,6 +423,11 @@ That means:
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.5. Added the reproducibility rule for the
+  ghost/type-mismatch cases: the batched `rpm` query must include `%{FILEFLAGS}`
+  so the ghost bit is visible; emit content-bearing ghosts and type-mismatched
+  paths, suppress empty-ghost-matching-empty. Item 17 added to the do-not-carry
+  list.
 - 2026-06-01: Updated to spec v0.6.4. Added the pristine-rule refinements from the
   three-way comparison: independent per-path judgement (no symlink/target
   collapse), symlink pristine-by-target-only, bare `package_name` (not NEVRA), and

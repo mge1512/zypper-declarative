@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.4
+Version:     0.6.5
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -766,11 +766,16 @@ STEPS:
    real divergence between implementations, so it is pinned here):
    - The owning package and the package-recorded baseline are determined through
      the platform's native package interface (on SUSE that is the libzypp/rpm
-     database, which records, per packaged file, a content digest and the expected
-     mode, owner, and group). An implementation that drives the package tooling
-     rather than linking the library must reproduce the same determination; it
-     must NOT treat a file as unpackaged merely because an ownership lookup was not
-     performed.
+     database). The determination requires, per packaged path: the owning package
+     name, the recorded content digest (for a regular file), the recorded link
+     target (for a symlink), the recorded mode, owner, and group, and the recorded
+     file flags, in particular the GHOST marker that distinguishes a path the
+     package ships content for from a path it merely reserves (a `%ghost`). An
+     implementation that drives the package tooling rather than linking the library
+     must obtain the same attributes (including the ghost marker); it must NOT
+     treat a file as unpackaged merely because an ownership lookup was not
+     performed, and must NOT ignore the ghost marker (it is required for the ghost
+     rule below).
    - Each `/etc` path is judged INDEPENDENTLY, against ITS OWN owning package. A
      symlink and the file it points to are two separate paths with two separate
      owners and two separate judgments; they are NEVER collapsed. In particular,
@@ -786,24 +791,61 @@ STEPS:
      what `pam` shipped) and the file is judged, separately, against `pam-config`
      (pristine iff its content matches what `pam-config` shipped). Either may be
      suppressed or emitted independently of the other.
+   - The emission test is the REPRODUCIBILITY criterion: an `/etc` path is emitted
+     if and only if a fresh install of its owning package (or the absence of any
+     owning package) would NOT reproduce its current on-disk state. Equivalently,
+     emit the path exactly when it would need to be carried in a tarball in order
+     to reconstruct this machine's `/etc` on top of freshly-installed packages.
+     This single criterion subsumes every case below; the cases are spelled out
+     because implementations diverged on them.
    - An entry is emitted if and only if it is UNPACKAGED (the package database
-     reports no owning package) OR CHANGED-FROM-PACKAGE (owned, but the entry
-     differs from the package-recorded baseline). A package-PRISTINE entry (owned,
-     and matching the recorded baseline) is suppressed. An owned symlink whose
-     target matches the package's recorded target is pristine and is suppressed
-     (installing the package would recreate that link, so it carries no
-     declarable intent); this is why pristine distro symlinks, such as the many
+     reports no owning package) OR CHANGED-FROM-PACKAGE (owned, but its current
+     on-disk state is not what a fresh install of the owning package would
+     produce). A package-PRISTINE entry (owned, and reproduced by a fresh install)
+     is suppressed. An owned symlink whose target matches the package's recorded
+     target is pristine and is suppressed (installing the package would recreate
+     that link); this is why pristine distro symlinks, such as the many
      `/etc/X11/xim.d/*/40-ibus` links, do not appear.
-   - PRISTINE is type-specific:
-     - for a regular file: the content digest AND the mode, owner, and group all
-       match the package-recorded baseline;
-     - for a symlink: the link TARGET matches the package-recorded target. A
-       symlink's mode is not compared (symlink permissions are not meaningful on
-       Linux and are not tracked as package state); ownership of the link is not
-       used to declare it changed.
-     If any compared attribute differs, the entry is changed-from-package and is
-     emitted, with a `changes` interpretation analogous to the changed_managed_files
-     `changes` list (the differing attribute set is what makes it non-pristine).
+   - PRISTINE (reproduced by a fresh install, therefore suppressed) is
+     type-specific:
+     - for a regular file: the package records a content baseline for the path AND
+       the content digest AND the mode, owner, and group all match it;
+     - for a symlink: the package records a link target for the path AND the
+       on-disk target matches it. A symlink's mode is not compared (symlink
+       permissions are not meaningful on Linux and are not tracked as package
+       state); ownership of the link is not used to declare it changed.
+   - TYPE MISMATCH is changed-from-package and is EMITTED: if the package records
+     the path as one type but the on-disk object is another type, a fresh install
+     would not reproduce the on-disk object, so emit it. The worked case is
+     `/etc/pam.d/common-auth`: the `pam` package ships it as a regular
+     `%config(noreplace)` file (462 bytes), but on disk `pam-config` has replaced
+     it with a symlink to `common-auth-pc`; a fresh install would lay down the
+     regular file, not the symlink, so the symlink is emitted (as a type "link"
+     record with its verbatim target). Independence still holds: this judgement is
+     against `pam` (the symlink's owner) and is separate from the judgement of the
+     target file against its own owner.
+   - GHOST files (paths the package marks as present but does not ship content for,
+     for example `%ghost`; the package records no usable content baseline for them)
+     follow the same reproducibility criterion:
+     - a ghost path with REAL on-disk content (it exists and is non-empty) is
+       EMITTED: a fresh install ships no content for it, so the content would not
+       be reproduced and must be captured. The worked case is
+       `/etc/pam.d/common-auth-pc`: `pam-config` ships it as a 0-byte `%ghost
+       %config`, but on disk it holds the real 462-byte PAM configuration, so it
+       is emitted with that content and digest.
+     - a ghost path that is EMPTY on disk and whose recorded baseline is also empty
+       (the 0-byte ghost matches the 0-byte on-disk file) is SUPPRESSED: a fresh
+       install reproduces "the empty/absent ghost" equally well, so nothing need be
+       carried. (An empty-ghost-matching-empty is the one ghost case that is
+       suppressed; any ghost with content is emitted.)
+     A ghost is treated as "no recorded content baseline", so it can never be
+     pristine-by-digest against a shipped baseline; its emission turns solely on
+     whether it currently has content to reproduce.
+     If any compared attribute differs, or the path is a type mismatch, or a ghost
+     with content, the entry is changed-from-package and is emitted, with a
+     `changes` interpretation analogous to the changed_managed_files `changes` list
+     (the differing attribute set, the type transition, or the presence of
+     ghost content is what makes it non-pristine).
    - `package_name` carries the bare package NAME only (for example
      `openssh-server`), never the full name-version-release-arch identifier (not
      `openssh-server-9.6p1-150600.6.37.1.x86_64`). The version and release are
@@ -1627,6 +1669,18 @@ resolver fills in the transitive set.
   matches the package-recorded target; a symlink's mode is not part of the
   comparison. A regular file is pristine when its content digest, mode, owner, and
   group all match.
+- [observable] The config_files emission test is the reproducibility criterion: a
+  path is emitted exactly when a fresh install of its owning package (or no owning
+  package) would not reproduce its current on-disk state.
+- [observable] A path whose on-disk type differs from the package-recorded type (a
+  type mismatch, for example a package-recorded regular file that is now a symlink)
+  is changed-from-package and is emitted; it is judged against the path's own
+  owning package and not collapsed with any target.
+- [observable] A ghost path (one the package reserves without shipping content,
+  for example `%ghost`) is emitted when it currently has real on-disk content (a
+  fresh install would not reproduce that content), and is suppressed only when it
+  is empty on disk and its recorded baseline is also empty. A ghost is never
+  treated as pristine-by-digest against a shipped baseline.
 - [observable] `package_name` in a config_files record is the bare package name
   (for example `openssh-server`), never the full name-version-release-arch
   identifier.
@@ -2007,6 +2061,47 @@ WHEN:
 THEN:
   the symlink is suppressed (owned, target matches the package), absent from config_files
   installing ibus would recreate the link, so it carries no declarable intent
+
+### EXAMPLE: describe_type_mismatch_emitted
+GIVEN:
+  the pam package records /etc/pam.d/common-auth as a regular config file (it ships
+    462 bytes of content there)
+  on disk, pam-config has replaced it with a symlink to "common-auth-pc"
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  /etc/pam.d/common-auth is emitted as a type "link" record with target
+    "common-auth-pc" and package_name "pam"
+  it is emitted because a fresh install of pam would lay down the regular file, not
+    the symlink, so the on-disk state would not be reproduced (a type mismatch)
+  it is judged against pam only and not collapsed with common-auth-pc
+
+### EXAMPLE: describe_ghost_with_content_emitted
+GIVEN:
+  the pam-config package records /etc/pam.d/common-auth-pc as a 0-byte %ghost file
+    (it reserves the path but ships no content)
+  on disk, the path holds the real 462-byte PAM configuration
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  /etc/pam.d/common-auth-pc is emitted as a type "file" record with its actual
+    sha256 and package_name "pam-config"
+  it is emitted because a fresh install ships no content for the ghost, so the
+    462 bytes would not be reproduced and must be captured
+
+### EXAMPLE: describe_empty_ghost_suppressed
+GIVEN:
+  a package records /etc/some/ghost.state as a 0-byte %ghost file
+  on disk the path is also empty (0 bytes), matching the recorded empty ghost
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the path is suppressed (absent from config_files)
+  a fresh install reproduces the empty/absent ghost equally well, so nothing need
+    be carried to reproduce it
 
 ### EXAMPLE: scope_attributes_always_object
 GIVEN:
@@ -2593,6 +2688,35 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-06-01: Version 0.6.5. Pinned the config_files emission test as an explicit
+  REPRODUCIBILITY criterion and resolved the `%ghost` and type-mismatch cases that
+  a three-way Go/C++/Rust comparison left ambiguous (the `/etc/pam.d/common-auth`
+  and `common-auth-pc` pair). The rule: emit an `/etc` path exactly when a fresh
+  install of its owning package (or no owning package) would NOT reproduce its
+  current on-disk state, equivalently, when it would have to be carried in a
+  tarball to reconstruct this machine's `/etc` on freshly-installed packages. This
+  subsumes the earlier pristine rule and settles the hard cases. (1) TYPE MISMATCH
+  is emitted: where the package records a regular file but the disk holds a symlink
+  (pam ships `common-auth` as a 462-byte `%config(noreplace)` file, but pam-config
+  has replaced it with a symlink to `common-auth-pc`), the symlink is emitted,
+  because a fresh install would lay down the file, not the link. (2) GHOST WITH
+  CONTENT is emitted: a `%ghost` path the package ships no content for, but which
+  holds real content on disk (pam-config ships `common-auth-pc` as a 0-byte
+  `%ghost`, but on disk it holds the real 462-byte PAM configuration), is emitted
+  with its actual content and digest, because a fresh install reproduces no content
+  for it. (3) EMPTY-GHOST-MATCHING-EMPTY is suppressed: a ghost that is 0 bytes on
+  disk and 0 bytes in the recorded baseline carries nothing to reproduce. The
+  determination now explicitly requires the package-recorded file flags, in
+  particular the ghost marker, alongside the digest, link target, mode, owner, and
+  group; an implementation must obtain the ghost marker (libzypp exposes it via the
+  rpm header file info; an exec-based implementation must query the file flags) and
+  must not ignore it. The independent-per-path and symlink-target rules from v0.6.4
+  are unchanged and reinforced by the worked pam example. Added invariants and
+  examples for the reproducibility criterion, type-mismatch emission,
+  ghost-with-content emission, and empty-ghost suppression. Implementation note:
+  an implementation that emitted the type-mismatch symlink but dropped the
+  content-bearing ghost target (or vice versa) is incomplete under this version;
+  both are emitted, judged independently against their own owning packages.
 - 2026-06-01: Version 0.6.4. Refined the config_files pristine rule after a
   three-way Go/C++/Rust describe comparison on a live host exposed disagreements,
   and added a performance property. (1) Each `/etc` path is now judged

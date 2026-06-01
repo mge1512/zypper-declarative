@@ -51,22 +51,47 @@ code must not assume one version's API.
 | JSON | **jsoncpp** | `jsoncpp-devel` | 1.8.4 (Development Tools Module) | 1.9.6 (SLES core) | stable API across these versions |
 | YAML | **yaml-cpp** | `libyaml-cpp` | `libyaml-cpp0_6` 0.6.3 (Basesystem Module) | `libyaml-cpp0_8` 0.8.0 (SLES core) | **0.6 vs 0.8: API differs, compile against both** |
 
-### `[verified]` Packages: libzypp ONLY (not librpm, not exec rpm)
+### `[verified]` Packages and per-file baseline: libzypp ONLY, via `RpmHeader::tag_fileinfos()`
 
-- Link **libzypp** for every package operation the spec requires: querying the
-  installed set (name, version, release, arch), determining a file's owning
-  package, and obtaining a packaged file's recorded baseline digest/metadata for
-  the changed-vs-pristine comparison. libzypp's rpm target provides all of this.
-- **Do NOT link librpm and do NOT add `rpm-devel`.** libzypp already sits on top
-  of librpm; reaching past it would be a redundant dependency and a second,
-  lower-level trust path into the rpmdb. The spec needs nothing librpm offers that
-  libzypp does not already expose. (Recorded here explicitly because it is an easy
-  wrong turn: the answer is libzypp, full stop.)
+- Link **libzypp** for every package operation the spec requires: the installed
+  set (name, version, release, arch), a file's owning package, AND the per-file
+  recorded baseline needed for the pristine/ghost/type-mismatch determination.
+- `[verified from libzypp source]` The per-file baseline comes from
+  `zypp::target::rpm::RpmHeader::tag_fileinfos()`, which returns
+  `std::list<zypp::target::rpm::FileInfo>` with "complete information about the
+  files". `RpmHeader.cc` builds each `FileInfo` from the rpm header tags directly:
+  `RPMTAG_FILEMD5S` (the recorded content digest), `RPMTAG_FILELINKTOS` (the
+  recorded symlink target), `RPMTAG_FILEMODES`/`RPMTAG_FILEUSERNAME`/
+  `RPMTAG_FILEGROUPNAME` (recorded mode/owner/group), and crucially
+  `RPMTAG_FILEFLAGS`, which carries the GHOST bit (`RPMFILE_GHOST = 64`) and the
+  config bit (`RPMFILE_CONFIG = 1`). So libzypp exposes everything the v0.6.5 rule
+  needs, including the ghost marker, with no per-file subprocess.
+- Obtain the owning installed package's `RpmHeader` (via the rpm target / database
+  query libzypp provides) and read its `tag_fileinfos()` once per relevant package;
+  this is a single in-process pass and naturally satisfies the spec's bulk-lookup
+  requirement (no per-file work).
+- **Do NOT link librpm and do NOT add `rpm-devel`.** Earlier hint versions reserved
+  a possible librpm fallback for file flags; that is now retracted, libzypp's
+  `RpmHeader::tag_fileinfos()`/`FileInfo` is confirmed to expose the file flags
+  (ghost), digest, and linkto, so libzypp covers the file-flag granularity and
+  there is no remaining reason to touch librpm. The answer is libzypp, full stop.
 - **Do NOT exec `zypper` or `rpm`.** Use the library. (This is the deliberate
   difference from the Go and Rust builds, which exec these tools to stay free of
   C/C++ FFI and remain static binaries. The C++ build is the one that links the
   native SUSE libraries, which is part of what makes it a compelling "real SUSE
   C++ tool" demonstration.)
+- `[changed-0.6.5]` Apply the reproducibility rule using the `FileInfo` flags:
+  - ghost (FILEFLAGS has the ghost bit) AND on-disk has content -> EMIT (a fresh
+    install ships no content; e.g. `/etc/pam.d/common-auth-pc`).
+  - ghost AND on-disk empty AND recorded baseline empty -> SUPPRESS.
+  - on-disk type differs from the recorded type (recorded a regular file, disk has
+    a symlink) -> EMIT as the on-disk type (e.g. `/etc/pam.d/common-auth`); judge
+    against this path's own package, do not collapse with the target.
+  - otherwise non-ghost: pristine iff digest+mode+owner+group (file) or recorded
+    linkto (symlink) match -> SUPPRESS; else EMIT.
+  The first C++ build suppressed both pam paths (it had no ghost/type-mismatch
+  handling); under v0.6.5 it must emit both (the type-mismatch symlink and the
+  content-bearing ghost), each judged independently.
 - libzypp pulls in libsolv, curl, and boost transitively; that is expected and
   fine for a dynamically linked tool. Do not try to avoid boost by re-implementing
   what libzypp gives you. (But do not reach for boost GRATUITOUSLY either: use
@@ -324,7 +349,7 @@ code must not assume one version's API.
 
 ---
 
-## Do NOT carry these over from an existing C++ implementation (spec v0.5.0-v0.6.4)
+## Do NOT carry these over from an existing C++ implementation (spec v0.5.0-v0.6.5)
 
 1. describe output ignoring the `out` extension (now follows `resolve-format`).
 2. emitting an empty scope for an unreadable source (read repos.d; never empty for
@@ -371,6 +396,10 @@ code must not assume one version's API.
     gives the name directly). Adding boost surface gratuitously (use std::filesystem
     and jsoncpp); hand-parsing repos.d instead of using libzypp's repo API;
     vendoring a SHA256 routine instead of linking libcrypto.
+21. (v0.6.5) suppressing a content-bearing ghost or a type-mismatched path (both
+    must be EMITTED under the reproducibility rule); ignoring the FILEFLAGS ghost
+    bit from `FileInfo`; or reaching for librpm now that libzypp's
+    `RpmHeader::tag_fileinfos()` is confirmed to expose the flags/digest/linkto.
 
 ## Slots to fill from an existing C++ implementation (if any)
 
@@ -383,6 +412,16 @@ code must not assume one version's API.
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.5. Made the per-file baseline guidance
+  definitive after verifying libzypp's source: use
+  `RpmHeader::tag_fileinfos()`/`FileInfo`, which exposes the recorded digest
+  (`RPMTAG_FILEMD5S`), link target (`RPMTAG_FILELINKTOS`), mode/owner/group, and
+  the file flags including the GHOST bit (`RPMTAG_FILEFLAGS`). Retracted the
+  reserved librpm fallback (no longer needed; libzypp covers file-flag
+  granularity). Added the reproducibility rule (emit content-bearing ghosts and
+  type-mismatched paths, suppress empty-ghost-matching-empty), which the first C++
+  build did not handle (it suppressed both pam paths). Item 21 added to the
+  do-not-carry list.
 - 2026-06-01: Updated to spec v0.6.4. Added the pristine refinements (independent
   per-path judgement, symlink-pristine-by-target-only - the first build over-emitted
   pristine distro symlinks, bare `package_name`, single libzypp pass satisfying the

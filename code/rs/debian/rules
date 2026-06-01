@@ -1,26 +1,33 @@
 #!/usr/bin/make -f
-# generated from spec: zypper-declarative.spec.md sha256:87b9f2f3bf92afd6fe037412d56a23959290e5816d722a3def9505d07aa5acd7
+# generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
+#
+# debian/rules for zypper-declarative (Rust, static binary).
 
-export DH_VERBOSE = 1
-BINARY := zypper-declarative
-TARGET := x86_64-unknown-linux-gnu
+export RUSTFLAGS = -C target-feature=+crt-static
+TARGET = x86_64-unknown-linux-gnu
+BINARY = zypper-declarative
 
 %:
 	dh $@
 
 override_dh_auto_build:
-	cargo build --release --offline
+	cargo build --release --target $(TARGET) --offline
+	cp target/$(TARGET)/release/$(BINARY) ./$(BINARY)
+	# Man page.
 	pandoc $(BINARY).1.md -s -t man -o $(BINARY).1
 
-override_dh_auto_install:
-	install -D -m 0755 target/$(TARGET)/release/$(BINARY) \
-	    debian/$(BINARY)/usr/bin/$(BINARY)
-	install -D -m 0755 target/$(TARGET)/release/$(BINARY) \
-	    debian/$(BINARY)/usr/lib/zypper/commands/$(BINARY)
-	install -D -m 0644 $(BINARY).1 \
-	    debian/$(BINARY)/usr/share/man/man1/$(BINARY).1
-
 override_dh_auto_test:
-	# Tests run via the project Makefile in CI; skipped in the package build to
-	# avoid requiring the test toolchain in the buildd environment.
-	true
+	cargo build --release
+	cp target/release/$(BINARY) ./$(BINARY)
+	cd independent_tests/claude-opus-4-8 && cargo test --test cli
+
+override_dh_auto_install:
+	install -D -m 0755 $(BINARY) debian/$(BINARY)/usr/bin/$(BINARY)
+	install -D -m 0644 $(BINARY).1 debian/$(BINARY)/usr/share/man/man1/$(BINARY).1
+	# Surface as a zypper subcommand.
+	install -d debian/$(BINARY)/usr/lib/zypper/commands
+	ln -sf /usr/bin/$(BINARY) debian/$(BINARY)/usr/lib/zypper/commands/zypper-declarative
+
+override_dh_auto_clean:
+	cargo clean || true
+	rm -f ./$(BINARY) $(BINARY).1

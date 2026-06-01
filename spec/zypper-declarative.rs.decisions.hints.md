@@ -218,11 +218,26 @@ hand.
   it to the name. (4) Do ownership/verification in BULK (one `rpm -qf` over all
   enumerated `/etc` paths, one bulk verification), NOT per file; the first build's
   per-file `rpm -qf`/`rpm -V` is the cause of its slowness versus Go and C++.
+- `[spec]` `[changed-0.6.5]` Reproducibility rule for the ghost/type-mismatch
+  cases (the v0.6.4 Rust rebuild emitted the `common-auth` symlink correctly but
+  dropped the `common-auth-pc` content-bearing ghost; under v0.6.5 BOTH are
+  emitted). The batched `rpm` query MUST include `%{FILEFLAGS}` so the ghost bit is
+  visible, e.g. `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS}
+  %{FILELINKTOS} %{FILEMODES}\n]'` (bit 64 = ghost, bit 1 = config). Then: (a) a
+  `%ghost` path with real on-disk content -> EMIT (a fresh install ships no content;
+  `/etc/pam.d/common-auth-pc` is a 0-byte ghost holding the real 462 bytes -> emit
+  with that sha256); (b) a ghost empty on disk with an empty baseline -> SUPPRESS;
+  (c) a path whose on-disk type differs from the recorded type -> EMIT as the
+  on-disk type (`/etc/pam.d/common-auth`: pam ships a regular file, disk has a
+  symlink -> emit the link), judged against its own package, not collapsed with the
+  target; (d) otherwise pristine iff digest+mode+owner+group (file) or recorded
+  linkto (symlink) match -> SUPPRESS, else EMIT. A ghost is never pristine-by-digest.
 - `[lesson]` `created_at` must be a real RFC3339 timestamp. The first Rust build
   emitted `1970-01-01T00:00:36Z` (it formatted a small duration as if it were a
-  Unix epoch time); use the wall clock correctly (e.g. a properly converted
-  `SystemTime::now()` to RFC3339). The field is informational and excluded from
-  comparison and the hash, but it must still be correct.
+  Unix epoch time; the v0.6.4 rebuild fixed this); use the wall clock correctly
+  (e.g. a properly converted `SystemTime::now()` to RFC3339). The field is
+  informational and excluded from comparison and the hash, but it must still be
+  correct.
 
 ### Cross-implementation consistency (the three-way oracle)
 
@@ -263,7 +278,7 @@ hand.
 
 ---
 
-## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.4)
+## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.5)
 
 1. describe output ignoring the `out` extension (now follows `resolve-format`).
 2. repositories read in a way that returns empty on read failure, or any path that
@@ -301,6 +316,10 @@ hand.
     for pristine-ness (target-match only); putting the NEVRA in `package_name`
     (bare name only); per-file `rpm -qf`/`rpm -V` instead of bulk (the slowness
     cause); and emitting a bogus `created_at` (use the real wall clock).
+17. (v0.6.5) dropping a content-bearing ghost such as `common-auth-pc` (the v0.6.4
+    rebuild did this; it must be EMITTED); omitting `%{FILEFLAGS}` from the query
+    (ghost bit required); suppressing a type-mismatched path; treating a ghost as
+    pristine-by-digest.
 
 ## Slots to fill from an existing Rust implementation (if any)
 
@@ -312,6 +331,13 @@ hand.
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.5 after the v0.6.4 Rust rebuild verified on
+  milos (created_at fixed, bare package_name, ibus symlinks suppressed; the
+  remaining gap was the pam.d `common-auth` symlink, now confirmed CORRECT to emit
+  as a type mismatch). Added the reproducibility rule: include `%{FILEFLAGS}` in
+  the query, emit content-bearing ghosts (the rebuild dropped `common-auth-pc`,
+  which must be emitted) and type-mismatched paths, suppress
+  empty-ghost-matching-empty. Item 17 added to the do-not-carry list.
 - 2026-06-01: Updated to spec v0.6.4 after the first Rust build was compared
   three-way on milos. The build was the cleanest of the three (services present,
   pristine files suppressed, generator versioned), with four issues now pinned:

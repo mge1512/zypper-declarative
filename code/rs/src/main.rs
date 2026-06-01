@@ -1,43 +1,23 @@
-// generated from spec: zypper-declarative.spec.md sha256:87b9f2f3bf92afd6fe037412d56a23959290e5816d722a3def9505d07aa5acd7
+// generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
 //
-// Entry point: CLI dispatch only. Argument collection, signal handling, and
-// top-level exit-code propagation. All behaviour implementation lives in the
-// library modules (per SOURCE-PARTITIONING: one-entry-one-implementation).
+// Entry point: CLI dispatch only. Argument collection, signal handling, and the
+// top-level call into the verb layer. No behaviour is implemented here
+// (SOURCE-PARTITIONING: the entry-point module does not implement behaviours
+// directly).
 
 use std::process::exit;
+use zypper_declarative::cli;
 
 fn main() {
-    install_signal_handlers();
-
-    // argv[0] is the program path; the dispatcher receives the remaining args.
+    // Clean exit on SIGTERM and SIGINT: the default Rust/libc disposition for
+    // these signals terminates the process without leaving partial output. An
+    // `apply` that is interrupted before sealing leaves no new snapshot as the
+    // default boot target, because sealing/activation is the final step and a
+    // half-converged transaction is discarded (never sealed). No explicit
+    // handler is required to honour the "no partial output, no partial boot
+    // target" contract in this exec/transaction model; the transaction binding
+    // owns rollback of an unsealed snapshot.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = zypper_declarative::cli::run(&args);
+    let code = cli::run(&args);
     exit(code);
-}
-
-/// Clean exit on SIGTERM and SIGINT with no partial output. We install handlers
-/// that exit promptly; the long-running verb (apply) discards its transaction by
-/// virtue of never having sealed it (sealing is the final step), so an interrupt
-/// before step 11 leaves no new default boot target.
-fn install_signal_handlers() {
-    // SIG_DFL termination for SIGTERM/SIGINT already exits the process without
-    // partial output for the read-only verbs. We register explicit handlers that
-    // exit cleanly so the behaviour is deterministic and documented.
-    unsafe {
-        libc::signal(
-            libc::SIGTERM,
-            handle_signal as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGINT,
-            handle_signal as *const () as libc::sighandler_t,
-        );
-    }
-}
-
-extern "C" fn handle_signal(_sig: i32) {
-    // Exit cleanly. No partial output is emitted: stdout writes are line-buffered
-    // and any in-progress transaction has not been sealed, so the running system
-    // is left unchanged.
-    std::process::exit(130);
 }

@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.4)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.5)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -561,6 +561,12 @@ objective.
 
 ## Changelog
 
+- 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.5. No structural
+  change; the config_files emission test is now stated as a reproducibility
+  criterion (emit a path exactly when a fresh package install would not reproduce
+  its on-disk state), which resolves the `%ghost` and type-mismatch cases:
+  type-mismatched paths and content-bearing ghosts are emitted, empty-ghost-matching-empty
+  is suppressed. The two-diff model and the reader's role are unchanged.
 - 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.4. No structural
   change; the config_files pristine rule was refined after a three-way describe
   comparison: each `/etc` path is judged independently against its own owning

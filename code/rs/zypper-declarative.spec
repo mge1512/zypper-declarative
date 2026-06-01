@@ -1,54 +1,61 @@
-# pcd-spec-sha256: 87b9f2f3bf92afd6fe037412d56a23959290e5816d722a3def9505d07aa5acd7
+# pcd-spec-sha256: 18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
 #
-# OBS RPM spec for zypper-declarative. Distributed via build.opensuse.org; no
-# curl-based installation. Builds a single static Rust binary.
+# OBS RPM spec for zypper-declarative (Rust, cli-tool deployment).
 
 Name:           zypper-declarative
-Version:        0.6.3
+Version:        0.6.4
 Release:        0
-Summary:        Declarative, reconciling converger surfaced as a zypper subcommand
+Summary:        Declarative reconciling converger for SUSE systems
 License:        GPL-2.0-or-later
-Group:          System/Management
 URL:            https://github.com/mge1512/zypper-declarative
 Source0:        %{name}-%{version}.tar.xz
 
-BuildRequires:  rust
 BuildRequires:  cargo
+BuildRequires:  rust
 BuildRequires:  pandoc
-
-ExclusiveArch:  x86_64
+# Static binary; no runtime library dependency for the tool's own logic. The
+# tool drives zypper, snapper, systemctl, and rpm at run time (Requires below).
+Requires:       zypper
+Requires:       snapper
+Requires:       systemd
+Requires:       rpm
 
 %description
-zypper-declarative converges a SUSE system to a desired manifest (the declarable
-subset of the SUSE Machinery system description: packages, repositories,
-services, and /etc config files) inside a single snapshot transaction, recording
-what was applied. It provides the verbs apply, diff, verify, status, and
-describe, and is surfaced as a "zypper declarative" subcommand and invocable
-directly. It performs no direct network I/O of its own; all package retrieval is
-delegated to the package manager against declared, pinned, signed repositories.
+zypper-declarative converges a SUSE system toward a desired manifest inside a
+single snapshot transaction, recording what was applied. It is surfaced as a
+zypper subcommand (zypper declarative) and is also invokable directly. The
+desired state is the declarable subset of the SUSE Machinery system description
+(packages, repositories, services, config_files). The same shared model is
+produced by describe (the actual state), stored as the applied record, and
+consumed by apply, diff, and verify.
 
 %prep
 %autosetup -n %{name}-%{version}
 
 %build
-# Static binary (BINARY-TYPE: static) via the project's .cargo/config.toml, which
-# sets a default build target and crt-static. Built offline against vendored deps.
-cargo build --release --offline
+# Static linking against glibc via crt-static; built with an explicit target so
+# host proc-macro crates compile without crt-static.
+export RUSTFLAGS='-C target-feature=+crt-static'
+cargo build --release --target x86_64-unknown-linux-gnu --offline
+cp target/x86_64-unknown-linux-gnu/release/%{name} ./%{name}
+# Man page.
 pandoc %{name}.1.md -s -t man -o %{name}.1
 
 %install
-install -D -m 0755 target/x86_64-unknown-linux-gnu/release/%{name} %{buildroot}%{_bindir}/%{name}
+install -D -m 0755 %{name} %{buildroot}%{_bindir}/%{name}
 install -D -m 0644 %{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
-# zypper subcommand surface: an executable under /usr/lib/zypper/commands.
-install -D -m 0755 target/x86_64-unknown-linux-gnu/release/%{name} %{buildroot}%{_prefix}/lib/zypper/commands/%{name}
+# Surface as a zypper subcommand: `zypper declarative` dispatches to this binary.
+install -d %{buildroot}%{_prefix}/lib/zypper/commands
+ln -sf %{_bindir}/%{name} %{buildroot}%{_prefix}/lib/zypper/commands/zypper-declarative
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/%{name}
-%{_prefix}/lib/zypper/commands/%{name}
+%{_prefix}/lib/zypper/commands/zypper-declarative
 %{_mandir}/man1/%{name}.1*
 
 %changelog
-* Mon Jun 01 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.3-0
-- Generated from zypper-declarative.spec.md (Version 0.6.3).
+* Mon Jun 01 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.4-0
+- Translation from zypper-declarative.spec.md (spec sha256
+  18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd).
