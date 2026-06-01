@@ -232,6 +232,24 @@ hand.
   symlink -> emit the link), judged against its own package, not collapsed with the
   target; (d) otherwise pristine iff digest+mode+owner+group (file) or recorded
   linkto (symlink) match -> SUPPRESS, else EMIT. A ghost is never pristine-by-digest.
+- `[lesson]` `[preventive-0.6.5]` When you batch the ownership/baseline query for
+  performance (which the bulk-lookup requirement asks for), JOIN owner-to-path BY
+  THE PATH, never by output row position. This is preventive: the Go build, which
+  is exec-based like Rust, scrambled every `package_name` by zipping a bulk
+  `rpm -qf path1 path2 ...` output against the input list positionally
+  (`/etc/ssh/sshd_config` came out owned by `speech-dispatcher`, etc.), which then
+  corrupted its whole pristine comparison. `rpm -qf` over many paths does NOT emit
+  one block per input path in input order: it may reorder, deduplicate when paths
+  share an owner, collapse, or drop unowned paths. Rust has not hit this yet only
+  because earlier builds used per-file `rpm -qf` (one path, one answer); the moment
+  you batch, the hazard appears. Do it safely: query the OWNING PACKAGES' file
+  lists once, e.g. `rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS}
+  %{FILELINKTOS} %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME}\n]' <pkglist>`, which
+  emits the absolute path on every line, and build a `path -> attributes` map keyed
+  by that path; then look up each enumerated `/etc` path in the map. Never assume
+  positional correspondence between the queried path list and the output lines.
+  Add a test asserting a few known mappings (e.g. `/etc/ssh/sshd_config` must map
+  to `openssh-server`, `/etc/pam.d/common-auth` to `pam`).
 - `[lesson]` `created_at` must be a real RFC3339 timestamp. The first Rust build
   emitted `1970-01-01T00:00:36Z` (it formatted a small duration as if it were a
   Unix epoch time; the v0.6.4 rebuild fixed this); use the wall clock correctly
@@ -320,6 +338,9 @@ hand.
     rebuild did this; it must be EMITTED); omitting `%{FILEFLAGS}` from the query
     (ghost bit required); suppressing a type-mismatched path; treating a ghost as
     pristine-by-digest.
+18. (v0.6.5, preventive) when batching the rpm query, joining owner-to-path by
+    output row position (the Go build did this and scrambled every package_name);
+    always key the map by the absolute path in the output, never by row order.
 
 ## Slots to fill from an existing Rust implementation (if any)
 
@@ -331,6 +352,14 @@ hand.
 
 ## Changelog
 
+- 2026-06-01: Added (hints only, no spec change) a preventive bulk-lookup
+  alignment lesson, prompted by the Go build scrambling every `package_name` by
+  joining bulk `rpm -qf` output positionally. Rust is exec-based like Go and will
+  face the same hazard the moment it batches the query (as the performance
+  requirement asks); the lesson says to key the owner/baseline map by the absolute
+  path in the output, never by row position, and to query the owning packages'
+  file lists (which emit the path per line). Item 18 added to the do-not-carry
+  list.
 - 2026-06-01: Updated to spec v0.6.5 after the v0.6.4 Rust rebuild verified on
   milos (created_at fixed, bare package_name, ibus symlinks suppressed; the
   remaining gap was the pam.d `common-auth` symlink, now confirmed CORRECT to emit

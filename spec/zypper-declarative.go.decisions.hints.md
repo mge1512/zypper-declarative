@@ -255,6 +255,38 @@ That means:
   target; (d) otherwise pristine iff digest+mode+owner+group (file) or recorded
   linkto (symlink) match -> SUPPRESS, else EMIT. A ghost is never pristine-by-digest
   against a shipped baseline (it has none).
+- `[lesson]` `[CRITICAL-0.6.5]` Bulk ownership lookup MUST join owner-to-path BY
+  THE PATH, never by output row position. The first v0.6.5 Go build scrambled
+  every `package_name` (`/etc/ssh/sshd_config` -> `speech-dispatcher`,
+  `/etc/pam.d/common-auth` -> `libldap-data`, etc.): the package names were real
+  but mapped to the wrong files, and that wrong ownership then corrupted the whole
+  pristine comparison (912 emitted vs the correct ~460-530, because every file was
+  compared against some other package's baseline). The cause is treating a bulk
+  `rpm -qf path1 path2 ...` as if it returns exactly one answer block per input
+  path in input order. It does NOT: rpm may reorder, deduplicate when several
+  paths share an owner, collapse, or drop unowned paths, so a positional zip of
+  the input list against the output lines is misaligned. Correct approaches, pick
+  one and verify alignment:
+  - Query so each result row carries its own path and build a `path -> {package,
+    flags, digest, linkto, mode, owner, group}` map, then look up each enumerated
+    `/etc` path in that map (join by path string). For example run `rpm -qf` per
+    path is correct-but-slow; to batch, query the OWNING PACKAGES' file lists once
+    (`rpm -q --queryformat '[%{FILENAMES} %{FILEFLAGS} %{FILEDIGESTS} %{FILELINKTOS}
+    %{FILEMODES} %{FILEUSERNAME} %{FILEGROUPNAME}\n]' <pkglist>`) which emits the
+    absolute path on every line, and index by that path. This gives both the bulk
+    speed and a path-keyed map with no positional assumption.
+  - First resolve ownership for all paths (`rpm -qf` returning package per path,
+    parsed so each owner is tied to its queried path, not zipped by position), then
+    for the distinct owning packages pull their per-file baseline via the package
+    file-list query above, and join everything on the absolute path.
+  Do NOT assume `rpm -qf a b c` prints three blocks in the order a, b, c. Always
+  key by the path that appears in the output. Add a self-check: for a few known
+  files (e.g. `/etc/ssh/sshd_config` must map to `openssh-server`) assert the
+  mapping in tests.
+- `[lesson]` `created_at` must be a real RFC3339 timestamp. The v0.6.5 Go build
+  emitted an empty string; emit the actual wall-clock time (e.g. `time.Now()` in
+  RFC3339). The field is informational and excluded from the hash and comparison,
+  but it must be present and correct (Rust emits it correctly; match that).
 - `[spec]` `[changed-0.6.2]` Filesystem object model. The `/etc` walk (and the
   scope=full walk over `/usr`/`/boot`) must recurse into directories and classify
   each entry by its own type using lstat (do NOT follow symlinks, do NOT os.ReadFile
@@ -405,6 +437,10 @@ That means:
 17. (v0.6.5) omitting `%{FILEFLAGS}` from the batched query (the ghost bit is
     required); suppressing a content-bearing ghost or a type-mismatched path (both
     EMIT); treating a ghost as pristine-by-digest.
+18. (v0.6.5) joining bulk `rpm -qf` output to paths BY POSITION (the build did this
+    and scrambled every package_name); always key the owner/baseline map by the
+    absolute path in the output, never by row order. Emitting an empty `created_at`
+    (emit a real RFC3339 timestamp).
 
 ## Slots to fill from /tmp/pcd-original/code/
 
@@ -423,6 +459,18 @@ That means:
 
 ## Changelog
 
+- 2026-06-01: Fixed (hints only, no spec change) the bulk-lookup defect the first
+  v0.6.5 Go build exhibited: it joined bulk `rpm -qf` output to paths by row
+  position and scrambled every `package_name` (e.g. `/etc/ssh/sshd_config` ->
+  `speech-dispatcher`), which corrupted the pristine comparison and over-emitted
+  (912 vs the correct ~460-530). Added a CRITICAL lesson: key the ownership and
+  baseline map by the absolute path in the query output, never by row order; query
+  the owning packages' file lists (which emit the path on every line) and join on
+  path. Re-added the real-RFC3339 `created_at` requirement (the build emitted an
+  empty string). Items 18 added to the do-not-carry list. The structural v0.6.5
+  rule landed correctly in that build (pam pair emitted with the right shape,
+  services present, bare names, gross pristine bug gone); only ownership alignment
+  and the timestamp need fixing.
 - 2026-06-01: Updated to spec v0.6.5. Added the reproducibility rule for the
   ghost/type-mismatch cases: the batched `rpm` query must include `%{FILEFLAGS}`
   so the ghost bit is visible; emit content-bearing ghosts and type-mismatched
