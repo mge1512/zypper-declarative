@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.3
+Version:     0.6.4
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -771,20 +771,56 @@ STEPS:
      rather than linking the library must reproduce the same determination; it
      must NOT treat a file as unpackaged merely because an ownership lookup was not
      performed.
+   - Each `/etc` path is judged INDEPENDENTLY, against ITS OWN owning package. A
+     symlink and the file it points to are two separate paths with two separate
+     owners and two separate judgments; they are NEVER collapsed. In particular,
+     deciding that a symlink is pristine does not suppress its target file, and the
+     target file is evaluated on its own when the walk reaches it, against the
+     target file's owning package (which is frequently a different package than the
+     symlink's). The symlink is NEVER dereferenced to judge the target through it
+     (consistent with the type model: a symlink's value is its target string, not
+     the bytes it resolves to).
+     Worked example: `/etc/pam.d/common-auth` is a symlink owned by `pam`, pointing
+     to `common-auth-pc`; `/etc/pam.d/common-auth-pc` is a regular file owned by
+     `pam-config`. The symlink is judged against `pam` (pristine iff its target is
+     what `pam` shipped) and the file is judged, separately, against `pam-config`
+     (pristine iff its content matches what `pam-config` shipped). Either may be
+     suppressed or emitted independently of the other.
    - An entry is emitted if and only if it is UNPACKAGED (the package database
      reports no owning package) OR CHANGED-FROM-PACKAGE (owned, but the entry
      differs from the package-recorded baseline). A package-PRISTINE entry (owned,
-     and matching the recorded baseline) is suppressed.
-   - PRISTINE means, for an owned entry, that ALL of the following match the
-     package-recorded baseline: for a regular file the content digest; for a
-     symlink the link target; and in both cases the mode, owner, and group. If any
-     of these differs, the entry is changed-from-package and is emitted, with a
-     `changes` interpretation analogous to the changed_managed_files `changes`
-     list (the differing attribute set is what makes it non-pristine).
+     and matching the recorded baseline) is suppressed. An owned symlink whose
+     target matches the package's recorded target is pristine and is suppressed
+     (installing the package would recreate that link, so it carries no
+     declarable intent); this is why pristine distro symlinks, such as the many
+     `/etc/X11/xim.d/*/40-ibus` links, do not appear.
+   - PRISTINE is type-specific:
+     - for a regular file: the content digest AND the mode, owner, and group all
+       match the package-recorded baseline;
+     - for a symlink: the link TARGET matches the package-recorded target. A
+       symlink's mode is not compared (symlink permissions are not meaningful on
+       Linux and are not tracked as package state); ownership of the link is not
+       used to declare it changed.
+     If any compared attribute differs, the entry is changed-from-package and is
+     emitted, with a `changes` interpretation analogous to the changed_managed_files
+     `changes` list (the differing attribute set is what makes it non-pristine).
+   - `package_name` carries the bare package NAME only (for example
+     `openssh-server`), never the full name-version-release-arch identifier (not
+     `openssh-server-9.6p1-150600.6.37.1.x86_64`). The version and release are
+     already recorded per package in the packages scope; the config_files record
+     names only the owning package. This also matches Machinery, which records the
+     short package name.
    - Digests are SHA256. Legacy digest algorithms (MD5, SHA1) must not be used for
      the pristine comparison or for the emitted `sha256`, except where reading a
      legacy package-recorded digest is unavoidable for the comparison itself; the
      emitted record always carries a SHA256 content digest.
+   - Ownership and baseline determination is performed in BULK, not once per path:
+     an implementation resolves ownership and the package-recorded baseline for the
+     enumerated `/etc` set with a bounded number of queries (for example a single
+     bulk ownership query and a bulk verification, or one in-process database
+     pass), NOT one subprocess or query per file. This is a performance property of
+     the read, not a change to its result; see the corresponding invariant. The
+     work remains bounded to `/etc` regardless.
    Two constraints on this step:
    - Bounded scope: the package-baseline comparison consults package metadata only
      for the `/etc` entries enumerated here. The reader does not read, hash, or
@@ -1578,10 +1614,25 @@ resolver fills in the transitive set.
   comparison, are SHA256; MD5 and SHA1 are not used except where unavoidably
   reading a legacy package-recorded digest for the comparison.
 - [observable] A package-pristine `/etc` entry (owned, and matching the
-  package-recorded content digest, target, mode, owner, and group) is suppressed
-  from config_files; only unpackaged or changed-from-package entries are emitted.
-  Ownership is determined through the native package database, never defaulted to
-  unpackaged because the lookup was skipped.
+  package-recorded baseline) is suppressed from config_files; only unpackaged or
+  changed-from-package entries are emitted. Ownership is determined through the
+  native package database, never defaulted to unpackaged because the lookup was
+  skipped.
+- [observable] Each `/etc` path is judged independently against its own owning
+  package; a symlink and the file it points to are separate paths with separate
+  owners and separate judgments, never collapsed, and a symlink is never
+  dereferenced to judge it. Suppressing a pristine symlink does not suppress its
+  target file.
+- [observable] An owned symlink is pristine (and suppressed) when its target
+  matches the package-recorded target; a symlink's mode is not part of the
+  comparison. A regular file is pristine when its content digest, mode, owner, and
+  group all match.
+- [observable] `package_name` in a config_files record is the bare package name
+  (for example `openssh-server`), never the full name-version-release-arch
+  identifier.
+- [observable] Ownership and baseline determination for the enumerated `/etc` set
+  is performed in bulk (a bounded number of queries or a single database pass), not
+  once per path; this does not change which entries are emitted.
 - [observable] Drift and diff comparison uses only the declarable identity fields
   of each scope; observational extension fields in a supplied dump are ignored.
 - [implementation] The intent diff is computed without reading the filesystem.
@@ -1927,6 +1978,35 @@ THEN:
   /etc/bar.conf is emitted with package_name "Q" (changed-from-package)
   /etc/local.conf is emitted with package_name "" (unpackaged)
   ownership is taken from the package database, not defaulted to unpackaged
+  package_name "Q" is the bare package name, not a name-version-release-arch string
+
+### EXAMPLE: describe_symlink_and_target_judged_independently
+GIVEN:
+  /etc/link is a symlink owned by package A, with target "real-file" exactly as A
+    shipped it (a pristine link)
+  /etc/real-file is a regular file owned by a DIFFERENT package B, unchanged from
+    B's baseline (pristine)
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  /etc/link is suppressed (pristine symlink, judged against A by target only)
+  /etc/real-file is suppressed (pristine file, judged against B independently)
+  suppressing the symlink did not cause the target to be skipped without its own
+    judgement, and the symlink was not dereferenced to judge the target
+  (were /etc/real-file edited, it would be emitted with package_name "B" while
+    /etc/link stayed suppressed)
+
+### EXAMPLE: describe_pristine_distro_symlink_suppressed
+GIVEN:
+  /etc/X11/xim.d/de/40-ibus is a symlink owned by package ibus, target "../ibus"
+    exactly as ibus shipped it
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the symlink is suppressed (owned, target matches the package), absent from config_files
+  installing ibus would recreate the link, so it carries no declarable intent
 
 ### EXAMPLE: scope_attributes_always_object
 GIVEN:
@@ -2513,6 +2593,29 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-06-01: Version 0.6.4. Refined the config_files pristine rule after a
+  three-way Go/C++/Rust describe comparison on a live host exposed disagreements,
+  and added a performance property. (1) Each `/etc` path is now judged
+  INDEPENDENTLY against its own owning package, and a symlink is never collapsed
+  with the file it points to: suppressing a pristine symlink must not suppress its
+  target file, the target is evaluated on its own against its own owner (often a
+  different package), and the symlink is never dereferenced. The worked case is
+  `/etc/pam.d/common-auth` (symlink owned by `pam`) versus
+  `/etc/pam.d/common-auth-pc` (file owned by `pam-config`); implementations had
+  variously collapsed these. (2) Pristine is now type-specific: a symlink is
+  pristine when its TARGET matches the package-recorded target (its mode is not
+  compared, symlink permissions not being meaningful or tracked), while a regular
+  file still requires digest, mode, owner, and group to match. An owned distro
+  symlink with the package's target (such as the many `/etc/X11/xim.d/*/40-ibus`
+  links) is therefore suppressed. (3) `package_name` is pinned to the bare package
+  NAME (`openssh-server`), never the full name-version-release-arch identifier;
+  one build had emitted the full NEVRA. (4) Ownership and baseline determination
+  must be performed in BULK (a bounded number of queries or one database pass), not
+  once per path; this is a performance requirement, not a change to which entries
+  are emitted, and it addresses a real per-file-subprocess slowdown observed in an
+  exec-based implementation while leaving the result identical and the work bounded
+  to `/etc`. Added invariants and examples for the independent judgement, the
+  symlink-target rule, the bare name, and pristine distro symlinks.
 - 2026-06-01: Version 0.6.3. Clarifications driven by a cross-implementation
   comparison: running `describe` from the Go and the C++ builds on the same host
   exposed three divergences, two of which were spec ambiguities. (1) The

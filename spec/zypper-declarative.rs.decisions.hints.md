@@ -205,6 +205,24 @@ hand.
   ownership lookup was skipped or failed (that was the Go bug the C++/libzypp build
   exposed: Go over-emitted ~1700 pristine files as unpackaged). The C++ build is
   the behavioural oracle here.
+- `[spec]` `[changed-0.6.4]` Pristine refinements (Rust got the symlink case
+  partly wrong in the first build): (1) judge each `/etc` path INDEPENDENTLY
+  against its own owning package; never collapse a symlink with the file it points
+  to (e.g. `/etc/pam.d/common-auth` owned by `pam` vs `common-auth-pc` owned by
+  `pam-config` are two separate judgements); never dereference a symlink to judge
+  it. (2) A symlink is pristine iff its TARGET matches the package-recorded target;
+  do NOT compare a symlink's mode (the first build emitted pristine symlinks it
+  should have suppressed). A regular file is pristine iff digest+mode+owner+group
+  match. (3) `package_name` is the BARE name (`openssh-server`); the first build
+  emitted the full NEVRA from `rpm -qf` (`openssh-server-9.6p1-...x86_64`) - reduce
+  it to the name. (4) Do ownership/verification in BULK (one `rpm -qf` over all
+  enumerated `/etc` paths, one bulk verification), NOT per file; the first build's
+  per-file `rpm -qf`/`rpm -V` is the cause of its slowness versus Go and C++.
+- `[lesson]` `created_at` must be a real RFC3339 timestamp. The first Rust build
+  emitted `1970-01-01T00:00:36Z` (it formatted a small duration as if it were a
+  Unix epoch time); use the wall clock correctly (e.g. a properly converted
+  `SystemTime::now()` to RFC3339). The field is informational and excluded from
+  comparison and the hash, but it must still be correct.
 
 ### Cross-implementation consistency (the three-way oracle)
 
@@ -245,7 +263,7 @@ hand.
 
 ---
 
-## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.3)
+## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.4)
 
 1. describe output ignoring the `out` extension (now follows `resolve-format`).
 2. repositories read in a way that returns empty on read failure, or any path that
@@ -279,6 +297,10 @@ hand.
     is correct; Go's was the bug).
 15. (v0.6.3) `_attributes` as null/`~` (always `{}`); unquoted YAML string scalars
     like `mode: 0600` (quote them); and dropping the version from `meta.generator`.
+16. (v0.6.4) collapsing a symlink with its target file; comparing a symlink's mode
+    for pristine-ness (target-match only); putting the NEVRA in `package_name`
+    (bare name only); per-file `rpm -qf`/`rpm -V` instead of bulk (the slowness
+    cause); and emitting a bogus `created_at` (use the real wall clock).
 
 ## Slots to fill from an existing Rust implementation (if any)
 
@@ -290,6 +312,14 @@ hand.
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.4 after the first Rust build was compared
+  three-way on milos. The build was the cleanest of the three (services present,
+  pristine files suppressed, generator versioned), with four issues now pinned:
+  symlink/target independence and symlink-pristine-by-target-only (it emitted some
+  pristine symlinks), bare `package_name` (it emitted the full NEVRA), bulk rpm
+  queries (per-file `rpm -qf`/`-V` was the cause of its slowness versus Go and
+  C++), and a real `created_at` (it emitted `1970-01-01T00:00:36Z`). Item 16 added
+  to the do-not-carry list.
 - 2026-06-01: Updated to spec v0.6.3, incorporating the lessons from the Go and
   C++ runs before Rust is generated. Added: the `services` scope is mandatory
   (read offline via `systemctl --root`; C++ deferred it, Go read it); the

@@ -224,6 +224,22 @@ That means:
   baseline), compare, and suppress when all of digest/target+mode+owner+group match.
   Never default a path to unpackaged because the lookup was skipped. The C++ build
   (libzypp) is the behavioural oracle for this scope.
+- `[spec]` `[changed-0.6.4]` Pristine rule refinements: (1) judge each `/etc` path
+  INDEPENDENTLY against its own owning package; never collapse a symlink with the
+  file it points to (suppressing a pristine symlink must NOT suppress its target
+  file; the target is a separate path judged against its own owner, often a
+  different package, e.g. `/etc/pam.d/common-auth` owned by `pam` vs
+  `common-auth-pc` owned by `pam-config`); never dereference a symlink to judge it.
+  (2) A symlink is pristine when its TARGET matches the package-recorded target
+  (do not compare a symlink's mode); a regular file when digest+mode+owner+group
+  match. An owned distro symlink with the package's target (the `/etc/X11/xim.d/*/
+  40-ibus` links) is suppressed. (3) `package_name` is the BARE name
+  (`openssh-server`), never the NEVRA; `rpm -qf` prints the full NEVRA, so reduce
+  it to the name. (4) Do the lookups in BULK: one `rpm -qf` over all enumerated
+  `/etc` paths (it accepts many path arguments and prints owners line-by-line) and
+  a bulk verification of the owning packages, NOT `rpm -qf`/`rpm -V` per file. This
+  is the performance fix; the result is unchanged and the work stays bounded to
+  `/etc`.
 - `[spec]` `[changed-0.6.2]` Filesystem object model. The `/etc` walk (and the
   scope=full walk over `/usr`/`/boot`) must recurse into directories and classify
   each entry by its own type using lstat (do NOT follow symlinks, do NOT os.ReadFile
@@ -314,7 +330,7 @@ That means:
 
 ---
 
-## Do NOT carry these over from the existing code (v0.5.0 through v0.6.3 changes)
+## Do NOT carry these over from the existing code (v0.5.0 through v0.6.4 changes)
 
 1. `describe` writing JSON regardless of the `out` extension. Output now follows
    `resolve-format`.
@@ -363,6 +379,14 @@ That means:
     builds on the same host (after excluding `meta.created_at`); the three-way
     diff is a consistency oracle. `meta.generator` must be `zypper-declarative
     <version>` so it matches across implementations.
+14. (v0.6.4) collapsing a symlink with its target file (judge each `/etc` path
+    independently against its own owning package; suppressing a pristine link must
+    not suppress its target).
+15. (v0.6.4) comparing a symlink's mode for pristine-ness (a link is pristine iff
+    its target matches the package); over-comparing files is fine, over-comparing
+    links wrongly emits them.
+16. (v0.6.4) putting the full NEVRA in `package_name` (bare name only); and doing
+    `rpm -qf`/`rpm -V` per file instead of in bulk (batch the queries).
 
 ## Slots to fill from /tmp/pcd-original/code/
 
@@ -381,6 +405,11 @@ That means:
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.4. Added the pristine-rule refinements from the
+  three-way comparison: independent per-path judgement (no symlink/target
+  collapse), symlink pristine-by-target-only, bare `package_name` (not NEVRA), and
+  bulk `rpm -qf`/verification instead of per-file (the performance fix). Items
+  14-16 added to the do-not-carry list.
 - 2026-06-01: Updated to spec v0.6.3 after diffing the Go and C++ describe output
   on milos. Headline: the Go build's config_files reader mislabelled ~1700
   package-owned `/etc` files as unpackaged and over-emitted package-pristine files,

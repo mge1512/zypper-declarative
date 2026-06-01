@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.3)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.4)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -561,6 +561,13 @@ objective.
 
 ## Changelog
 
+- 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.4. No structural
+  change; the config_files pristine rule was refined after a three-way describe
+  comparison: each `/etc` path is judged independently against its own owning
+  package (a symlink is never collapsed with its target file), a symlink is
+  pristine by target match alone, `package_name` is the bare name, and ownership
+  determination is required to be done in bulk (a performance property, result
+  unchanged). The reader's role and the two-diff model are unchanged.
 - 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.3. No structural
   change; clarifications from a Go-vs-C++ describe comparison: the package-pristine
   rule is pinned (suppress owned-and-unchanged `/etc` entries, ownership via the

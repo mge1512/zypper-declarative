@@ -69,7 +69,43 @@ code must not assume one version's API.
   C++ tool" demonstration.)
 - libzypp pulls in libsolv, curl, and boost transitively; that is expected and
   fine for a dynamically linked tool. Do not try to avoid boost by re-implementing
-  what libzypp gives you.
+  what libzypp gives you. (But do not reach for boost GRATUITOUSLY either: use
+  `std::filesystem` for the `/etc` walk, not boost.filesystem, and jsoncpp for
+  JSON, not boost.json. boost is a transitive dependency, not a toolkit to add
+  surface from.)
+- `[changed-0.6.4]` Pristine refinements (the C++ build was mostly correct here,
+  these keep it correct and converge it with Go/Rust): judge each `/etc` path
+  INDEPENDENTLY against its own owning package, and never collapse a symlink with
+  the file it points to (`/etc/pam.d/common-auth` owned by `pam` and
+  `common-auth-pc` owned by `pam-config` are separate judgements; suppressing the
+  pristine link must not suppress the target, and the target is judged against its
+  own owner). A symlink is pristine iff its TARGET matches the package-recorded
+  target (do NOT compare a symlink's mode); the first C++ build over-emitted some
+  pristine distro symlinks (`/etc/X11/xim.d/*/40-ibus`), which this rule suppresses.
+  `package_name` is the BARE name (`openssh-server`), which libzypp gives directly
+  (do not append version/arch). Determine ownership and baseline for the whole
+  enumerated `/etc` set in a single libzypp pass (in-process; this naturally
+  satisfies the spec's bulk-lookup requirement, no per-file work).
+- `[recommended]` Forward, use libzypp MORE rather than adding breadth: enumerate
+  repositories through libzypp's repo API against `<root>`'s zypp configuration
+  rather than hand-parsing `/etc/zypp/repos.d/*.repo`, so the tool reads repos the
+  way zypp itself does (one interpretation, one trust boundary, chroot-safe because
+  it reads files under the given root). This replaces a bespoke INI parser.
+- `[verified]` `[recommended]` SHA256 via the platform crypto library: link
+  **libcrypto** (OpenSSL 3), which is already in libzypp's dependency closure,
+  rather than vendoring a hash routine. OpenSSL 3 devel is present in a fully
+  supported core module on BOTH service packs: `libopenssl-3-devel` 3.2.3 on SLE 15
+  SP7 (Basesystem Module) and 3.5.0 on SLE 16.0. Build against OpenSSL 3 on both;
+  the only difference is a minor version (3.2.3 vs 3.5.0), same API, so unlike
+  yaml-cpp and libsnapper there is NO major-version/soname split to code around for
+  this dependency. (SLE 15 SP7 also still carries OpenSSL 1.1 in the Certifications
+  and Dev Tools modules, but there is no reason to target it; use OpenSSL 3.)
+- `[recommended]` `[reserved-0.7.0]` libsolv (verified: `libsolv-devel` on both
+  SPs, and already a libzypp transitive dependency) is the right tool for
+  dependency RESOLUTION when the `apply`/transaction path is built, computing the
+  package transaction against the rpmdb under `<root>`. It is chroot-safe and not
+  needed for the read/describe path; adopt it at the apply milestone, not now. Do
+  not add it for describe.
 - CMake: locate via `find_package(Zypp)` if the devel package ships a CMake config
   or pkg-config file; otherwise `pkg_check_modules(ZYPP libzypp)` or a small Find
   module under `cmake/`. Record in `TRANSLATION_REPORT.md` which mechanism was
@@ -288,7 +324,7 @@ code must not assume one version's API.
 
 ---
 
-## Do NOT carry these over from an existing C++ implementation (spec v0.5.0-v0.6.3)
+## Do NOT carry these over from an existing C++ implementation (spec v0.5.0-v0.6.4)
 
 1. describe output ignoring the `out` extension (now follows `resolve-format`).
 2. emitting an empty scope for an unreadable source (read repos.d; never empty for
@@ -328,6 +364,13 @@ code must not assume one version's API.
 18. (v0.6.3) dropping the version from `meta.generator`; emit
     `zypper-declarative <version>` so the string matches other implementations of
     the same spec version.
+19. (v0.6.4) collapsing a symlink with its target file, or comparing a symlink's
+    mode for pristine-ness (target-match only); the first build over-emitted
+    pristine distro symlinks. Judge each path independently against its own owner.
+20. (v0.6.4) appending version/arch to `package_name` (bare name only; libzypp
+    gives the name directly). Adding boost surface gratuitously (use std::filesystem
+    and jsoncpp); hand-parsing repos.d instead of using libzypp's repo API;
+    vendoring a SHA256 routine instead of linking libcrypto.
 
 ## Slots to fill from an existing C++ implementation (if any)
 
@@ -340,6 +383,15 @@ code must not assume one version's API.
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.4. Added the pristine refinements (independent
+  per-path judgement, symlink-pristine-by-target-only - the first build over-emitted
+  pristine distro symlinks, bare `package_name`, single libzypp pass satisfying the
+  bulk-lookup rule) and forward libzypp-depth guidance: enumerate repos via libzypp
+  rather than hand-parsing repos.d, link libcrypto for SHA256 (OpenSSL 3 on both
+  SPs, `libopenssl-3-devel` 3.2.3 on 15 SP7 / 3.5.0 on 16.0, no major-version
+  split), and adopt libsolv for dependency resolution at the v0.7.0 apply
+  milestone (verified on both SPs, already transitive). Also: do not add boost
+  surface gratuitously. Items 19-20 added to the do-not-carry list.
 - 2026-06-01: Updated to spec v0.6.3, after a Go-vs-C++ describe comparison on a
   live host. Added the verified services binding (offline `systemctl --root` via
   OSCommandRunner, NOT libsystemd/sd-bus, with the rooted-operation rationale),
