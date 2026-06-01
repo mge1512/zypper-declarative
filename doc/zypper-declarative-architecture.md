@@ -4,7 +4,7 @@
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
 **Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.2)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.3)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -561,6 +561,15 @@ objective.
 
 ## Changelog
 
+- 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.3. No structural
+  change; clarifications from a Go-vs-C++ describe comparison: the package-pristine
+  rule is pinned (suppress owned-and-unchanged `/etc` entries, ownership via the
+  native package database, never defaulted to unpackaged), `_attributes` always
+  serialises as an object (`{}` not null) for Machinery consistency, `meta.generator`
+  carries the version, digests are SHA256 (md5/sha1 retired), and the config_files
+  record is documented as a declarable Machinery superset. The note in Section 5.x
+  that the reader treats `/etc` as a tree of typed objects already covers the
+  v0.6.2 model these clarifications refine.
 - 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.2 (filesystem object
   model). The state reader now treats `/etc` (and the scope=full trees) as a tree
   of typed objects: it recurses into directories, classifies each entry without

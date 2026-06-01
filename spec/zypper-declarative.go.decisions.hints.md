@@ -204,14 +204,26 @@ That means:
 - `[spec]` The `describe` verb passes `on_unreadable` through from its option;
   every other caller (apply, diff, status, verify reading live state) passes
   `on_unreadable=error`.
-- `[spec]` `[changed-0.5.2]` `config_files` actual state is the changed-from-package
-  and unpackaged `/etc` files, excluding package-pristine files, the keep-list, and
-  `/etc/etc.syncpoint`. `package_name` is populated from rpm; `content_ref` is
-  empty in actual state. Bound the work to `/etc`: do not read, hash, or verify
-  anything outside `/etc`, and do not run a whole-system verification such as
-  `rpm -Va` (it is the cause of the slow describe). Treat a verifier's non-zero
-  exit (it returns non-zero when it finds changed files) as the normal changed-file
-  result, not an unreadable source.
+- `[spec]` `[changed-0.5.2]` `[changed-0.6.3]` `config_files` actual state is the
+  changed-from-package and unpackaged `/etc` files, excluding package-pristine
+  files, the keep-list, and `/etc/etc.syncpoint`. `package_name` is populated from
+  rpm; `content_ref` is empty in actual state. Bound the work to `/etc`: do not
+  read, hash, or verify anything outside `/etc`, and do not run a whole-system
+  verification such as `rpm -Va` (it is the cause of the slow describe). Treat a
+  verifier's non-zero exit (it returns non-zero when it finds changed files) as the
+  normal changed-file result, not an unreadable source.
+  CRITICAL (the v0.6.2 Go build got this wrong, exposed by diffing against the
+  C++/libzypp build): you MUST actually determine each `/etc` entry's owning
+  package and its package-recorded baseline (digest, mode, owner, group), and
+  SUPPRESS package-pristine entries, emitting only unpackaged or changed-from-package
+  ones. The v0.6.2 build mislabelled ~1700 package-owned files as unpackaged
+  (empty `package_name`) and over-emitted them, because the ownership/digest lookup
+  was not actually performed. Do the lookup: for each enumerated `/etc` path, query
+  rpm for the owning package and the recorded file digest/mode/owner (e.g. via the
+  rpm file database; `rpm -qf` for ownership and the recorded digest for the
+  baseline), compare, and suppress when all of digest/target+mode+owner+group match.
+  Never default a path to unpackaged because the lookup was skipped. The C++ build
+  (libzypp) is the behavioural oracle for this scope.
 - `[spec]` `[changed-0.6.2]` Filesystem object model. The `/etc` walk (and the
   scope=full walk over `/usr`/`/boot`) must recurse into directories and classify
   each entry by its own type using lstat (do NOT follow symlinks, do NOT os.ReadFile
@@ -302,7 +314,7 @@ That means:
 
 ---
 
-## Do NOT carry these over from the existing code (v0.5.0 through v0.6.1 changes)
+## Do NOT carry these over from the existing code (v0.5.0 through v0.6.3 changes)
 
 1. `describe` writing JSON regardless of the `out` extension. Output now follows
    `resolve-format`.
@@ -342,6 +354,15 @@ That means:
     that carries a non-empty observational scope. Reject it with a manifest error
     so a raw `describe scope=full` dump cannot be applied as a baseline; an empty
     or absent observational scope is tolerated and dropped.
+11. (v0.6.3) mislabelling package-owned `/etc` files as unpackaged and over-emitting
+    package-pristine files (the actual v0.6.2 Go bug). Do real rpm ownership/digest
+    lookup and suppress pristine entries; emit only unpackaged or changed-from-package.
+12. (v0.6.3) serialising a scope's `_attributes` as `null`; it is always a JSON
+    object, empty `{}`. Quote string-typed YAML scalars (`mode: "0600"`).
+13. (v0.6.3) anything that makes describe output diverge from the C++ and Rust
+    builds on the same host (after excluding `meta.created_at`); the three-way
+    diff is a consistency oracle. `meta.generator` must be `zypper-declarative
+    <version>` so it matches across implementations.
 
 ## Slots to fill from /tmp/pcd-original/code/
 
@@ -360,6 +381,14 @@ That means:
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.3 after diffing the Go and C++ describe output
+  on milos. Headline: the Go build's config_files reader mislabelled ~1700
+  package-owned `/etc` files as unpackaged and over-emitted package-pristine files,
+  because the ownership/digest lookup was not actually performed; the entry and the
+  do-not-carry list now require real rpm ownership/digest determination and
+  suppression of pristine entries (the C++/libzypp build is the oracle). Also added:
+  `_attributes` `{}`-not-null and YAML string quoting, `meta.generator` carrying the
+  version, and the three-way cross-implementation diff as a consistency oracle.
 - 2026-05-29: Initial Go decisions hints for the v0.5.0 guided regeneration.
   Captures the spec-determined architecture (single live-state reader,
   pure compute-drift, shared resolve-format, abstract transaction binding,

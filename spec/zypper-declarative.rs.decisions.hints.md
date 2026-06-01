@@ -141,6 +141,12 @@ hand.
   aliases, and multi-document, then deserialize into the typed structs; record the
   exact crate and version in `TRANSLATION_REPORT.md`. A YAML input needing a
   disabled feature is a manifest error.
+- `[lesson]` On the WRITE side, string-typed fields must serialise as quoted YAML
+  scalars: `mode: "0600"`, `sha256: "..."`, `target: "..."`, not `mode: 0600`
+  (which round-trips as an int or octal). The C++ build emitted unquoted `0600`;
+  do not repeat it. The model field types are strings, so ensure the YAML emitter
+  quotes them; verify by round-tripping a written YAML file back through the
+  reader and checking types are preserved.
 
 ### Reading actual state, empty-scope rule, filesystem object model
 
@@ -185,6 +191,35 @@ hand.
 - `[spec]` The transaction binding is abstract (`acquire-transaction-context`
   resolves auto|external|internal); keep it isolated in `txn`. Unit enablement
   under a root uses offline enablement; do not rely on first-boot preset.
+- `[spec]` `[lesson]` The `services` scope is MANDATORY and is unit ENABLEMENT
+  (enabled/disabled/masked), read offline via `systemctl --root <root>` (the C++
+  build deferred it to an empty/omitted scope while Go read 214; do not repeat
+  that). A deferred-empty scope silently drops declarable state. Do not use a
+  D-Bus/sd-bus-style API: it cannot answer enablement under a non-running root,
+  which the tool's rooted model requires.
+- `[spec]` `[lesson]` Package ownership and the pristine rule: determine ownership
+  via the rpm database (query rpm for the file's owning package and recorded
+  digest/mode/owner), and SUPPRESS package-pristine `/etc` entries (owned and
+  matching the recorded digest, target, mode, owner, group); emit only unpackaged
+  or changed-from-package. Do NOT default a file to "unpackaged" because the
+  ownership lookup was skipped or failed (that was the Go bug the C++/libzypp build
+  exposed: Go over-emitted ~1700 pristine files as unpackaged). The C++ build is
+  the behavioural oracle here.
+
+### Cross-implementation consistency (the three-way oracle)
+
+- `[lesson]` The Go and C++ builds, diffed on the same host, surfaced a bug
+  (Go's pristine mislabelling) that neither build's own tests caught. Treat the
+  three implementations as a continuous consistency check: Rust `describe` output,
+  on the same host, should match the Go and C++ output after canonicalisation.
+  Any divergence is a bug in one of them, arbitrated by the spec.
+- For the comparison to be clean: scopes, field presence, type classification,
+  scalar typing, and ordering must agree. Sort `_elements` by identity key and
+  emit `_attributes` as `{}` (never null) so the structures line up. Exclude
+  `meta.created_at` from the comparison (it is a per-run timestamp); `meta.generator`
+  SHOULD match across implementations of the same spec version, so emit
+  `zypper-declarative <version>` (do not drop the version, as the first C++ build
+  did).
 
 ### Spec-hash embedding and packaging
 
@@ -210,7 +245,7 @@ hand.
 
 ---
 
-## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.2)
+## Do NOT carry these over from the existing code (spec v0.5.0 through v0.6.3)
 
 1. describe output ignoring the `out` extension (now follows `resolve-format`).
 2. repositories read in a way that returns empty on read failure, or any path that
@@ -236,6 +271,14 @@ hand.
     on encountering one; classify by lstat first, traverse dirs, record symlink
     targets verbatim, skip special files.
 12. comparing config files by content hash alone; type is part of identity.
+13. (v0.6.3) omitting/deferring the `services` scope; it is mandatory, read offline
+    via `systemctl --root`. Go reads it; do not regress.
+14. (v0.6.3) defaulting a file to "unpackaged" when the ownership lookup is skipped
+    or fails, and over-emitting package-pristine files; do real ownership/digest
+    determination and suppress pristine entries (the C++/libzypp behaviour, which
+    is correct; Go's was the bug).
+15. (v0.6.3) `_attributes` as null/`~` (always `{}`); unquoted YAML string scalars
+    like `mode: 0600` (quote them); and dropping the version from `meta.generator`.
 
 ## Slots to fill from an existing Rust implementation (if any)
 
@@ -247,6 +290,15 @@ hand.
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.3, incorporating the lessons from the Go and
+  C++ runs before Rust is generated. Added: the `services` scope is mandatory
+  (read offline via `systemctl --root`; C++ deferred it, Go read it); the
+  package-pristine rule with real ownership/digest determination and suppression
+  of pristine `/etc` entries (the C++/libzypp behaviour is the oracle; Go's
+  over-emission was the bug); a cross-implementation-consistency section making the
+  three-way describe diff a continuous check; YAML write-side string-quoting; and
+  the `_attributes` `{}`-not-null and `meta.generator`-version rules. Items 13-15
+  added to the do-not-carry list.
 - 2026-06-01: Initial Rust decisions hints, translated from the Go decisions file
   at spec v0.6.2. Same architecture and the same twelve "do NOT carry over" items,
   retargeted to Rust idiom (serde model with Option-typed scopes for absent-vs-empty,

@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.2
+Version:     0.6.3
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -57,13 +57,17 @@ UnitName := string where (ends_with(".service") OR ends_with(".timer")
 // -----------------------------------------------------------------------
 
 ScopeWrapper<T> := {
-  _attributes: object | null,   // scope-level metadata
-  _elements:   []T              // the records in the scope
+  _attributes: object,   // scope-level metadata; ALWAYS a JSON object, empty {}
+                         // when the scope has no attributes, NEVER null (Machinery
+                         // consistency: a scope's _attributes is an object)
+  _elements:   []T       // the records in the scope
 }
 
 ManifestMeta := {
   format_version: integer,   // always 1 (Machinery JSON format)
-  generator:      string,    // e.g. "zypper-declarative 0.5.0"
+  generator:      string,    // program name and version, e.g. "zypper-declarative 0.6.3";
+                             // the version is always present, so the same spec
+                             // version yields the same generator across implementations
   created_at:     string,    // RFC3339, informational only, not compared
   desired_sha256: Sha256     // canonical-model hash of the desired manifest
                              // (hash of the canonical JSON serialisation of the
@@ -134,12 +138,19 @@ ManagedFileRecord := {
 }  where (type = "file" implies sha256 matches Sha256 AND target = "")
    AND   (type = "link" implies sha256 = "" AND target != "" AND content_ref = "")
    AND   (type = "dir"  implies sha256 = "" AND target = "")
-// Aligned with the Machinery changed_config_files record (name, type, mode,
-// user, group, package_name) and extended, as sitar extends Machinery, with a
-// content digest for files and a verbatim target for symlinks. A regular file's
-// identity is its content (sha256); a symlink's identity is its target (stored
-// verbatim, so relative targets and chroot-relative targets survive); type is
-// part of identity in every comparison. v1 confines declared files to /etc.
+// This record is a declarable SUPERSET of the Machinery changed-config-files
+// record. The envelope is Machinery-consistent (the ScopeWrapper
+// _attributes/_elements idiom, underscore_style keys, and the type values
+// "file" | "link" | "dir"), so a Machinery-aware consumer can read the structure.
+// It is extended, as sitar extends Machinery, with the fields a DESIRED,
+// convergeable record needs: a content digest for files, a verbatim target for
+// symlinks, and a content_ref for supplying file content at apply time. The
+// digest is SHA256 (Machinery historically recorded md5; this format uses SHA256
+// and md5/sha1 are not used except for reading a legacy recorded digest during a
+// comparison). A regular file's identity is its content (sha256); a symlink's
+// identity is its target (stored verbatim, so relative and chroot-relative
+// targets survive); type is part of identity in every comparison. v1 confines
+// declared files to /etc.
 // describe emits file and link records; directories are traversed but not
 // emitted, and special files (device, fifo, socket) are skipped.
 
@@ -333,7 +344,7 @@ fenced and excluded from structural parsing):
     ]
   },
   "config_files": {
-    "_attributes": null,
+    "_attributes": {},
     "_elements": [
       {
         "name": "/etc/nginx/nginx.conf",
@@ -750,6 +761,30 @@ STEPS:
    - Special file: skip it; do not read, hash, or emit it, and do not error.
    Skip package-pristine files and symlinks, the keep-list, and
    `/etc/etc.syncpoint`. content_ref is "".
+
+   Ownership and the pristine rule (this is the emission test, and the source of a
+   real divergence between implementations, so it is pinned here):
+   - The owning package and the package-recorded baseline are determined through
+     the platform's native package interface (on SUSE that is the libzypp/rpm
+     database, which records, per packaged file, a content digest and the expected
+     mode, owner, and group). An implementation that drives the package tooling
+     rather than linking the library must reproduce the same determination; it
+     must NOT treat a file as unpackaged merely because an ownership lookup was not
+     performed.
+   - An entry is emitted if and only if it is UNPACKAGED (the package database
+     reports no owning package) OR CHANGED-FROM-PACKAGE (owned, but the entry
+     differs from the package-recorded baseline). A package-PRISTINE entry (owned,
+     and matching the recorded baseline) is suppressed.
+   - PRISTINE means, for an owned entry, that ALL of the following match the
+     package-recorded baseline: for a regular file the content digest; for a
+     symlink the link target; and in both cases the mode, owner, and group. If any
+     of these differs, the entry is changed-from-package and is emitted, with a
+     `changes` interpretation analogous to the changed_managed_files `changes`
+     list (the differing attribute set is what makes it non-pristine).
+   - Digests are SHA256. Legacy digest algorithms (MD5, SHA1) must not be used for
+     the pristine comparison or for the emitted `sha256`, except where reading a
+     legacy package-recorded digest is unavoidable for the comparison itself; the
+     emitted record always carries a SHA256 content digest.
    Two constraints on this step:
    - Bounded scope: the package-baseline comparison consults package metadata only
      for the `/etc` entries enumerated here. The reader does not read, hash, or
@@ -1534,6 +1569,19 @@ resolver fills in the transitive set.
 - [observable] Repositories actual state is read from the on-disk zypp
   configuration (`/etc/zypp/repos.d`), not from a network refresh or a privileged
   cache.
+- [observable] Every scope's `_attributes` is serialised as a JSON object, empty
+  `{}` when the scope has no attributes, never `null` (Machinery consistency).
+- [observable] `meta.generator` carries the program name and version (for example
+  `zypper-declarative 0.6.3`), so independent implementations of the same spec
+  version emit the same generator string.
+- [observable] All content digests, in `sha256` fields and in the package-pristine
+  comparison, are SHA256; MD5 and SHA1 are not used except where unavoidably
+  reading a legacy package-recorded digest for the comparison.
+- [observable] A package-pristine `/etc` entry (owned, and matching the
+  package-recorded content digest, target, mode, owner, and group) is suppressed
+  from config_files; only unpackaged or changed-from-package entries are emitted.
+  Ownership is determined through the native package database, never defaulted to
+  unpackaged because the lookup was skipped.
 - [observable] Drift and diff comparison uses only the declarable identity fields
   of each scope; observational extension fields in a supplied dump are ignored.
 - [implementation] The intent diff is computed without reading the filesystem.
@@ -1864,6 +1912,31 @@ THEN:
   the config_files scope reflects only files under /etc
   files outside /etc (for example under /usr) are never hashed or verified
   exit_code = 0
+
+### EXAMPLE: describe_suppresses_package_pristine_etc_file
+GIVEN:
+  /etc/foo.conf is owned by package P and is unchanged from P's recorded baseline
+    (its content digest, mode, owner, and group all match)
+  /etc/bar.conf is owned by package Q but its content has been edited
+  /etc/local.conf is owned by no package
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  /etc/foo.conf is suppressed (package-pristine), absent from config_files
+  /etc/bar.conf is emitted with package_name "Q" (changed-from-package)
+  /etc/local.conf is emitted with package_name "" (unpackaged)
+  ownership is taken from the package database, not defaulted to unpackaged
+
+### EXAMPLE: scope_attributes_always_object
+GIVEN:
+  the config_files scope has no scope-level attributes
+  invocation: zypper declarative describe
+WHEN:
+  describe serialises the manifest
+THEN:
+  config_files._attributes is the empty object {} (in YAML, {}), never null
+  every other scope's _attributes is likewise a JSON object
 
 ### EXAMPLE: describe_verify_differences_not_unreadable
 GIVEN:
@@ -2440,6 +2513,29 @@ Acceptance criteria:
 
 ## Changelog
 
+- 2026-06-01: Version 0.6.3. Clarifications driven by a cross-implementation
+  comparison: running `describe` from the Go and the C++ builds on the same host
+  exposed three divergences, two of which were spec ambiguities. (1) The
+  package-pristine rule is now pinned: an `/etc` entry is emitted only if it is
+  unpackaged or changed-from-package, and a package-pristine entry (owned, and
+  matching the package-recorded content digest, target, mode, owner, and group) is
+  suppressed; ownership is determined through the native package database (libzypp
+  on SUSE) and must not be defaulted to unpackaged because a lookup was skipped.
+  This resolves a divergence where one build correctly suppressed pristine files
+  via libzypp while another mislabelled package-owned files as unpackaged and
+  over-emitted them. (2) Every scope's `_attributes` is now required to serialise
+  as a JSON object (empty `{}`, never `null`), for Machinery consistency; the
+  ScopeWrapper type and the JSON example were corrected. (3) `meta.generator` is
+  now normative as program-name-and-version, so independent implementations of the
+  same spec version emit the same generator string (one build had dropped the
+  version). Also stated explicitly: digests are SHA256, with md5/sha1 not used
+  except for reading a legacy recorded digest during a comparison; and the
+  config_files record is documented as a declarable Machinery superset
+  (Machinery-consistent envelope and type semantics, extended with the
+  convergence fields and SHA256). The missing services scope in one build was a
+  pure implementation gap, not a spec change, and is addressed in the
+  language-specific decisions hints. Added invariants and examples for the pristine
+  rule and the attributes-object rule.
 - 2026-06-01: Version 0.6.2. Fixed a `describe` crash surfaced on a live host
   ("files: unreadable scope source: /etc: read /etc/ImageMagick-7: is a
   directory") and, with it, underspecified handling of non-regular-file entries

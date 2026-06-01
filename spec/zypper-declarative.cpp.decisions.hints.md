@@ -119,6 +119,28 @@ code must not assume one version's API.
   (`libyaml-devel`, present on both) is an alternative if yaml-cpp's cross-version
   surface proves too narrow, but prefer yaml-cpp for a C++ API; note any switch.
 
+### `[verified]` Services: offline `systemctl --root`, NOT libsystemd/sd-bus
+
+- The `services` scope is unit ENABLEMENT state (enabled / disabled / masked). The
+  first C++ build deferred this and emitted an empty (hence omitted) services
+  scope, while the Go build read 214 services; that divergence is a bug to close.
+  The services reader is mandatory in `describe-actual-state`, not a deferral.
+- Read enablement OFFLINE under the context root, via
+  `systemctl --root <root> is-enabled <unit>` and
+  `systemctl --root <root> list-unit-files`, through the `OSCommandRunner`. Do NOT
+  use libsystemd / sd-bus for this scope. Reason: sd-bus talks to the running
+  system's PID 1 and cannot answer "what is the enablement state under THIS other
+  root", but the tool's whole model is rooted operations (describe `root=/mnt`,
+  convergence into a mounted snapshot), so the D-Bus API is the wrong tool here.
+  The file/CLI route is also what the Go build does correctly.
+- `systemd-devel` is present on SLE 16 but was NOT confirmed on SLE 15 SP7 in the
+  package lists, a second reason not to take a build-time libsystemd dependency
+  for this. (libsystemd/sd-bus would only earn its place for a future LIVE
+  runtime-state feature, active/failed/substate, which the spec does not ask for
+  and which is not declarable.)
+- Purely-static units are omitted (not declarable). Normalise state to exactly
+  enabled / disabled / masked.
+
 ---
 
 ## Architecture decisions (same as Go/Rust, in C++ terms)
@@ -266,7 +288,7 @@ code must not assume one version's API.
 
 ---
 
-## Do NOT carry these over from an existing C++ implementation (spec v0.5.0-v0.6.2)
+## Do NOT carry these over from an existing C++ implementation (spec v0.5.0-v0.6.3)
 
 1. describe output ignoring the `out` extension (now follows `resolve-format`).
 2. emitting an empty scope for an unreadable source (read repos.d; never empty for
@@ -292,6 +314,20 @@ code must not assume one version's API.
     operation with no stable cross-SP API, via OSCommandRunner, explicitly noted).
 14. a static binary or vendored dependencies; link the distro shared libraries
     dynamically and build per-SP in OBS.
+15. (v0.6.3) emitting an empty/omitted `services` scope or deferring the services
+    reader; it is mandatory, read offline via `systemctl --root` (see above). A
+    deferred-empty scope silently drops declarable state.
+16. (v0.6.3) emitting more config_files than the package-pristine rule allows;
+    suppress package-pristine `/etc` entries (owned and matching the
+    package-recorded digest, target, mode, owner, group via libzypp), emit only
+    unpackaged or changed-from-package. Do not over-emit pristine files.
+17. (v0.6.3) serialising a scope's `_attributes` as `null` (or YAML `~`); it is
+    always a JSON object, empty `{}` when there are no attributes. Quote
+    string-typed scalars in YAML (`mode`, `sha256`, `target`) so `mode: "0600"`,
+    not `mode: 0600`.
+18. (v0.6.3) dropping the version from `meta.generator`; emit
+    `zypper-declarative <version>` so the string matches other implementations of
+    the same spec version.
 
 ## Slots to fill from an existing C++ implementation (if any)
 
@@ -304,6 +340,14 @@ code must not assume one version's API.
 
 ## Changelog
 
+- 2026-06-01: Updated to spec v0.6.3, after a Go-vs-C++ describe comparison on a
+  live host. Added the verified services binding (offline `systemctl --root` via
+  OSCommandRunner, NOT libsystemd/sd-bus, with the rooted-operation rationale),
+  since the first C++ build deferred services to an empty/omitted scope while Go
+  read 214. Added the v0.6.3 do-not-carry items: services mandatory; suppress
+  package-pristine `/etc` entries via libzypp (the C++ build was already correct
+  here, Go was not, this keeps it correct); `_attributes` always `{}` not null and
+  YAML string scalars quoted; and `meta.generator` carries the version.
 - 2026-06-01: Initial C++ decisions hints at spec v0.6.2. Records the verified
   SLE 15 SP7 / SLE 16.0 library bindings (libzypp for all package/rpmdb work, NOT
   librpm and NOT exec rpm; libsnapper with the soname-5-vs-7 per-SP caveat;
