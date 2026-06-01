@@ -1,0 +1,5 @@
+zypper-declarative (0.6.2-1) unstable; urgency=medium
+
+  * Initial C++ translation of the zypper-declarative spec (v0.6.2).
+
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Mon, 01 Jun 2026 10:37:00 +0200
