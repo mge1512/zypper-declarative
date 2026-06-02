@@ -1,23 +1,32 @@
-# pcd-spec-sha256: 51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+# pcd-spec-sha256: 1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+#
+# RPM spec for zypper-declarative. OBS build target (build.opensuse.org).
+# C++17, built with CMake, dynamically linked against the distribution's
+# libzypp / libsnapper / jsoncpp / yaml-cpp / libcrypto. No curl-based install.
+#
+# Per-SP compiler note: on SLE 15 SP7 the default g++ is GCC 7 (too old for
+# C++17); BuildRequires gcc15-c++ and build with g++-15. On SLE 16.0 the
+# default toolchain is GCC 15 and no special selection is needed.
+
 Name:           zypper-declarative
-Version:        0.6.6
+Version:        %(cat %{_sourcedir}/VERSION 2>/dev/null || echo 0.6.8)
 Release:        0
-Summary:        Declarative system convergence for zypper (Machinery subset)
+Summary:        Declarative convergence of SUSE system state in a snapshot transaction
 License:        GPL-2.0-or-later
+Group:          System/Management
 URL:            https://github.com/mge1512/zypper-declarative
 Source0:        %{name}-%{version}.tar.gz
 
-# Build toolchain: C++17. On SLE 15 SP7 the default gcc-c++ is GCC 7, too old
-# for clean C++17; use the side-by-side GCC 15 (gcc15-c++) and build with
-# g++-15. On SLE 16.0 the default gcc-c++ is already GCC 15.
+BuildRequires:  cmake >= 3.20
+BuildRequires:  pkgconfig
+BuildRequires:  pandoc
+# C++17 toolchain. On SLE 15 SP7 use the side-by-side GCC 15:
 %if 0%{?sle_version} && 0%{?sle_version} < 160000
 BuildRequires:  gcc15-c++
 %else
 BuildRequires:  gcc-c++
 %endif
-BuildRequires:  cmake >= 3.20
-BuildRequires:  pkgconfig
-BuildRequires:  pandoc
+# Dynamically linked distribution libraries (devel packages).
 BuildRequires:  libzypp-devel
 BuildRequires:  libsnapper-devel
 BuildRequires:  jsoncpp-devel
@@ -25,36 +34,43 @@ BuildRequires:  libyaml-cpp-devel
 BuildRequires:  libopenssl-3-devel
 
 %description
-zypper-declarative converges a SUSE system to a desired manifest expressed in
+zypper-declarative converges a SUSE system to a declarative manifest describing
 the declarable subset of the SUSE Machinery system description (packages,
-repositories, services, config_files). It applies inside a single snapshot
-transaction, records what was applied, and is idempotent. It also describes the
-actual state, computes diffs, and verifies drift. Distributed via OBS; surfaced
-as the "zypper declarative" subcommand.
+repositories, services, and /etc config files), inside a single snapshot
+transaction. The manifest is JSON (Machinery format_version 1) by default, with
+YAML as an opt-in serialisation. It reads the live system into the same model
+itself, so no separate collector is required. It is surfaced as a zypper
+subcommand and is also invokable directly.
 
 %prep
-%setup -q
+%autosetup
 
 %build
 %if 0%{?sle_version} && 0%{?sle_version} < 160000
 export CXX=g++-15
 %endif
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=%{_prefix} \
-      -DCMAKE_CXX_COMPILER=%{?sle_version:%{expand:%(test 0%{?sle_version} -lt 160000 && echo g++-15 || echo c++)}}%{!?sle_version:c++}
+cmake -S . -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=%{_prefix} \
+    %{?with_g15:-DCMAKE_CXX_COMPILER=g++-15}
 cmake --build build -j%{?_smp_build_ncpus}
 pandoc %{name}.1.md -s -t man -o %{name}.1
 
 %install
-install -D -m0755 build/%{name} %{buildroot}%{_bindir}/%{name}
-install -D -m0755 build/%{name} %{buildroot}%{_prefix}/lib/zypper/commands/%{name}
-install -D -m0644 %{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
+install -D -m 0755 build/%{name} %{buildroot}%{_bindir}/%{name}
+# zypper subcommand discovery directory
+install -D -m 0755 build/%{name} %{buildroot}%{_prefix}/lib/zypper/commands/%{name}
+install -D -m 0644 %{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
 
 %files
 %license LICENSE
+%doc README.md
 %{_bindir}/%{name}
 %{_prefix}/lib/zypper/commands/%{name}
 %{_mandir}/man1/%{name}.1*
 
 %changelog
-* Tue Jun 02 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.6-0
-- Initial package generated from zypper-declarative spec v0.6.6.
+* Tue Jun 02 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.8-0
+- Generated from spec zypper-declarative.spec.md v0.6.8
+  (sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e).
+- on_unreadable knob now honored on diff, verify, and apply (v0.6.8).

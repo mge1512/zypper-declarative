@@ -1,17 +1,14 @@
-// generated from spec: zypper-declarative.spec.md sha256:@ZD_SPEC_SHA256@
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 //
 // Build-time metadata, populated by CMake configure_file from meta.hpp.in.
-// Holds the component version and the embedded spec SHA256. Do not edit the
-// generated header; edit meta.hpp.in.
+// Single source of version (the top-level VERSION file) and the spec hash.
 #ifndef ZD_META_HPP
 #define ZD_META_HPP
 
 namespace zd {
-
 inline constexpr const char* kProgramName = "zypper-declarative";
-inline constexpr const char* kVersion = "@ZD_VERSION@";
-inline constexpr const char* kSpecSha256 = "@ZD_SPEC_SHA256@";
-
+inline constexpr const char* kVersion     = "@ZD_VERSION@";
+inline constexpr const char* kSpecSha256  = "@ZD_SPEC_SHA256@";
 }  // namespace zd
 
 #endif  // ZD_META_HPP

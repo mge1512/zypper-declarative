@@ -1,8 +1,7 @@
-// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 //
-// compute-intent-diff and compute-drift. Both are pure functions over
-// in-memory Manifest values; they perform no filesystem, rpmdb, or process
-// I/O. The keep-list (paths never reported or deleted) is passed in.
+// Pure comparison behaviours: compute-intent-diff (desired vs applied) and
+// compute-drift (actual vs reference). Neither performs any I/O.
 #ifndef ZD_DIFF_HPP
 #define ZD_DIFF_HPP
 
@@ -13,13 +12,18 @@
 
 namespace zd {
 
-// compute-intent-diff: desired vs applied, scope by scope.
-Diff compute_intent_diff(const Manifest& desired, const AppliedRecord& applied);
+// A keep-list: paths that compute-drift and converge-files must never report
+// or delete. Empty by default.
+using KeepList = std::set<std::string>;
 
-// compute-drift: actual vs reference, scope by scope on identity fields.
-// keep_list paths and /etc/etc.syncpoint never appear in files_extra.
-DriftReport compute_drift(const Manifest& actual, const AppliedRecord& reference,
-                          const std::set<std::string>& keep_list);
+// compute-intent-diff: changes from applied (old) to desired (new), scope by
+// scope. A scope absent in desired yields no change for that scope.
+Diff compute_intent_diff(const Manifest& desired, const Manifest& applied);
+
+// compute-drift: actual vs reference (a desired manifest OR an applied record;
+// same schema). Type is part of a config file's identity.
+DriftReport compute_drift(const Manifest& actual, const Manifest& reference,
+                          const KeepList& keep_list);
 
 }  // namespace zd
 

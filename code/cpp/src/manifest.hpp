@@ -1,71 +1,70 @@
-// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 //
-// Manifest serialisation and loading. Covers:
-//   resolve-format          single authority for serialisation choice
-//   serialise               Manifest -> JSON or YAML (canonical, ScopeWrapper)
-//   canonical_json          deterministic JSON used for desired_sha256
-//   load-desired-manifest   read+validate+hash a desired manifest
-//   load-applied-record     read the applied record of a generation
+// Manifest serialisation and parsing. Single authority for serialisation
+// choice (resolve-format), JSON/YAML read/write, the canonical-model hash
+// (desired_sha256), and load-desired-manifest / load-applied-record.
 #ifndef ZD_MANIFEST_HPP
 #define ZD_MANIFEST_HPP
 
 #include <optional>
 #include <string>
 
-#include "config.hpp"
+#include "diagnostic.hpp"
 #include "types.hpp"
 
 namespace zd {
 
-// resolve-format: explicit format= wins; else operative file extension; else
-// the manifest-format CONFIG default.
+// resolve-format: explicit format= wins, else operative file extension
+// (.json -> json, .yaml/.yml -> yaml), else the manifest-format default.
 ManifestFormat resolve_format(const std::optional<ManifestFormat>& explicit_fmt,
                               const std::optional<std::string>& path,
-                              ManifestFormat config_default);
+                              ManifestFormat default_fmt);
 
-// Serialise a Manifest in the resolved format. A nullopt scope is OMITTED
-// entirely; a present scope is written with _attributes (object, never null)
-// and _elements. JSON is pretty (2-space). YAML quotes string scalars.
-std::string serialise(const Manifest& m, ManifestFormat fmt);
+// Parse a recognised format string ("json"/"yaml"); nullopt if unknown.
+std::optional<ManifestFormat> parse_format(const std::string& s);
 
-// Canonical JSON of the parsed data model used for the format-independent
-// desired_sha256: keys sorted, compact, _elements sorted by identity key,
-// meta.created_at and meta.desired_sha256 excluded from the hashed form.
-std::string canonical_json(const Manifest& m);
+// Serialise a Manifest to canonical JSON (Machinery format_version 1).
+// pretty=true produces indented output for human/file consumption; pretty=false
+// produces the compact canonical form used for hashing.
+std::string serialise_json(const Manifest& m, bool pretty);
 
-// Compute desired_sha256 = SHA256(canonical_json(m)).
-std::string desired_sha256(const Manifest& m);
+// Serialise a Manifest to YAML (same data model; not Machinery-compatible).
+std::string serialise_yaml(const Manifest& m);
 
-struct LoadResult {
-    bool ok = false;
+// Canonical-model hash: SHA256 of the canonical (compact, sorted) JSON
+// serialisation of the parsed data model. Format-independent.
+std::string canonical_sha256(const Manifest& m);
+
+// Hex SHA256 of arbitrary bytes (libcrypto).
+std::string sha256_hex(const std::string& bytes);
+
+// Parse a manifest document from text in the given format into the data model.
+// schema_validate=true enforces the desired-manifest rules (format_version==1,
+// observational scopes must be empty/absent). Returns a Diagnostic on failure.
+struct LoadedManifest {
     Manifest manifest;
-    std::string desired_sha256;
-    Diagnostic error;
+    std::string desired_sha256;  // canonical-model hash
 };
 
-// load-desired-manifest: read, resolve format, parse (JSON or safe-profile
-// YAML), schema-validate, reject non-empty observational scopes, optionally
-// verify signature, compute desired_sha256.
-LoadResult load_desired_manifest(const std::string& manifest_path,
-                                 const std::optional<ManifestFormat>& fmt,
-                                 const Config& cfg);
+// load-desired-manifest: read file at path, resolve format, parse (YAML under a
+// safe profile), schema-validate, compute desired_sha256.
+Result<LoadedManifest> load_desired_manifest(
+    const std::string& manifest_path,
+    const std::optional<ManifestFormat>& explicit_fmt,
+    ManifestFormat default_fmt);
 
-// Parse a captured actual-state dump (Manifest) for diff/verify state-path.
-// Schema-validated; observational scopes are tolerated here (a dump may carry
-// them). Returns a manifest with present scopes as found.
-LoadResult load_state_dump(const std::string& state_path,
-                           const std::optional<ManifestFormat>& fmt,
-                           const Config& cfg);
-
-struct AppliedLoad {
-    bool ok = false;       // false only on a present-but-corrupt record
-    AppliedRecord record;  // all scopes empty if absent
-    bool present = false;
-    Diagnostic error;
-};
+// Load a captured actual-state dump (a Manifest) from a file. Observational
+// scopes are tolerated (this is an actual-state dump, not a desired manifest).
+Result<Manifest> load_state_dump(const std::string& state_path,
+                                 const std::optional<ManifestFormat>& explicit_fmt,
+                                 ManifestFormat default_fmt);
 
 // load-applied-record: read <root>/usr/lib/zypper-declarative/applied.json.
-AppliedLoad load_applied_record(const std::string& root);
+struct AppliedLoad {
+    Manifest record;  // all scopes empty if absent
+    bool present = false;
+};
+Result<AppliedLoad> load_applied_record(const std::string& root);
 
 }  // namespace zd
 

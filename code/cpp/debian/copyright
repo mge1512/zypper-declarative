@@ -4,7 +4,7 @@ Upstream-Contact: Matthias G. Eckermann <pcd@mailbox.org>
 Source: https://github.com/mge1512/zypper-declarative
 
 Files: *
-Copyright: 2026 Matthias G. Eckermann <pcd@mailbox.org>
+Copyright: Matthias G. Eckermann <pcd@mailbox.org> and contributors
 License: GPL-2.0-or-later
 
 License: GPL-2.0-or-later
@@ -14,4 +14,5 @@ License: GPL-2.0-or-later
  version.
  .
  The full text of the GNU General Public License version 2 is available at
- https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+ https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt and on Debian systems in
+ the file /usr/share/common-licenses/GPL-2.

@@ -1,36 +1,27 @@
 #!/usr/bin/make -f
-# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
-export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# debian/rules for zypper-declarative (C++17, CMake, dynamic linking).
+# X-PCD-Spec-SHA256: 1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 
-# Use GCC 15 for C++17 where a side-by-side g++-15 is available.
-ifeq ($(shell command -v g++-15 2>/dev/null),)
-  export CXX = g++
-else
-  export CXX = g++-15
-endif
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
 	dh $@
 
 override_dh_auto_configure:
-	cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_CXX_COMPILER=$(CXX)
+	cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 
 override_dh_auto_build:
 	cmake --build build -j
 	pandoc zypper-declarative.1.md -s -t man -o zypper-declarative.1
 
 override_dh_auto_install:
-	install -D -m0755 build/zypper-declarative \
-		debian/zypper-declarative/usr/bin/zypper-declarative
-	install -D -m0755 build/zypper-declarative \
-		debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
-	install -D -m0644 zypper-declarative.1 \
-		debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
+	install -D -m 0755 build/zypper-declarative \
+	    debian/zypper-declarative/usr/bin/zypper-declarative
+	install -D -m 0755 build/zypper-declarative \
+	    debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
+	install -D -m 0644 zypper-declarative.1 \
+	    debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
 
 override_dh_auto_test:
-	# black-box tests require the built binary at the project root
-	cp -f build/zypper-declarative ./zypper-declarative
-	$(CXX) -std=c++17 -Wall -o independent_tests/claude-opus-4-8/run_tests \
-		independent_tests/claude-opus-4-8/zypper_declarative_test.cpp
-	cd independent_tests/claude-opus-4-8 && ./run_tests
+	# Black-box suite requires the binary at the project root; skipped in the
+	# packaging build (run via `make test` during development).

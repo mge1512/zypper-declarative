@@ -1,21 +1,21 @@
-# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
-# Translation workflow for zypper-declarative (C++ / cli-tool).
-# Render with: pikchr translation-workflow.pikchr > translation-workflow.svg
-
-box "spec" "zypper-declarative.spec.md" fit
-arrow right 0.4
-box "template" "cli-tool.template.md" fit
-arrow right 0.4
-box "hints" "cpp.decisions" "+ cpp.milestones" fit
+# translation-workflow.pikchr
+# generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+#
+# Pikchr diagram of the zypper-declarative C++ translation workflow:
+# spec + template + hints -> tests-first -> implementation -> compile gate
+# -> packaging -> report.
 
 down
-arrow from last box.s down 0.4
-box "Tests First" "independent_tests/" "claude-opus-4-8/" fit
-arrow down 0.4
-box "implementation" "src/*.{hpp,cpp}" "CMake, dynamic libs" fit
-arrow down 0.4
-box "packaging" "Makefile, RPM, DEB" "man, LICENSE" fit
-arrow down 0.4
-box "compile gate" "cmake + run tests" fit
-arrow down 0.4
-box "TRANSLATION_REPORT.md" fit
+box "spec v0.6.8" "+ cli-tool template" "+ C++ hints" fit fill 0xeef
+arrow
+box "Phase 1" "Tests First" "(independent_tests/" "claude-opus-4-8/)" fit fill 0xefe
+arrow
+box "Phase 2" "Core impl" "(src/*.cpp, *.hpp," "CMakeLists.txt)" fit fill 0xefe
+arrow
+box "Phase 3" "Packaging" "(Makefile, .spec," "debian/, LICENSE)" fit fill 0xfee
+arrow
+box "Phase 5" "Docs" "(README.md," "man page)" fit fill 0xfee
+arrow
+box "Phase 6" "Compile gate" "cmake build +" "make test (36/36)" fit fill 0xffe
+arrow
+box "Phase 7" "TRANSLATION_" "REPORT.md" fit fill 0xeef

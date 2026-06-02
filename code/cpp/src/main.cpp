@@ -1,31 +1,31 @@
-// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 //
-// Entry point. CLI dispatch wiring only: install signal handlers for a clean
-// exit, collect argv, and call into the implementation. No behaviour is
-// implemented here (per SOURCE-PARTITIONING: one-entry-one-implementation).
-
+// Entry point: signal handling and dispatch only. All behaviour lives in the
+// implementation modules; this file performs no spec behaviour itself.
 #include <csignal>
-#include <cstdlib>
 #include <string>
 #include <vector>
 
 #include "cli.hpp"
 #include "command_runner.hpp"
 
-extern "C" void zd_on_signal(int) {
-    // Clean exit on SIGTERM/SIGINT with no partial output. Read-only verbs
-    // hold no transaction; apply discards an in-flight transaction in its own
-    // handler. _exit is async-signal-safe.
+namespace {
+// Clean exit on SIGTERM / SIGINT: no partial output. For the read-only verbs a
+// default termination is clean; the apply path discards its transaction on
+// interruption (handled inside the transaction module on a live host).
+extern "C" void on_signal(int) {
+    // async-signal-safe: terminate without flushing partial buffered output.
     _exit(130);
 }
+}  // namespace
 
 int main(int argc, char** argv) {
-    std::signal(SIGTERM, zd_on_signal);
-    std::signal(SIGINT, zd_on_signal);
+    std::signal(SIGTERM, on_signal);
+    std::signal(SIGINT, on_signal);
 
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);
 
     zd::OSCommandRunner runner;
-    return zd::dispatch(args, runner);
+    return zd::run_cli(args, runner);
 }

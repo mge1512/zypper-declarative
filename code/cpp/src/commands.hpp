@@ -1,21 +1,32 @@
-// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 //
-// The CLI verbs (apply, diff, verify, status, describe). Each returns an exit
-// code and writes diagnostics to stderr and normal output to stdout. The verb
-// layer is the only place that maps an internal Diagnostic to an exit code.
+// The CLI verbs (apply, diff, verify, status, describe, init). Each verb maps
+// internal-behaviour Diagnostics to the spec's exit codes (0/1/2). The verbs
+// are the only layer that decides the process exit status.
 #ifndef ZD_COMMANDS_HPP
 #define ZD_COMMANDS_HPP
 
+#include <map>
+#include <optional>
+#include <string>
+
 #include "command_runner.hpp"
-#include "config.hpp"
 
 namespace zd {
 
-int cmd_apply(const Config& cfg, const CommandRunner& runner);
-int cmd_diff(const Config& cfg, const CommandRunner& runner);
-int cmd_verify(const Config& cfg, const CommandRunner& runner);
-int cmd_status(const Config& cfg, const CommandRunner& runner);
-int cmd_describe(const Config& cfg, const CommandRunner& runner);
+// Parsed invocation: a verb and the key=value options.
+struct Invocation {
+    std::string verb;
+    std::map<std::string, std::string> options;  // key=value
+};
+
+// Each verb runs and returns the process exit code, writing stdout/stderr.
+int cmd_apply(const Invocation& inv, const CommandRunner& runner);
+int cmd_diff(const Invocation& inv, const CommandRunner& runner);
+int cmd_verify(const Invocation& inv, const CommandRunner& runner);
+int cmd_status(const Invocation& inv, const CommandRunner& runner);
+int cmd_describe(const Invocation& inv, const CommandRunner& runner);
+int cmd_init(const Invocation& inv, const CommandRunner& runner);
 
 }  // namespace zd
 

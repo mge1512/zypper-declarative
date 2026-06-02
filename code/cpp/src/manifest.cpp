@@ -1,138 +1,106 @@
-// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
-
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 #include "manifest.hpp"
 
-#include <algorithm>
-#include <fstream>
-#include <map>
-#include <sstream>
+#include <openssl/evp.h>
 
 #include <json/json.h>
 #include <yaml-cpp/yaml.h>
 
-#include "hash.hpp"
+#include <algorithm>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+
+#include "meta.hpp"
 
 namespace zd {
 
-// --------------------------------------------------------------------------
-// resolve-format
-// --------------------------------------------------------------------------
-static std::optional<ManifestFormat> ext_format(const std::string& path) {
-    auto dot = path.rfind('.');
-    if (dot == std::string::npos) return std::nullopt;
+namespace {
+
+// ----------------------------------------------------------------------
+// resolve-format helpers
+// ----------------------------------------------------------------------
+std::string lower_ext(const std::string& path) {
+    auto dot = path.find_last_of('.');
+    if (dot == std::string::npos) return "";
     std::string ext = path.substr(dot + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext == "json") return ManifestFormat::Json;
-    if (ext == "yaml" || ext == "yml") return ManifestFormat::Yaml;
-    return std::nullopt;
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return ext;
 }
 
-ManifestFormat resolve_format(const std::optional<ManifestFormat>& explicit_fmt,
-                              const std::optional<std::string>& path,
-                              ManifestFormat config_default) {
-    if (explicit_fmt) return *explicit_fmt;            // explicit wins
-    if (path) {
-        auto e = ext_format(*path);
-        if (e) return *e;                              // recognised extension
-    }
-    return config_default;                             // CONFIG default
-}
-
-// --------------------------------------------------------------------------
-// JSON <-> model
-// --------------------------------------------------------------------------
-static Json::Value attrs_to_json(const std::map<std::string, std::string>& a) {
+// ----------------------------------------------------------------------
+// JSON <-> data model (jsoncpp)
+// ----------------------------------------------------------------------
+Json::Value attrs_to_json(const std::map<std::string, std::string>& a) {
     Json::Value o(Json::objectValue);  // ALWAYS an object, never null
     for (const auto& kv : a) o[kv.first] = kv.second;
     return o;
 }
 
-static Json::Value pkg_to_json(const PackageRecord& p) {
+Json::Value pkg_to_json(const PackageRecord& r) {
     Json::Value v(Json::objectValue);
-    v["name"] = p.name;
-    v["version"] = p.version;
-    v["release"] = p.release;
-    v["arch"] = p.arch;
+    v["name"] = r.name; v["version"] = r.version;
+    v["release"] = r.release; v["arch"] = r.arch;
     return v;
 }
-static Json::Value repo_to_json(const RepositoryRecord& r) {
+Json::Value repo_to_json(const RepositoryRecord& r) {
     Json::Value v(Json::objectValue);
-    v["alias"] = r.alias;
-    v["name"] = r.name;
-    v["url"] = r.url;
-    v["type"] = r.type;
-    v["enabled"] = r.enabled;
-    v["gpgcheck"] = r.gpgcheck;
+    v["alias"] = r.alias; v["name"] = r.name; v["url"] = r.url; v["type"] = r.type;
+    v["enabled"] = r.enabled; v["gpgcheck"] = r.gpgcheck;
     v["autorefresh"] = r.autorefresh;
     v["priority"] = static_cast<Json::Int64>(r.priority);
     return v;
 }
-static Json::Value svc_to_json(const ServiceRecord& s) {
+Json::Value svc_to_json(const ServiceRecord& r) {
     Json::Value v(Json::objectValue);
-    v["name"] = s.name;
-    v["state"] = s.state;
+    v["name"] = r.name; v["state"] = r.state;
     return v;
 }
-static Json::Value file_to_json(const ManagedFileRecord& f) {
+Json::Value file_to_json(const ManagedFileRecord& r) {
     Json::Value v(Json::objectValue);
-    v["name"] = f.name;
-    v["type"] = f.type;
-    v["mode"] = f.mode;
-    v["user"] = f.user;
-    v["group"] = f.group;
-    v["sha256"] = f.sha256;
-    v["target"] = f.target;
-    v["content_ref"] = f.content_ref;
-    v["package_name"] = f.package_name;
+    v["name"] = r.name; v["type"] = r.type; v["mode"] = r.mode;
+    v["user"] = r.user; v["group"] = r.group; v["sha256"] = r.sha256;
+    v["target"] = r.target; v["content_ref"] = r.content_ref;
+    v["package_name"] = r.package_name;
     return v;
 }
-static Json::Value mbase_to_json(const ManagedBaselineRecord& f) {
+Json::Value mbase_to_json(const ManagedBaselineRecord& r) {
     Json::Value v(Json::objectValue);
-    v["name"] = f.name;
-    v["type"] = f.type;
-    v["mode"] = f.mode;
-    v["user"] = f.user;
-    v["group"] = f.group;
-    v["sha256"] = f.sha256;
-    v["target"] = f.target;
-    v["package_name"] = f.package_name;
+    v["name"] = r.name; v["type"] = r.type; v["mode"] = r.mode;
+    v["user"] = r.user; v["group"] = r.group; v["sha256"] = r.sha256;
+    v["target"] = r.target; v["package_name"] = r.package_name;
     Json::Value ch(Json::arrayValue);
-    for (const auto& c : f.changes) ch.append(c);
+    for (const auto& c : r.changes) ch.append(c);
     v["changes"] = ch;
     return v;
 }
-static Json::Value unmanaged_to_json(const UnmanagedFileRecord& f) {
+Json::Value unmanaged_to_json(const UnmanagedFileRecord& r) {
     Json::Value v(Json::objectValue);
-    v["name"] = f.name;
-    v["type"] = f.type;
-    v["mode"] = f.mode;
-    v["user"] = f.user;
-    v["group"] = f.group;
-    v["sha256"] = f.sha256;
-    v["target"] = f.target;
+    v["name"] = r.name; v["type"] = r.type; v["mode"] = r.mode;
+    v["user"] = r.user; v["group"] = r.group; v["sha256"] = r.sha256;
+    v["target"] = r.target;
     return v;
 }
 
 template <class T, class F>
-static Json::Value scope_to_json(const ScopeWrapper<T>& scope, F to_json) {
+Json::Value scope_to_json(const ScopeWrapper<T>& s, F to_json) {
     Json::Value v(Json::objectValue);
-    v["_attributes"] = attrs_to_json(scope.attributes);
+    v["_attributes"] = attrs_to_json(s.attributes);
     Json::Value els(Json::arrayValue);
-    for (const auto& e : scope.elements) els.append(to_json(e));
+    for (const auto& e : s.elements) els.append(to_json(e));
     v["_elements"] = els;
     return v;
 }
 
-static Json::Value manifest_to_json(const Manifest& m, bool include_meta) {
+Json::Value manifest_to_json(const Manifest& m) {
     Json::Value root(Json::objectValue);
-    if (include_meta) {
-        Json::Value meta(Json::objectValue);
-        meta["format_version"] = m.meta.format_version;
-        meta["generator"] = m.meta.generator;
-        meta["created_at"] = m.meta.created_at;
-        meta["desired_sha256"] = m.meta.desired_sha256;
-        root["meta"] = meta;
-    }
+    Json::Value meta(Json::objectValue);
+    meta["format_version"] = m.meta.format_version;
+    meta["generator"] = m.meta.generator;
+    meta["created_at"] = m.meta.created_at;
+    meta["desired_sha256"] = m.meta.desired_sha256;
+    root["meta"] = meta;
     if (m.packages)
         root["packages"] = scope_to_json(*m.packages, pkg_to_json);
     if (m.repositories)
@@ -145,612 +113,507 @@ static Json::Value manifest_to_json(const Manifest& m, bool include_meta) {
         root["changed_managed_files"] =
             scope_to_json(*m.changed_managed_files, mbase_to_json);
     if (m.unmanaged_files)
-        root["unmanaged_files"] =
-            scope_to_json(*m.unmanaged_files, unmanaged_to_json);
+        root["unmanaged_files"] = scope_to_json(*m.unmanaged_files, unmanaged_to_json);
     return root;
 }
 
-// --------------------------------------------------------------------------
-// Serialise (pretty JSON or YAML)
-// --------------------------------------------------------------------------
-static std::string emit_yaml_scalar(const std::string& s) {
-    // Quote every string scalar so e.g. mode "0600" or version "1.10" is not
-    // coerced. Escape embedded quotes/backslashes minimally.
-    std::string out = "\"";
-    for (char c : s) {
-        if (c == '\\' || c == '"') out.push_back('\\');
-        out.push_back(c);
-    }
-    out.push_back('"');
-    return out;
-}
-
-static std::string json_to_yaml(const Json::Value& root);
-
-std::string serialise(const Manifest& m, ManifestFormat fmt) {
-    Json::Value root = manifest_to_json(m, /*include_meta=*/true);
-    if (fmt == ManifestFormat::Json) {
-        Json::StreamWriterBuilder b;
-        b["indentation"] = "  ";
-        b["emitUTF8"] = true;
-        return Json::writeString(b, root) + "\n";
-    }
-    return json_to_yaml(root);
-}
-
-// Render a JSON object/array tree as YAML (block style), quoting all string
-// scalars. Sufficient for the manifest shapes we emit.
-static void yaml_node(std::ostringstream& o, const Json::Value& v,
-                      const std::string& indent);
-
-static std::string json_to_yaml(const Json::Value& root) {
-    std::ostringstream o;
-    yaml_node(o, root, "");
-    return o.str();
-}
-
-static std::string yaml_scalar_of(const Json::Value& v) {
-    if (v.isString()) return emit_yaml_scalar(v.asString());
-    if (v.isBool()) return v.asBool() ? "true" : "false";
-    if (v.isIntegral()) return std::to_string(v.asInt64());
-    if (v.isNumeric()) return std::to_string(v.asDouble());
-    if (v.isNull()) return "null";
-    return emit_yaml_scalar(v.asString());
-}
-
-static void yaml_node(std::ostringstream& o, const Json::Value& v,
-                      const std::string& indent) {
-    if (v.isObject()) {
-        for (const auto& key : v.getMemberNames()) {
-            const Json::Value& child = v[key];
-            if (child.isObject()) {
-                if (child.empty()) {
-                    o << indent << key << ": {}\n";
-                } else {
-                    o << indent << key << ":\n";
-                    yaml_node(o, child, indent + "  ");
-                }
-            } else if (child.isArray()) {
-                if (child.empty()) {
-                    o << indent << key << ": []\n";
-                } else {
-                    o << indent << key << ":\n";
-                    for (const auto& el : child) {
-                        o << indent << "  -";
-                        if (el.isObject() || el.isArray()) {
-                            o << "\n";
-                            yaml_node(o, el, indent + "    ");
-                        } else {
-                            o << " " << yaml_scalar_of(el) << "\n";
-                        }
-                    }
-                }
-            } else {
-                o << indent << key << ": " << yaml_scalar_of(child) << "\n";
-            }
-        }
-    } else if (v.isArray()) {
-        for (const auto& el : v) {
-            o << indent << "-";
-            if (el.isObject() || el.isArray()) {
-                o << "\n";
-                yaml_node(o, el, indent + "  ");
-            } else {
-                o << " " << yaml_scalar_of(el) << "\n";
-            }
-        }
-    } else {
-        o << indent << yaml_scalar_of(v) << "\n";
-    }
-}
-
-// --------------------------------------------------------------------------
-// Canonical JSON for desired_sha256 (deterministic, format-independent)
-// --------------------------------------------------------------------------
-static void write_canonical(std::ostringstream& o, const Json::Value& v);
-
-static std::string escape_json(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out.push_back(c);
-        }
-    }
-    return out;
-}
-
-static void write_canonical(std::ostringstream& o, const Json::Value& v) {
-    if (v.isObject()) {
-        std::vector<std::string> keys = v.getMemberNames();
-        std::sort(keys.begin(), keys.end());
-        o << "{";
-        for (size_t i = 0; i < keys.size(); ++i) {
-            if (i) o << ",";
-            o << "\"" << escape_json(keys[i]) << "\":";
-            write_canonical(o, v[keys[i]]);
-        }
-        o << "}";
-    } else if (v.isArray()) {
-        o << "[";
-        for (Json::ArrayIndex i = 0; i < v.size(); ++i) {
-            if (i) o << ",";
-            write_canonical(o, v[i]);
-        }
-        o << "]";
-    } else if (v.isString()) {
-        o << "\"" << escape_json(v.asString()) << "\"";
-    } else if (v.isBool()) {
-        o << (v.asBool() ? "true" : "false");
-    } else if (v.isIntegral()) {
-        o << v.asInt64();
-    } else if (v.isNull()) {
-        o << "null";
-    } else {
-        o << v.asDouble();
-    }
-}
-
-std::string canonical_json(const Manifest& m) {
-    // Build a copy with _elements sorted by identity key and meta reduced to
-    // only the hashed fields (format_version) — created_at and desired_sha256
-    // are informational and must not affect identity.
-    Manifest c = m;
-    // Drop observational scopes from the identity (they never belong to a
-    // desired manifest / applied record identity).
-    c.changed_managed_files.reset();
-    c.unmanaged_files.reset();
-    if (c.packages)
-        std::sort(c.packages->elements.begin(), c.packages->elements.end(),
+// Canonical JSON: _elements sorted by identity key, attributes already sorted
+// (std::map), compact separators. Produces a stable byte stream for hashing.
+Manifest sort_for_canonical(Manifest m) {
+    if (m.packages)
+        std::sort(m.packages->elements.begin(), m.packages->elements.end(),
                   [](const PackageRecord& a, const PackageRecord& b) {
                       if (a.name != b.name) return a.name < b.name;
                       return a.arch < b.arch;
                   });
-    if (c.repositories)
-        std::sort(c.repositories->elements.begin(),
-                  c.repositories->elements.end(),
+    if (m.repositories)
+        std::sort(m.repositories->elements.begin(), m.repositories->elements.end(),
                   [](const RepositoryRecord& a, const RepositoryRecord& b) {
                       return a.alias < b.alias;
                   });
-    if (c.services)
-        std::sort(c.services->elements.begin(), c.services->elements.end(),
+    if (m.services)
+        std::sort(m.services->elements.begin(), m.services->elements.end(),
                   [](const ServiceRecord& a, const ServiceRecord& b) {
                       return a.name < b.name;
                   });
-    if (c.config_files)
-        std::sort(c.config_files->elements.begin(),
-                  c.config_files->elements.end(),
+    if (m.config_files)
+        std::sort(m.config_files->elements.begin(), m.config_files->elements.end(),
                   [](const ManagedFileRecord& a, const ManagedFileRecord& b) {
                       return a.name < b.name;
                   });
-    Json::Value root = manifest_to_json(c, /*include_meta=*/false);
-    // Identity meta: only the structural format_version.
-    Json::Value meta(Json::objectValue);
-    meta["format_version"] = c.meta.format_version;
-    root["meta"] = meta;
-    std::ostringstream o;
-    write_canonical(o, root);
-    return o.str();
+    return m;
 }
 
-std::string desired_sha256(const Manifest& m) {
-    return sha256_hex(canonical_json(m));
+std::string json_to_string(const Json::Value& v, bool pretty) {
+    Json::StreamWriterBuilder b;
+    if (pretty) {
+        b["indentation"] = "  ";
+    } else {
+        b["indentation"] = "";
+    }
+    b["commentStyle"] = "None";
+    b["sortKeys"] = true;  // stable key order for canonicalisation
+    return Json::writeString(b, v);
 }
 
-// --------------------------------------------------------------------------
-// JSON -> model parse
-// --------------------------------------------------------------------------
-static std::map<std::string, std::string> parse_attrs(const Json::Value& v) {
+// ----------------------------------------------------------------------
+// JSON parsing -> data model
+// ----------------------------------------------------------------------
+std::map<std::string, std::string> json_attrs(const Json::Value& v) {
     std::map<std::string, std::string> a;
     if (v.isObject()) {
         for (const auto& k : v.getMemberNames()) {
-            const Json::Value& el = v[k];
-            a[k] = el.isString() ? el.asString()
-                                  : el.isNull() ? std::string() : el.asString();
+            const Json::Value& e = v[k];
+            if (e.isString()) a[k] = e.asString();
+            else a[k] = e.asString();
         }
     }
     return a;
 }
 
-static PackageRecord parse_pkg(const Json::Value& v) {
-    PackageRecord p;
-    p.name = v.get("name", "").asString();
-    p.version = v.get("version", "").asString();
-    p.release = v.get("release", "").asString();
-    p.arch = v.get("arch", "").asString();
-    return p;
+PackageRecord json_pkg(const Json::Value& v) {
+    PackageRecord r;
+    r.name = v.get("name", "").asString();
+    r.version = v.get("version", "").asString();
+    r.release = v.get("release", "").asString();
+    r.arch = v.get("arch", "").asString();
+    return r;
 }
-static RepositoryRecord parse_repo(const Json::Value& v) {
+RepositoryRecord json_repo(const Json::Value& v) {
     RepositoryRecord r;
     r.alias = v.get("alias", "").asString();
     r.name = v.get("name", "").asString();
     r.url = v.get("url", "").asString();
     r.type = v.get("type", "").asString();
-    r.enabled = v.get("enabled", false).asBool();
-    r.gpgcheck = v.get("gpgcheck", false).asBool();
+    r.enabled = v.get("enabled", true).asBool();
+    r.gpgcheck = v.get("gpgcheck", true).asBool();
     r.autorefresh = v.get("autorefresh", false).asBool();
-    r.priority = v.get("priority", 0).asInt64();
+    r.priority = v.get("priority", 99).asInt64();
     return r;
 }
-static ServiceRecord parse_svc(const Json::Value& v) {
-    ServiceRecord s;
-    s.name = v.get("name", "").asString();
-    s.state = v.get("state", "").asString();
-    return s;
+ServiceRecord json_svc(const Json::Value& v) {
+    ServiceRecord r;
+    r.name = v.get("name", "").asString();
+    r.state = v.get("state", "").asString();
+    return r;
 }
-static ManagedFileRecord parse_file(const Json::Value& v) {
-    ManagedFileRecord f;
-    f.name = v.get("name", "").asString();
-    f.type = v.get("type", "").asString();
-    f.mode = v.get("mode", "").asString();
-    f.user = v.get("user", "").asString();
-    f.group = v.get("group", "").asString();
-    f.sha256 = v.get("sha256", "").asString();
-    f.target = v.get("target", "").asString();
-    f.content_ref = v.get("content_ref", "").asString();
-    f.package_name = v.get("package_name", "").asString();
-    return f;
+ManagedFileRecord json_file(const Json::Value& v) {
+    ManagedFileRecord r;
+    r.name = v.get("name", "").asString();
+    r.type = v.get("type", "").asString();
+    r.mode = v.get("mode", "").asString();
+    r.user = v.get("user", "").asString();
+    r.group = v.get("group", "").asString();
+    r.sha256 = v.get("sha256", "").asString();
+    r.target = v.get("target", "").asString();
+    r.content_ref = v.get("content_ref", "").asString();
+    r.package_name = v.get("package_name", "").asString();
+    return r;
 }
-static ManagedBaselineRecord parse_mbase(const Json::Value& v) {
-    ManagedBaselineRecord f;
-    f.name = v.get("name", "").asString();
-    f.type = v.get("type", "").asString();
-    f.mode = v.get("mode", "").asString();
-    f.user = v.get("user", "").asString();
-    f.group = v.get("group", "").asString();
-    f.sha256 = v.get("sha256", "").asString();
-    f.target = v.get("target", "").asString();
-    f.package_name = v.get("package_name", "").asString();
+ManagedBaselineRecord json_mbase(const Json::Value& v) {
+    ManagedBaselineRecord r;
+    r.name = v.get("name", "").asString();
+    r.type = v.get("type", "").asString();
+    r.mode = v.get("mode", "").asString();
+    r.user = v.get("user", "").asString();
+    r.group = v.get("group", "").asString();
+    r.sha256 = v.get("sha256", "").asString();
+    r.target = v.get("target", "").asString();
+    r.package_name = v.get("package_name", "").asString();
     if (v.isMember("changes") && v["changes"].isArray())
-        for (const auto& c : v["changes"]) f.changes.push_back(c.asString());
-    return f;
+        for (const auto& c : v["changes"]) r.changes.push_back(c.asString());
+    return r;
 }
-static UnmanagedFileRecord parse_unmanaged(const Json::Value& v) {
-    UnmanagedFileRecord f;
-    f.name = v.get("name", "").asString();
-    f.type = v.get("type", "").asString();
-    f.mode = v.get("mode", "").asString();
-    f.user = v.get("user", "").asString();
-    f.group = v.get("group", "").asString();
-    f.sha256 = v.get("sha256", "").asString();
-    f.target = v.get("target", "").asString();
-    return f;
+UnmanagedFileRecord json_unmanaged(const Json::Value& v) {
+    UnmanagedFileRecord r;
+    r.name = v.get("name", "").asString();
+    r.type = v.get("type", "").asString();
+    r.mode = v.get("mode", "").asString();
+    r.user = v.get("user", "").asString();
+    r.group = v.get("group", "").asString();
+    r.sha256 = v.get("sha256", "").asString();
+    r.target = v.get("target", "").asString();
+    return r;
 }
 
 template <class T, class F>
-static std::optional<ScopeWrapper<T>> parse_scope(const Json::Value& root,
-                                                  const char* key, F parse) {
-    if (!root.isMember(key)) return std::nullopt;
-    const Json::Value& s = root[key];
-    ScopeWrapper<T> w;
-    if (s.isMember("_attributes")) w.attributes = parse_attrs(s["_attributes"]);
-    if (s.isMember("_elements") && s["_elements"].isArray())
-        for (const auto& e : s["_elements"]) w.elements.push_back(parse(e));
-    return w;
+ScopeWrapper<T> json_scope(const Json::Value& v, F from_json) {
+    ScopeWrapper<T> s;
+    if (v.isMember("_attributes")) s.attributes = json_attrs(v["_attributes"]);
+    if (v.isMember("_elements") && v["_elements"].isArray())
+        for (const auto& e : v["_elements"]) s.elements.push_back(from_json(e));
+    return s;
 }
 
-static bool json_to_manifest(const Json::Value& root, Manifest& m,
-                             std::string& violation) {
-    if (!root.isObject()) {
-        violation = "manifest root is not an object";
-        return false;
+Manifest json_to_manifest(const Json::Value& root) {
+    Manifest m;
+    if (root.isMember("meta")) {
+        const Json::Value& meta = root["meta"];
+        m.meta.format_version = meta.get("format_version", 1).asInt();
+        m.meta.generator = meta.get("generator", "").asString();
+        m.meta.created_at = meta.get("created_at", "").asString();
+        m.meta.desired_sha256 = meta.get("desired_sha256", "").asString();
     }
-    const Json::Value& meta = root["meta"];
-    m.meta.format_version = meta.get("format_version", 0).asInt();
-    m.meta.generator = meta.get("generator", "").asString();
-    m.meta.created_at = meta.get("created_at", "").asString();
-    m.meta.desired_sha256 = meta.get("desired_sha256", "").asString();
-    if (m.meta.format_version != 1) {
-        violation = "meta.format_version must be 1";
-        return false;
-    }
-    m.packages = parse_scope<PackageRecord>(root, "packages", parse_pkg);
-    m.repositories =
-        parse_scope<RepositoryRecord>(root, "repositories", parse_repo);
-    m.services = parse_scope<ServiceRecord>(root, "services", parse_svc);
-    m.config_files =
-        parse_scope<ManagedFileRecord>(root, "config_files", parse_file);
-    m.changed_managed_files = parse_scope<ManagedBaselineRecord>(
-        root, "changed_managed_files", parse_mbase);
-    m.unmanaged_files = parse_scope<UnmanagedFileRecord>(
-        root, "unmanaged_files", parse_unmanaged);
-    return true;
+    if (root.isMember("packages"))
+        m.packages = json_scope<PackageRecord>(root["packages"], json_pkg);
+    if (root.isMember("repositories"))
+        m.repositories = json_scope<RepositoryRecord>(root["repositories"], json_repo);
+    if (root.isMember("services"))
+        m.services = json_scope<ServiceRecord>(root["services"], json_svc);
+    if (root.isMember("config_files"))
+        m.config_files = json_scope<ManagedFileRecord>(root["config_files"], json_file);
+    if (root.isMember("changed_managed_files"))
+        m.changed_managed_files =
+            json_scope<ManagedBaselineRecord>(root["changed_managed_files"], json_mbase);
+    if (root.isMember("unmanaged_files"))
+        m.unmanaged_files =
+            json_scope<UnmanagedFileRecord>(root["unmanaged_files"], json_unmanaged);
+    return m;
 }
 
-// --------------------------------------------------------------------------
-// YAML safe-profile parse (yaml-cpp): reject non-default tags, multi-document
-// streams, and unbounded aliases; explicit string typing. We convert the YAML
-// tree into a Json::Value, then reuse the JSON path.
-// --------------------------------------------------------------------------
-static bool yaml_safe_to_json(const YAML::Node& node, Json::Value& out,
-                              int alias_budget, int& used, std::string& err);
+// ----------------------------------------------------------------------
+// YAML safe-profile parsing -> JSON value
+//
+// Safe profile (load-desired-manifest STEP 3): non-executing loader (yaml-cpp's
+// Node API never executes), reject non-default tags, single document only,
+// bounded alias expansion, explicit typing. We convert the YAML tree to a
+// Json::Value with explicit string typing so YAML implicit coercion (NO->false,
+// 1.10->float) does not apply: every scalar is read as a string and the JSON
+// layer interprets it per the schema.
+// ----------------------------------------------------------------------
+struct YamlUnsafe {
+    std::string reason;
+};
 
-static bool node_tag_ok(const YAML::Node& n) {
-    // yaml-cpp exposes the resolved tag. Reject explicit non-core tags (e.g.
-    // !!python/object, !ruby/..). Core schema tags / empty tag / '?' are fine.
+void check_node_tags(const YAML::Node& n, int depth) {
+    if (depth > 100) throw YamlUnsafe{"alias/recursion depth exceeded"};
     const std::string& tag = n.Tag();
-    if (tag.empty() || tag == "?" || tag == "!") return true;
-    static const char* ok[] = {"tag:yaml.org,2002:str", "tag:yaml.org,2002:int",
-                               "tag:yaml.org,2002:float",
-                               "tag:yaml.org,2002:bool",
-                               "tag:yaml.org,2002:null",
-                               "tag:yaml.org,2002:map",
-                               "tag:yaml.org,2002:seq"};
-    for (const char* t : ok)
-        if (tag == t) return true;
-    return false;
+    // Default/implicit tags only: "?", "!", or the canonical core-schema tags.
+    if (!(tag.empty() || tag == "?" || tag == "!" ||
+          tag.rfind("tag:yaml.org,2002:", 0) == 0)) {
+        throw YamlUnsafe{"non-default YAML tag '" + tag + "' is not permitted"};
+    }
+    if (n.IsSequence())
+        for (const auto& c : n) check_node_tags(c, depth + 1);
+    else if (n.IsMap())
+        for (const auto& kv : n) check_node_tags(kv.second, depth + 1);
 }
 
-static bool yaml_safe_to_json(const YAML::Node& node, Json::Value& out,
-                              int alias_budget, int& used, std::string& err) {
-    if (!node_tag_ok(node)) {
-        err = "YAML uses a disallowed tag: " + node.Tag();
-        return false;
+Json::Value yaml_scalar_to_json(const YAML::Node& n, const std::string& key) {
+    // Explicit typing per schema: booleans/integers for the fields the schema
+    // types as such; everything else as a string.
+    std::string s = n.as<std::string>();
+    if (key == "format_version" || key == "priority") {
+        try { return Json::Value(static_cast<Json::Int64>(std::stoll(s))); }
+        catch (...) { return Json::Value(s); }
     }
-    if (++used > alias_budget) {
-        err = "YAML alias/node expansion exceeds the safety budget";
-        return false;
+    if (key == "enabled" || key == "gpgcheck" || key == "autorefresh") {
+        if (s == "true") return Json::Value(true);
+        if (s == "false") return Json::Value(false);
+        return Json::Value(s);
     }
-    switch (node.Type()) {
-        case YAML::NodeType::Null:
-            out = Json::Value(Json::nullValue);
-            return true;
-        case YAML::NodeType::Scalar:
-            // Explicit string typing: read every scalar as a string, no
-            // implicit coercion (NO->false, 1.10->float).
-            out = Json::Value(node.Scalar());
-            return true;
-        case YAML::NodeType::Sequence: {
-            out = Json::Value(Json::arrayValue);
-            for (const auto& el : node) {
-                Json::Value child;
-                if (!yaml_safe_to_json(el, child, alias_budget, used, err))
-                    return false;
-                out.append(child);
-            }
-            return true;
+    return Json::Value(s);
+}
+
+Json::Value yaml_to_json(const YAML::Node& n, const std::string& key, int depth) {
+    if (depth > 100) throw YamlUnsafe{"alias/recursion depth exceeded"};
+    if (n.IsScalar()) return yaml_scalar_to_json(n, key);
+    if (n.IsSequence()) {
+        Json::Value a(Json::arrayValue);
+        for (const auto& c : n) a.append(yaml_to_json(c, key, depth + 1));
+        return a;
+    }
+    if (n.IsMap()) {
+        Json::Value o(Json::objectValue);
+        for (const auto& kv : n) {
+            std::string k = kv.first.as<std::string>();
+            o[k] = yaml_to_json(kv.second, k, depth + 1);
         }
-        case YAML::NodeType::Map: {
-            out = Json::Value(Json::objectValue);
-            for (const auto& kv : node) {
-                if (!node_tag_ok(kv.first)) {
-                    err = "YAML key uses a disallowed tag";
-                    return false;
-                }
-                std::string key = kv.first.Scalar();
-                Json::Value child;
-                if (!yaml_safe_to_json(kv.second, child, alias_budget, used,
-                                       err))
-                    return false;
-                out[key] = child;
-            }
-            return true;
-        }
-        default:
-            err = "YAML node of undefined type";
+        return o;
+    }
+    if (n.IsNull()) return Json::Value(Json::nullValue);
+    return Json::Value(Json::nullValue);
+}
+
+// Parse text to Json::Value, format-specific. Throws YamlUnsafe / sets errmsg.
+bool parse_to_json(const std::string& text, ManifestFormat fmt,
+                   Json::Value& out, std::string& errmsg) {
+    if (fmt == ManifestFormat::Json) {
+        Json::CharReaderBuilder b;
+        std::string errs;
+        std::istringstream is(text);
+        if (!Json::parseFromStream(b, is, &out, &errs)) {
+            errmsg = errs;
             return false;
+        }
+        return true;
     }
-}
-
-// Returns true on success; on failure sets err. Numeric coercion for known
-// integer/bool fields happens later when the JSON path reads typed members,
-// so we post-process meta.format_version and the boolean repo fields from
-// their string forms here.
-static bool parse_yaml_document(const std::string& text, Json::Value& out,
-                                std::string& err) {
-    std::vector<YAML::Node> docs;
+    // YAML safe profile
     try {
-        docs = YAML::LoadAll(text);
-    } catch (const YAML::Exception& e) {
-        err = std::string("YAML parse error: ") + e.what();
+        std::vector<YAML::Node> docs = YAML::LoadAll(text);
+        if (docs.empty()) { errmsg = "empty YAML document"; return false; }
+        if (docs.size() > 1) {
+            errmsg = "multi-document YAML streams are not permitted";
+            return false;
+        }
+        const YAML::Node& root = docs.front();
+        check_node_tags(root, 0);
+        out = yaml_to_json(root, "", 0);
+        return true;
+    } catch (const YamlUnsafe& u) {
+        errmsg = std::string("unsafe YAML: ") + u.reason;
         return false;
-    }
-    if (docs.size() != 1) {
-        err = "YAML must be a single document (multi-document stream rejected)";
+    } catch (const std::exception& e) {
+        errmsg = std::string("YAML parse error: ") + e.what();
         return false;
-    }
-    int used = 0;
-    // Bounded alias/node expansion budget.
-    const int kBudget = 100000;
-    if (!yaml_safe_to_json(docs[0], out, kBudget, used, err)) return false;
-    return true;
-}
-
-// YAML carries scalars as strings; coerce the typed fields the schema needs.
-static void coerce_yaml_types(Json::Value& root) {
-    if (root.isMember("meta") && root["meta"].isMember("format_version")) {
-        Json::Value& fv = root["meta"]["format_version"];
-        if (fv.isString()) {
-            try {
-                fv = Json::Value(std::stoi(fv.asString()));
-            } catch (...) {
-                fv = Json::Value(0);
-            }
-        }
-    }
-    auto coerce_bool = [](Json::Value& v) {
-        if (v.isString()) {
-            std::string s = v.asString();
-            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-            v = Json::Value(s == "true");
-        }
-    };
-    auto coerce_int = [](Json::Value& v) {
-        if (v.isString()) {
-            try {
-                v = Json::Value(static_cast<Json::Int64>(
-                    std::stoll(v.asString())));
-            } catch (...) {
-                v = Json::Value(0);
-            }
-        }
-    };
-    if (root.isMember("repositories") &&
-        root["repositories"].isMember("_elements")) {
-        for (Json::Value& r : root["repositories"]["_elements"]) {
-            if (r.isMember("enabled")) coerce_bool(r["enabled"]);
-            if (r.isMember("gpgcheck")) coerce_bool(r["gpgcheck"]);
-            if (r.isMember("autorefresh")) coerce_bool(r["autorefresh"]);
-            if (r.isMember("priority")) coerce_int(r["priority"]);
-        }
     }
 }
 
-// --------------------------------------------------------------------------
-// Shared file read + parse
-// --------------------------------------------------------------------------
-static bool read_file(const std::string& path, std::string& out) {
+bool read_file(const std::string& path, std::string& out) {
     std::ifstream f(path, std::ios::binary);
-    if (!f.good()) return false;
+    if (!f) return false;
     std::ostringstream ss;
     ss << f.rdbuf();
     out = ss.str();
     return true;
 }
 
-static Diagnostic diag(Severity sev, const std::string& dom,
-                       const std::string& msg) {
-    return Diagnostic{sev, dom, msg};
-}
-
-static bool has_nonempty_observational(const Manifest& m) {
+// schema-validate: format_version must be 1; declarable scopes conform; an
+// observational scope present with non-empty _elements is rejected.
+std::optional<Diagnostic> validate_desired(const Manifest& m) {
+    if (m.meta.format_version != 1)
+        return err("manifest", "meta.format_version must be 1");
     if (m.changed_managed_files && !m.changed_managed_files->elements.empty())
-        return true;
-    if (m.unmanaged_files && !m.unmanaged_files->elements.empty()) return true;
-    return false;
+        return err("manifest",
+                   "desired manifest must not carry a non-empty changed_managed_files scope");
+    if (m.unmanaged_files && !m.unmanaged_files->elements.empty())
+        return err("manifest",
+                   "desired manifest must not carry a non-empty unmanaged_files scope");
+    return std::nullopt;
 }
 
-// Parse text into a Json::Value under the resolved format.
-static bool parse_text(const std::string& text, ManifestFormat fmt,
-                       Json::Value& root, std::string& err) {
-    if (fmt == ManifestFormat::Yaml) {
-        if (!parse_yaml_document(text, root, err)) return false;
-        coerce_yaml_types(root);
-        return true;
-    }
-    Json::CharReaderBuilder b;
-    std::string perr;
-    std::istringstream ss(text);
-    if (!Json::parseFromStream(b, ss, &root, &perr)) {
-        err = "JSON parse error: " + perr;
-        return false;
-    }
-    return true;
+}  // namespace
+
+// ----------------------------------------------------------------------
+// Public API
+// ----------------------------------------------------------------------
+
+std::optional<ManifestFormat> parse_format(const std::string& s) {
+    if (s == "json") return ManifestFormat::Json;
+    if (s == "yaml") return ManifestFormat::Yaml;
+    return std::nullopt;
 }
 
-LoadResult load_desired_manifest(const std::string& manifest_path,
-                                 const std::optional<ManifestFormat>& fmt,
-                                 const Config& cfg) {
-    LoadResult r;
+ManifestFormat resolve_format(const std::optional<ManifestFormat>& explicit_fmt,
+                              const std::optional<std::string>& path,
+                              ManifestFormat default_fmt) {
+    if (explicit_fmt) return *explicit_fmt;  // explicit always wins
+    if (path) {
+        std::string ext = lower_ext(*path);
+        if (ext == "json") return ManifestFormat::Json;
+        if (ext == "yaml" || ext == "yml") return ManifestFormat::Yaml;
+    }
+    return default_fmt;
+}
+
+std::string sha256_hex(const std::string& bytes) {
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int len = 0;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+    EVP_DigestUpdate(ctx, bytes.data(), bytes.size());
+    EVP_DigestFinal_ex(ctx, digest, &len);
+    EVP_MD_CTX_free(ctx);
+    static const char* hexd = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 2);
+    for (unsigned int i = 0; i < len; ++i) {
+        out.push_back(hexd[digest[i] >> 4]);
+        out.push_back(hexd[digest[i] & 0xf]);
+    }
+    return out;
+}
+
+std::string serialise_json(const Manifest& m, bool pretty) {
+    return json_to_string(manifest_to_json(m), pretty);
+}
+
+std::string canonical_sha256(const Manifest& m) {
+    // Hash is over the canonical model: meta.desired_sha256 and created_at are
+    // excluded from identity (they are informational / self-referential).
+    Manifest c = sort_for_canonical(m);
+    c.meta.desired_sha256 = "";
+    c.meta.created_at = "";
+    std::string canon = json_to_string(manifest_to_json(c), /*pretty=*/false);
+    return sha256_hex(canon);
+}
+
+namespace {
+std::string yaml_quote(const std::string& s) {
+    std::string out = "\"";
+    for (char ch : s) {
+        if (ch == '\\' || ch == '"') out.push_back('\\');
+        out.push_back(ch);
+    }
+    out.push_back('"');
+    return out;
+}
+void emit_attrs(std::ostringstream& o, const std::string& indent,
+                const std::map<std::string, std::string>& a) {
+    o << indent << "_attributes:";
+    if (a.empty()) { o << " {}\n"; return; }
+    o << "\n";
+    for (const auto& kv : a)
+        o << indent << "  " << kv.first << ": " << yaml_quote(kv.second) << "\n";
+}
+}  // namespace
+
+std::string serialise_yaml(const Manifest& m) {
+    // Hand-emitted YAML restricted to the schema, with string scalars quoted so
+    // values such as mode "0600" are not coerced. Same data model as JSON.
+    std::ostringstream o;
+    o << "meta:\n";
+    o << "  format_version: " << m.meta.format_version << "\n";
+    o << "  generator: " << yaml_quote(m.meta.generator) << "\n";
+    o << "  created_at: " << yaml_quote(m.meta.created_at) << "\n";
+    o << "  desired_sha256: " << yaml_quote(m.meta.desired_sha256) << "\n";
+    if (m.packages) {
+        o << "packages:\n";
+        emit_attrs(o, "  ", m.packages->attributes);
+        o << "  _elements:";
+        if (m.packages->elements.empty()) o << " []\n";
+        else {
+            o << "\n";
+            for (const auto& p : m.packages->elements) {
+                o << "    - name: " << yaml_quote(p.name) << "\n";
+                o << "      version: " << yaml_quote(p.version) << "\n";
+                o << "      release: " << yaml_quote(p.release) << "\n";
+                o << "      arch: " << yaml_quote(p.arch) << "\n";
+            }
+        }
+    }
+    if (m.repositories) {
+        o << "repositories:\n";
+        emit_attrs(o, "  ", m.repositories->attributes);
+        o << "  _elements:";
+        if (m.repositories->elements.empty()) o << " []\n";
+        else {
+            o << "\n";
+            for (const auto& r : m.repositories->elements) {
+                o << "    - alias: " << yaml_quote(r.alias) << "\n";
+                o << "      name: " << yaml_quote(r.name) << "\n";
+                o << "      url: " << yaml_quote(r.url) << "\n";
+                o << "      type: " << yaml_quote(r.type) << "\n";
+                o << "      enabled: " << (r.enabled ? "true" : "false") << "\n";
+                o << "      gpgcheck: " << (r.gpgcheck ? "true" : "false") << "\n";
+                o << "      autorefresh: " << (r.autorefresh ? "true" : "false") << "\n";
+                o << "      priority: " << r.priority << "\n";
+            }
+        }
+    }
+    if (m.services) {
+        o << "services:\n";
+        emit_attrs(o, "  ", m.services->attributes);
+        o << "  _elements:";
+        if (m.services->elements.empty()) o << " []\n";
+        else {
+            o << "\n";
+            for (const auto& s : m.services->elements) {
+                o << "    - name: " << yaml_quote(s.name) << "\n";
+                o << "      state: " << yaml_quote(s.state) << "\n";
+            }
+        }
+    }
+    if (m.config_files) {
+        o << "config_files:\n";
+        emit_attrs(o, "  ", m.config_files->attributes);
+        o << "  _elements:";
+        if (m.config_files->elements.empty()) o << " []\n";
+        else {
+            o << "\n";
+            for (const auto& f : m.config_files->elements) {
+                o << "    - name: " << yaml_quote(f.name) << "\n";
+                o << "      type: " << yaml_quote(f.type) << "\n";
+                o << "      mode: " << yaml_quote(f.mode) << "\n";
+                o << "      user: " << yaml_quote(f.user) << "\n";
+                o << "      group: " << yaml_quote(f.group) << "\n";
+                o << "      sha256: " << yaml_quote(f.sha256) << "\n";
+                o << "      target: " << yaml_quote(f.target) << "\n";
+                o << "      content_ref: " << yaml_quote(f.content_ref) << "\n";
+                o << "      package_name: " << yaml_quote(f.package_name) << "\n";
+            }
+        }
+    }
+    return o.str();
+}
+
+Result<LoadedManifest> load_desired_manifest(
+    const std::string& manifest_path,
+    const std::optional<ManifestFormat>& explicit_fmt,
+    ManifestFormat default_fmt) {
     std::string text;
-    if (!read_file(manifest_path, text)) {
-        r.error = diag(Severity::Error, "invocation",
-                       "manifest unreadable: " + manifest_path);
-        return r;  // exit 2 path
-    }
-    ManifestFormat use = resolve_format(fmt, manifest_path, cfg.manifest_format);
+    if (!read_file(manifest_path, text))
+        return err("invocation", "manifest unreadable: " + manifest_path);
+    ManifestFormat fmt = resolve_format(explicit_fmt,
+                                        std::optional<std::string>(manifest_path),
+                                        default_fmt);
     Json::Value root;
-    std::string err;
-    if (use == ManifestFormat::Yaml) {
-        if (!parse_yaml_document(text, root, err)) {
-            // unsafe-YAML or parse error -> manifest error (exit 1)
-            r.error = diag(Severity::Error, "manifest", err);
-            return r;
-        }
-        coerce_yaml_types(root);
-    } else {
-        if (!parse_text(text, ManifestFormat::Json, root, err)) {
-            r.error = diag(Severity::Error, "manifest", err);
-            return r;
-        }
+    std::string emsg;
+    if (!parse_to_json(text, fmt, root, emsg)) {
+        // Unsafe YAML and schema parse errors are manifest errors (exit 1).
+        return err("manifest", "manifest parse failed: " + emsg);
     }
-    std::string violation;
-    if (!json_to_manifest(root, r.manifest, violation)) {
-        r.error = diag(Severity::Error, "manifest", violation);
-        return r;
-    }
-    // A desired manifest must not carry a non-empty observational scope.
-    if (has_nonempty_observational(r.manifest)) {
-        r.error = diag(Severity::Error, "manifest",
-                       "desired manifest carries a non-empty observational "
-                       "scope (changed_managed_files or unmanaged_files)");
-        return r;
-    }
+    if (!root.isObject())
+        return err("manifest", "manifest root is not an object");
+    Manifest m = json_to_manifest(root);
+    if (auto v = validate_desired(m)) return *v;
     // Drop tolerated empty observational scopes.
-    r.manifest.changed_managed_files.reset();
-    r.manifest.unmanaged_files.reset();
-    // Signature verification: when enabled, a real keyring check would run
-    // here. With no keyring configured we cannot verify; the spec defaults
-    // signature-verification on, but verification requires a keyring path. We
-    // treat an enabled check without a keyring as not-applicable (no signature
-    // material present) rather than fabricating a pass/fail.
-    (void)cfg;
-    r.desired_sha256 = desired_sha256(r.manifest);
-    r.ok = true;
-    return r;
+    m.changed_managed_files.reset();
+    m.unmanaged_files.reset();
+    LoadedManifest lm;
+    lm.manifest = m;
+    lm.desired_sha256 = canonical_sha256(m);
+    return lm;
 }
 
-LoadResult load_state_dump(const std::string& state_path,
-                           const std::optional<ManifestFormat>& fmt,
-                           const Config& cfg) {
-    LoadResult r;
+Result<Manifest> load_state_dump(const std::string& state_path,
+                                 const std::optional<ManifestFormat>& explicit_fmt,
+                                 ManifestFormat default_fmt) {
     std::string text;
-    if (!read_file(state_path, text)) {
-        r.error = diag(Severity::Error, "invocation",
-                       "state dump unreadable: " + state_path);
-        return r;  // exit 2
-    }
-    ManifestFormat use = resolve_format(fmt, state_path, cfg.manifest_format);
+    if (!read_file(state_path, text))
+        return err("invocation", "state dump unreadable: " + state_path);
+    ManifestFormat fmt = resolve_format(explicit_fmt,
+                                        std::optional<std::string>(state_path),
+                                        default_fmt);
     Json::Value root;
-    std::string err;
-    if (!parse_text(text, use, root, err)) {
-        // malformed dump -> invocation error (exit 2)
-        r.error = diag(Severity::Error, "invocation",
-                       "malformed state dump: " + err);
-        return r;
-    }
-    std::string violation;
-    if (!json_to_manifest(root, r.manifest, violation)) {
-        r.error = diag(Severity::Error, "invocation",
-                       "malformed state dump: " + violation);
-        return r;
-    }
-    r.ok = true;
-    return r;
+    std::string emsg;
+    if (!parse_to_json(text, fmt, root, emsg))
+        return err("invocation", "malformed state dump: " + emsg);
+    if (!root.isObject())
+        return err("invocation", "malformed state dump: root is not an object");
+    Manifest m = json_to_manifest(root);
+    if (m.meta.format_version != 1)
+        return err("invocation", "malformed state dump: format_version must be 1");
+    return m;
 }
 
-AppliedLoad load_applied_record(const std::string& root) {
-    AppliedLoad a;
-    std::string path = root;
-    if (!path.empty() && path.back() == '/') path.pop_back();
-    path += "/usr/lib/zypper-declarative/applied.json";
+Result<AppliedLoad> load_applied_record(const std::string& root) {
+    std::string base = root;
+    if (!base.empty() && base.back() == '/') base.pop_back();
+    std::string path = base + "/usr/lib/zypper-declarative/applied.json";
     std::string text;
     if (!read_file(path, text)) {
+        AppliedLoad a;  // all scopes empty, present=false
         a.present = false;
-        a.ok = true;  // absence is normal
         return a;
     }
     Json::Value v;
-    std::string err;
-    if (!parse_text(text, ManifestFormat::Json, v, err)) {
-        a.ok = false;
-        a.error = diag(Severity::Error, "files",
-                       "applied record unparseable: " + err);
-        return a;
-    }
-    std::string violation;
-    if (!json_to_manifest(v, a.record, violation)) {
-        a.ok = false;
-        a.error = diag(Severity::Error, "files",
-                       "applied record invalid: " + violation);
-        return a;
-    }
+    std::string emsg;
+    if (!parse_to_json(text, ManifestFormat::Json, v, emsg))
+        return err("files", "applied record unparseable: " + emsg);
+    AppliedLoad a;
+    a.record = json_to_manifest(v);
     a.present = true;
-    a.ok = true;
     return a;
 }
 

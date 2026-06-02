@@ -1,10 +1,10 @@
-# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
-cmake_minimum_required(VERSION 3.20)
-project(zypper-declarative VERSION 0.6.6 LANGUAGES CXX)
+# generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+cmake_minimum_required(VERSION 3.20)   # 3.28 on SLE 15 SP7, 3.31 on SLE 16; 3.20 is a safe floor
 
-# Spec identity embedded in every generated artefact.
-set(ZD_VERSION "0.6.6")
-set(ZD_SPEC_SHA256 "51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03")
+# Module identity: project name "zypper-declarative" (spec title; spec META
+# Module: github.com/mge1512/zypper-declarative — the C++ artefact identity is
+# the binary/project name zypper-declarative, see TRANSLATION_REPORT.md).
+project(zypper-declarative CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,67 +16,65 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
-# --- Dependencies (DYNAMICALLY linked distribution libraries) --------------
-# Per the C++ decisions hints: dynamic linking against the service pack's own
-# sonames; no static binary, no vendoring. Build per-SP via OBS.
-#
-# Discover jsoncpp, yaml-cpp, and libzypp via pkg-config IMPORTED targets, NOT
-# find_package(). On SLE 16 the jsoncpp jsoncppConfig.cmake is Meson-generated
-# and omits include(CMakePackageConfigHelpers), so its trailing
-# check_required_components(jsoncpp) fails with "Unknown CMake command" and
-# breaks the build; yaml-cpp's CMake config has the same per-SP fragility. The
-# .pc files (jsoncpp.pc, yaml-cpp.pc, libzypp.pc) are present and stable on both
-# SLE 15 SP7 and SLE 16.0, so pkg-config is the robust cross-SP discovery and
-# immune to the per-SP CMake-config drift. (decisions hints, 2026-06-02.)
+# --- Single-source version + embedded spec hash (configure_file) -------------
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZD_VERSION LIMIT_COUNT 1)
+string(STRIP "${ZD_VERSION}" ZD_VERSION)
+# The spec SHA256 is embedded once, computed before generation.
+set(ZD_SPEC_SHA256 "1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/meta.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/meta.hpp"
+  @ONLY)
+
+# --- Dependencies: DYNAMIC distro shared libraries (no static, no vendoring) --
+# Prefer pkg-config over find_package for libzypp/jsoncpp/yaml-cpp: their CMake
+# configs are fragile / Meson-generated across service packs; the .pc files are
+# stable on both SLE 15 SP7 and SLE 16.0. See the C++ decisions hints.
 find_package(PkgConfig REQUIRED)
-
-# JSON: jsoncpp (jsoncpp-devel). 1.8.4 on SLE 15 SP7, 1.9.6 on SLE 16.0.
+pkg_check_modules(ZYPP    REQUIRED IMPORTED_TARGET libzypp)
 pkg_check_modules(JSONCPP REQUIRED IMPORTED_TARGET jsoncpp)
-
-# YAML: yaml-cpp (libyaml-cpp). 0.6 on SLE 15 SP7, 0.8 on SLE 16.0; restrict to
-# the API stable across both. Branch on YAMLCPP_VERSION if ever needed.
 pkg_check_modules(YAMLCPP REQUIRED IMPORTED_TARGET yaml-cpp)
+pkg_check_modules(CRYPTO  REQUIRED IMPORTED_TARGET libcrypto)
 
-# Package database / ownership / per-file baseline: libzypp (libzypp-devel).
-pkg_check_modules(ZYPP REQUIRED IMPORTED_TARGET libzypp)
+# libsnapper ships no .pc on every SP; locate the header and library directly.
+# soname differs (libsnapper5 on SLE 15 SP7, libsnapper7 on SLE 16.0); link
+# whichever is present (OBS builds per-SP).
+find_path(SNAPPER_INCLUDE_DIR snapper/Snapper.h)
+find_library(SNAPPER_LIBRARY NAMES snapper)
+if(NOT SNAPPER_INCLUDE_DIR OR NOT SNAPPER_LIBRARY)
+  message(FATAL_ERROR "libsnapper (libsnapper-devel) not found")
+endif()
 
-# SHA256/MD5: libcrypto (OpenSSL 3). No major-version/soname split across SPs;
-# the CMake config is stable, so find_package is fine here.
-find_package(OpenSSL REQUIRED)
-
-# --- Generated metadata header --------------------------------------------
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/meta.hpp.in
-               ${CMAKE_CURRENT_BINARY_DIR}/generated/meta.hpp @ONLY)
+message(STATUS "zypper-declarative ${ZD_VERSION}")
+message(STATUS "  libzypp  ${ZYPP_VERSION}")
+message(STATUS "  jsoncpp  ${JSONCPP_VERSION}")
+message(STATUS "  yaml-cpp ${YAMLCPP_VERSION}")
+message(STATUS "  libcrypto ${CRYPTO_VERSION}")
+message(STATUS "  snapper  ${SNAPPER_LIBRARY}")
 
 add_executable(zypper-declarative
   src/main.cpp
   src/cli.cpp
   src/command_runner.cpp
-  src/hash.cpp
   src/manifest.cpp
   src/diff.cpp
-  src/describe.cpp
-  src/fullscan.cpp
-  src/converge.cpp
-  src/commands.cpp
-)
+  src/actual_state.cpp
+  src/transaction.cpp
+  src/commands.cpp)
 
 target_include_directories(zypper-declarative PRIVATE
   src
-  ${CMAKE_CURRENT_BINARY_DIR}/generated
-)
+  "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  "${SNAPPER_INCLUDE_DIR}")
 
-# Link the pkg-config IMPORTED targets (carry include dirs and link flags).
 target_link_libraries(zypper-declarative PRIVATE
+  PkgConfig::ZYPP
   PkgConfig::JSONCPP
   PkgConfig::YAMLCPP
-  PkgConfig::ZYPP
-  OpenSSL::Crypto
-)
+  PkgConfig::CRYPTO
+  "${SNAPPER_LIBRARY}")
 
 include(GNUInstallDirs)
 install(TARGETS zypper-declarative RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-# Surfaced as a zypper subcommand.
+# Also installed as a zypper subcommand executable.
 install(TARGETS zypper-declarative RUNTIME DESTINATION lib/zypper/commands)
-install(FILES zypper-declarative.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
-        OPTIONAL)

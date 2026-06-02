@@ -1,14 +1,14 @@
-// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
 //
-// OSCommandRunner: executes external commands via fork/execvp with separate
-// stdout/stderr pipes and a clean PATH. A non-zero exit is returned in the
-// result, never thrown, because some tools report differences with a non-zero
-// status the caller must interpret as data. Abstract CommandRunner allows a
-// test double to be substituted without a live system.
+// OSCommandRunner: executes an external command via fork/execvp with separate
+// stdout/stderr capture and a clean exit status. Used for the few operations
+// that have no in-process library API (offline systemctl enablement, the
+// alternatives database query). A non-zero exit is returned in `code`, not
+// thrown, because some tools report "differences found" with a non-zero exit
+// that the caller must interpret as data, not failure.
 #ifndef ZD_COMMAND_RUNNER_HPP
 #define ZD_COMMAND_RUNNER_HPP
 
-#include <map>
 #include <string>
 #include <vector>
 
@@ -18,6 +18,7 @@ struct CommandResult {
     std::string out;
     std::string err;
     int code = 0;
+    bool spawn_failed = false;  // true if the binary could not be executed
 };
 
 class CommandRunner {
@@ -31,17 +32,6 @@ class OSCommandRunner : public CommandRunner {
 public:
     CommandResult run(const std::string& cmd,
                       const std::vector<std::string>& args) const override;
-};
-
-// Test double: returns a canned response keyed by command name.
-class FakeCommandRunner : public CommandRunner {
-public:
-    std::map<std::string, CommandResult> responses;
-    CommandResult run(const std::string& cmd,
-                      const std::vector<std::string>&) const override {
-        auto it = responses.find(cmd);
-        return it != responses.end() ? it->second : CommandResult{"", "", 0};
-    }
 };
 
 }  // namespace zd
