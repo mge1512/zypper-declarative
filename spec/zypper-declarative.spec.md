@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.6
+Version:     0.6.7
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -383,6 +383,84 @@ EXAMPLES of this specification.
 
 ---
 
+## BEHAVIOR: init
+Constraint: required
+
+Onboards a machine: adopts its current state as the managed baseline in one
+command, so an administrator does not run `describe` and then hand-build a
+baseline. `init` reads the live system (it INCLUDES `describe-actual-state`),
+opens a snapshot transaction, writes the described state as the applied record,
+and converges NOTHING (the system already equals the state being adopted). After
+`init` the machine is managed: `diff` and `verify` reference the applied record,
+`diff` shows no intent diff and no drift against the adopted manifest, and a
+subsequent `apply` is a no-op until the operator edits the manifest. `init` also
+emits the described manifest so the operator has it to edit.
+
+INPUTS:
+```
+out:           AbsolutePath | none  // where to write the adopted manifest; default from CONFIG
+content_store: AbsolutePath | none  // optional; if set, file content is captured as in describe
+mode:          TransactionMode      // default "auto" from CONFIG
+format:        ManifestFormat | none // optional; applies to the written manifest via resolve-format
+```
+
+OUTPUTS:
+```
+exit:        ExitCode
+diagnostics: []Diagnostic   // to stderr
+summary:     string          // to stdout: what was adopted (scope counts) and the snapshot
+```
+
+PRECONDITIONS:
+- The process runs with privilege sufficient to read the system and open a transaction.
+- The transaction mechanism selected by `mode` is available.
+
+STEPS:
+1. Obtain the current state via `describe-actual-state` on "/" (with the
+   `on_unreadable` default of error). This is the same read `describe` performs;
+   if `content_store` is set, capture file content into it and set each emitted
+   regular-file record's `content_ref` exactly as `describe` does. On a state
+   collection failure exit 1.
+2. Acquire the transaction context via `acquire-transaction-context` for `mode`.
+   On failure exit 2.
+3. Write the applied record via `write-applied-record` into the context's
+   `/usr/lib/zypper-declarative/applied.json`: it is the described state with the
+   packages scope fully resolved, and its `meta.desired_sha256` is the
+   canonical-model hash of that described state (the adopted baseline is its own
+   desired). Stamp the snapshot's snapper userdata with that `desired_sha256`. On
+   failure discard and exit 1.
+4. Converge NOTHING: `init` writes no `/etc` file, installs or removes no package,
+   and changes no unit enablement. The only system effect is the snapshot and the
+   applied record written into it.
+5. Also write the adopted manifest to `out` (default from CONFIG) via
+   `resolve-format(out)`, so the operator has the document to edit for future
+   desired changes. Writing the operator-facing manifest is not part of the
+   transaction's convergence; it is the same content as the applied record.
+6. Seal and activate: if `opened_here`, seal the snapshot read-only, mark it the
+   default boot target, and schedule activation per the activation policy in
+   CONFIG; if not `opened_here`, leave sealing and activation to the external
+   mechanism. Emit the adoption summary (scope counts, snapshot id) to stdout and
+   exit 0.
+
+POSTCONDITIONS:
+- On exit 0, a new sealed snapshot exists whose `applied.json` records the adopted
+  current state and its `desired_sha256`; no `/etc` file, package, or unit was
+  modified (the machine is byte-for-byte as before, plus the snapshot and applied
+  record).
+- Immediately after `init`, `diff manifest-path=<the adopted manifest>` computes an
+  EMPTY intent diff and an EMPTY drift report, and `verify` against the applied
+  record reports a match (the machine is onboarded and idempotent).
+- On any non-zero exit, no new snapshot is left as the default boot target and the
+  running system is unchanged.
+
+ERRORS:
+- state collection failed -> exit 1, domain=files (or the failing scope's domain)
+- transaction mechanism unavailable -> exit 2, domain=transaction
+- applied-record write failed -> exit 1, domain=manifest (transaction discarded)
+- output path unwritable -> exit 2, domain=invocation
+
+---
+
 ## BEHAVIOR: apply
 Constraint: required
 
@@ -496,7 +574,13 @@ STEPS:
 4. Obtain the actual state for the drift portion: if `state_path` is given, load
    and schema-validate that dump as a Manifest (offline, no live read); otherwise
    obtain it via `describe-actual-state` on "/". On a malformed dump exit 2.
-   Compute the drift report via `compute-drift`.
+   Compute the drift report via `compute-drift` with the actual state and the
+   DESIRED MANIFEST as the reference (NOT the applied record): `diff` answers
+   "does the live system already match the manifest I am about to apply", so drift
+   is computed against the desired manifest. On a freshly-described, unedited
+   manifest on an unchanged system this drift is empty, even when the machine has
+   never been onboarded and the applied record is absent. (The applied record is
+   used only for the intent diff in step 3; it is not the drift reference here.)
 5. Print the combined plan (packages to install and remove, repositories to set,
    files to write and delete, units to change, and current drift) to stdout.
    Exit 0.
@@ -1214,7 +1298,14 @@ check in `apply`.
 INPUTS:
 ```
 actual:    Manifest        // actual state (from describe-actual-state or a dump)
-reference: AppliedRecord    // the declaration to compare against
+reference: Manifest        // the declaration to compare against: a DESIRED MANIFEST
+                           // or an APPLIED RECORD (same schema). Callers choose:
+                           // `diff` passes the desired manifest; `apply` step 10 and
+                           // `verify` (by default) pass the applied record; `verify`
+                           // and `status` may pass a supplied manifest. The comparison
+                           // is identical regardless of which; only the question being
+                           // answered differs ("matches what I will apply" vs "matches
+                           // what was applied").
 ```
 
 OUTPUTS:
@@ -1757,6 +1848,17 @@ resolver fills in the transitive set.
   read-only and every `content_ref` is "". A regular file emitted but unreadable
   follows `on_unreadable` (error, or warn with empty `content_ref` and a
   diagnostic), never silent.
+- [observable] `init` adopts the current state as the managed baseline: it includes
+  the `describe-actual-state` read, opens a snapshot, writes that state as the
+  applied record, and converges nothing (no `/etc` file, package, or unit is
+  modified). Immediately after `init`, `diff` against the adopted manifest yields an
+  empty intent diff and empty drift, and `verify` matches.
+- [observable] `diff` computes drift against the DESIRED MANIFEST, not the applied
+  record. On a freshly-described unedited manifest on an unchanged machine, drift is
+  empty regardless of whether an applied record exists; the applied record is used
+  only for the intent diff. Therefore an un-onboarded machine's `diff` shows no
+  drift (and may show a large intent diff, the signal to run `init`), and crucially
+  does not report its unpackaged `/etc` files as extra.
 - [observable] `package_name` in a config_files record is the bare package name
   (for example `openssh-server`), never the full name-version-release-arch
   identifier.
@@ -1893,6 +1995,50 @@ WHEN:
 THEN:
   stderr contains one diagnostic with domain=invocation
   exit_code = 2
+
+### EXAMPLE: diff_unchanged_machine_no_drift
+GIVEN:
+  a never-onboarded machine (no applied record) whose /etc has many unpackaged
+    files (a typical transactional image)
+  the manifest was just produced by describe on this machine and is unedited
+  invocation: zypper declarative diff manifest-path=<that manifest>
+WHEN:
+  diff runs
+THEN:
+  the drift report is EMPTY (drift compares actual against the desired manifest,
+    which already equals actual; unpackaged /etc files present in the manifest are
+    not reported as extra)
+  the intent diff may list the whole manifest as new (there is no applied record
+    yet), which is the signal that the machine is not yet onboarded; run init
+  exit_code = 0
+
+### EXAMPLE: init_onboards_machine
+GIVEN:
+  a fresh machine that has never been onboarded (no applied record)
+  invocation: zypper declarative init out=/var/lib/zypper-declarative/manifest.json content-store=/var/lib/zypper-declarative/content
+WHEN:
+  init runs
+THEN:
+  it reads the current state (including describe), opens a snapshot, writes the
+    applied record as the adopted current state, and captures file content into the
+    content store
+  no /etc file, package, or unit is modified (the machine is unchanged apart from
+    the snapshot and the applied record)
+  the adopted manifest is written to /var/lib/zypper-declarative/manifest.json
+  a subsequent `diff manifest-path=/var/lib/zypper-declarative/manifest.json` shows
+    an empty intent diff and empty drift, and `verify` reports a match
+  exit_code = 0
+
+### EXAMPLE: init_then_apply_is_noop
+GIVEN:
+  a machine just onboarded with init, manifest unedited
+  invocation: zypper declarative apply manifest-path=<the adopted manifest>
+WHEN:
+  apply runs
+THEN:
+  the intent diff and drift are both empty, so apply emits "nothing to do" and
+    exits 0 without opening a transaction
+  exit_code = 0
 
 ### EXAMPLE: describe_emits_manifest
 GIVEN:
@@ -2719,7 +2865,7 @@ Scaffold: true
 Hints-file: cli-tool.go.milestones.hints.md
 
 Included BEHAVIORs:
-  apply, diff, verify, status, describe, load-desired-manifest,
+  init, apply, diff, verify, status, describe, load-desired-manifest,
   load-applied-record, compute-intent-diff, compute-drift, describe-actual-state,
   resolve-format, acquire-transaction-context, converge-packages, converge-files,
   converge-units, write-applied-record
@@ -2779,13 +2925,17 @@ Acceptance criteria:
 Status: pending
 
 Included BEHAVIORs:
-  apply, acquire-transaction-context, converge-files, write-applied-record
+  init, apply, acquire-transaction-context, converge-files, write-applied-record
 
 Deferred BEHAVIORs:
   converge-packages, converge-units
 
 Acceptance criteria:
   ./zypper-declarative apply manifest-path=testdata/files-only.json; test $? -eq 0
+  ./zypper-declarative init out=/tmp/m.json; test $? -eq 0   # onboards, converges nothing
+  ./zypper-declarative diff manifest-path=/tmp/m.json | grep -q "drift"   # section present
+  # after init, drift against the adopted manifest is empty (no "extra" lines)
+  test -z "$(./zypper-declarative diff manifest-path=/tmp/m.json | sed -n '/^drift:/,$p' | grep '  ')"
 
 ## MILESTONE: 0.5.0
 Status: pending

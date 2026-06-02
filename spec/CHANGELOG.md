@@ -230,6 +230,25 @@ commit messages, not in the normative spec text.
   mechanism, with the decision deliberately left open. Secrets, kernel cmdline,
   and sysctl domains reserved for a later Version.
 
+## Version 0.6.7
+
+- 2026-06-02: Added the `init` verb and fixed `diff` drift to compare against the
+  desired manifest. (1) `zypper declarative init` onboards a machine in one command:
+  it INCLUDES describe, opens a snapshot, writes the described current state as the
+  applied-record baseline, and converges nothing (actual already equals the adopted
+  state). After init, diff/verify reference the applied record, diff is clean, apply
+  is a no-op until the manifest is edited. init also emits the manifest for the
+  operator to edit. (2) `diff` now computes DRIFT against the desired manifest, not
+  the applied record (the applied record is used only for the intent diff). This
+  fixes a bug exposed on SL Micro, where /etc is largely unpackaged: diff against an
+  empty applied record had reported the entire unpackaged /etc as "extra" drift. On a
+  freshly-described unedited manifest, drift is now empty whether or not the machine
+  is onboarded. `compute-drift`'s reference is clarified to be a desired manifest or
+  an applied record (same schema); each caller states which it passes. NOTE: a
+  packaged file legitimately showing package_name "" on SL Micro is correct (SL Micro
+  does not package-own much of /etc); that was not a bug. Added invariants and
+  examples for init onboarding/idempotence and diff-drift-against-manifest.
+
 ## Version 0.6.6
 
 - 2026-06-02: Two additions to the config_files emission rule, both consistent with

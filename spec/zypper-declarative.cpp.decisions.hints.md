@@ -281,7 +281,27 @@ and the code must not assume one version's API.
 - `[spec]` In `compute-drift`, type is part of identity: differing type -> modified;
   same type compare sha256 (file) or target (link); a declared entry absent from
   actual is treated as matching. Hardlinks: treat per path by content+type, do not
-  detect or preserve hardlink identity.
+  detect or preserve hardlink identity. `compute-drift`'s `reference` is a `Manifest`
+  that may be a DESIRED MANIFEST or an APPLIED RECORD (same schema); the comparison
+  is identical, the caller chooses. CRITICAL for `diff`: pass the DESIRED MANIFEST as
+  the drift reference, NOT the applied record. On SL Micro most of `/etc` is
+  unpackaged, and on SL Micro a packaged-looking path may legitimately report
+  `package_name` "" (SL Micro does not package-own much of `/etc`, that is correct,
+  not a bug); diffing actual against an absent/empty applied record reported all such
+  files as `files_extra`, while the desired manifest already contains those paths so
+  drift is empty. The applied record is the reference only for the intent diff and
+  apply's post-converge check.
+- `[spec]` `init` verb (onboarding): one command adopting current state as the
+  managed baseline. INCLUDES the describe read (the same libzypp + filesystem
+  actual-state path describe uses, with content-store population if `content-store=`
+  is set), acquires the transaction context (TAKES A SNAPSHOT, the same
+  acquire-transaction-context path apply uses), writes the described state as the
+  applied record inside the snapshot (`meta.desired_sha256` = hash of that state),
+  CONVERGES NOTHING (no /etc write, no package, no unit), also writes the adopted
+  manifest to `out`, then seals. After init, `diff` against the adopted manifest is
+  empty and `verify` matches. A never-onboarded machine showing a large intent diff
+  is the run-init signal, not a bug. (init reuses describe + acquire-transaction +
+  write-applied-record; it is apply minus the convergence steps.)
 - `[spec]` config_files is bounded to `/etc` (never read/hash/verify outside it,
   never a whole-system verification). Difference-reporting (a verifier returning
   non-zero because it found changes) is the normal result, not an unreadable source.
@@ -321,7 +341,23 @@ and the code must not assume one version's API.
   directly. OBS package, no curl install. RPM spec: `BuildRequires: gcc15-c++` on
   SLE 15, plus `libzypp-devel`, `libsnapper-devel`, `jsoncpp-devel`, and the right
   `libyaml-cpp` devel for the SP; dynamic runtime requires resolved by the linker.
-  SIGTERM/SIGINT clean exit; an interrupted `apply` discards the transaction.
+  The jsoncpp devel package is named `jsoncpp-devel` on BOTH SLE 15 and SLE 16, NOT
+  `libjsoncpp-devel`; do not prefix it with `lib` (a prior RPM spec used the wrong
+  `libjsoncpp-devel` and failed to find the dependency). The VERSION single-source
+  file (below) supplies the spec `Version:`. SIGTERM/SIGINT clean exit; an
+  interrupted `apply` discards the transaction.
+- `[pcd]` Version single-source: a top-level `VERSION` file (one line, e.g. `0.6.7`)
+  is the sole version authority. The RPM spec reads it for `Version:` (e.g.
+  `Version: %(cat %{_sourcedir}/VERSION)` or injected at tarball build), the
+  `make dist` target (below) reads it for the tarball name and subdirectory, and the
+  build embeds it (via `configure_file`) so the binary's `version` output, the RPM
+  `Version:`, and the tarball `zypper-declarative-X.Y.Z/` are guaranteed identical.
+- `[pcd]` `make dist` target in the Makefile (the conventional name; avoids CMake
+  CPack's `package`): produce `zypper-declarative-X.Y.Z.tar.gz` containing a single
+  top-level directory `zypper-declarative-X.Y.Z/`, where `X.Y.Z` is read from
+  `VERSION`, so `rpmbuild`'s default `%setup`/`%autosetup` (which cd's into
+  `%{name}-%{version}/`) finds the expected directory. Exclude build artifacts
+  (`build/`, VCS dirs) from the tarball.
 
 ### Testing boundary
 
@@ -334,16 +370,34 @@ and the code must not assume one version's API.
   code-review-only.
 - `[spec]` Required self-checks (black-box, run as root in the test step, against
   the build host's real rpmdb): run `describe` and assert (1) the `packages` scope
-  is present and NON-EMPTY (build 01 omitted it); (2) ownership resolves a known
-  file, `/etc/ssh/sshd_config` -> `openssh-server`; (3) a known-pristine
-  `/etc/ImageMagick-7-SUSE/*.xml` is ABSENT; (4) the pam pair, `common-auth` present
-  as type "link", `common-auth-pc` present as type "file" with a sha256. These bind
-  the libzypp read: if `tag_fileinfos()` returned nothing, (1)-(4) fail and the
-  build cannot pass by rationalising empty output. (Go and Rust carry the
-  equivalent checks against `rpm -V`; this is how the three stay convergent.)
+  is present and NON-EMPTY (build 01 omitted it); (2) ownership is attached where rpm
+  reports an owner, pick a path that `rpm -qf` resolves on the build host and assert
+  the record's `package_name` matches (on a package-managed host
+  `/etc/ssh/sshd_config` -> `openssh-server`; do NOT hardcode an owner for a path
+  that `rpm -qf` reports as unowned, on SL Micro much of `/etc` is legitimately
+  unpackaged and an empty `package_name` there is correct); (3) a known-pristine
+  `/etc/ImageMagick-7-SUSE/*.xml` is ABSENT when that package is installed; (4) the
+  pam pair on a host that packages it, `common-auth`/`common-auth-pc` with the right
+  types. These bind the libzypp read: if `tag_fileinfos()` returned nothing, (1) and
+  (2) fail and the build cannot pass by rationalising empty output. (5) IDEMPOTENCE:
+  `describe out=/tmp/m.json` then `diff manifest-path=/tmp/m.json` MUST produce an
+  EMPTY drift report (no `files_extra`), and `init out=/tmp/m.json` then the same
+  `diff` likewise; this binds the drift-reference fix (drift compares the desired
+  manifest, not the applied record) and is the check that the SL Micro bug would have
+  failed. (Go and Rust carry the equivalent checks; this is how the three stay
+  convergent.)
 
 ## Changelog
 
+- 2026-06-02: Tracks spec v0.6.7. Added the `init` verb (onboarding: reuses describe
+  + acquire-transaction + write-applied-record, takes a snapshot, converges nothing).
+  Fixed `diff` to compute drift against the DESIRED MANIFEST, not the applied record
+  (the SL Micro bug, where unpackaged /etc was reported as extra); added the
+  idempotence self-check. Clarified that an empty `package_name` on SL Micro is
+  correct (not all of /etc is package-owned), not a bug. Made the ownership
+  self-check host-aware. Fixed the RPM `BuildRequires` dependency name to
+  `jsoncpp-devel` (not `libjsoncpp-devel`) and added the VERSION single-source +
+  `make dist` packaging notes.
 - 2026-06-02: Build fix (CMake glue, no spec/logic change): switched dependency
   discovery from `find_package` to `pkg_check_modules(... REQUIRED IMPORTED_TARGET
   ...)` for jsoncpp, yaml-cpp, and libzypp. On SLE 16 the jsoncpp `jsoncppConfig.cmake`

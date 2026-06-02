@@ -141,7 +141,22 @@ the crate name and embedded spec hash by hand.
 - `[spec]` In `compute-drift`, type is part of identity: differing type -> modified;
   same type compare sha256 (file) or target (link); a declared entry absent from
   actual is treated as matching. Hardlinks: treat per path by content+type, do not
-  detect or preserve hardlink identity.
+  detect or preserve hardlink identity. `compute-drift`'s `reference` is a `Manifest`
+  that may be a DESIRED MANIFEST or an APPLIED RECORD (same schema); the comparison
+  is identical, the caller chooses. CRITICAL for `diff`: pass the DESIRED MANIFEST as
+  the drift reference, NOT the applied record. On SL Micro most of `/etc` is
+  unpackaged; diffing actual against an absent/empty applied record reports all of it
+  as `files_extra`, while the desired manifest already contains those paths so drift
+  is empty. The applied record is the reference only for the intent diff and apply's
+  post-converge check.
+- `[spec]` `init` verb (onboarding): one command adopting current state as the
+  managed baseline. INCLUDES the describe read (same actual-state path, with
+  content-store population if `content-store=` is set), acquires the transaction
+  context (TAKES A SNAPSHOT), writes the described state as the applied record inside
+  the snapshot (`meta.desired_sha256` = hash of that state), CONVERGES NOTHING, also
+  writes the adopted manifest to `out`, then seals. After init, `diff` against the
+  adopted manifest is empty and `verify` matches. A never-onboarded machine showing a
+  large intent diff is the run-init signal, not a bug.
 
 ## config_files: let rpm decide (verdict-parse, NOT a self-built baseline)
 
@@ -222,7 +237,11 @@ spec's examples are the shared target and the three-way diff is the check.)
   `package_name` that is not an unpackaged file carries `status` == "changed" and a
   non-empty `changes` list. Because `rpm -V` reports only changes, pristine files
   never appear and the over-emission class cannot recur; assertions (1b)/(1c) ensure
-  the separate ghost pass is not silently missing.
+  the separate ghost pass is not silently missing. (4) IDEMPOTENCE: `describe
+  out=/tmp/m.json` then `diff manifest-path=/tmp/m.json` MUST produce an EMPTY drift
+  report on the unchanged machine (equivalently `init` then the same `diff`); this
+  binds the drift-reference fix (drift compares against the desired manifest, not the
+  applied record).
 
 ## Integration with the system (Rust-specific)
 
@@ -269,6 +288,17 @@ spec's examples are the shared target and the three-way diff is the check.)
 - `[spec]` Surfaced as a zypper subcommand (`/usr/lib/zypper/commands`) and invocable
   directly; OBS package, no curl install; SIGTERM/SIGINT clean exit; an interrupted
   `apply` discards the transaction.
+- `[pcd]` Version single-source: a top-level `VERSION` file (one line, e.g. `0.6.7`)
+  is the sole version authority. The RPM spec reads it for `Version:`, the Makefile
+  reads it for the `make dist` tarball, and the binary embeds it (via `build.rs`
+  reading `VERSION`), so the `version` output, RPM `Version:`, and tarball dir are
+  identical. Keep this consistent with Cargo's own version if present (derive both
+  from `VERSION` or keep them in lockstep).
+- `[pcd]` `make dist` target in the Makefile (conventional name): produce
+  `zypper-declarative-X.Y.Z.tar.gz` containing a single top-level
+  `zypper-declarative-X.Y.Z/` directory, `X.Y.Z` read from `VERSION`, so rpmbuild's
+  default `%setup`/`%autosetup` finds `%{name}-%{version}/`. Exclude VCS dirs and
+  `target/` from the tarball.
 
 ## Testing boundary
 
@@ -282,6 +312,11 @@ spec's examples are the shared target and the three-way diff is the check.)
 
 ## Changelog
 
+- 2026-06-02: Tracks spec v0.6.7. Added the `init` verb (onboarding: includes
+  describe, takes a snapshot, writes adopted current state as the applied record,
+  converges nothing). Fixed `diff` to compute drift against the DESIRED MANIFEST, not
+  the applied record (the SL Micro unpackaged-/etc bug); added the idempotence
+  self-check.
 - 2026-06-02: Tracks spec v0.6.6. Split ghost handling into ghost FILES (emit if
   on-disk content) and ghost SYMLINKS (`/etc/alternatives/*`: suppress when the link
   equals the alternatives auto/best target via `update-alternatives --query`, emit a

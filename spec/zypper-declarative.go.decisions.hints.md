@@ -32,6 +32,7 @@ hand after generation (it is a known translator gap).
   ```
   cmd/zypper-declarative/main.go   thin entry: build args, call internal/cli
   internal/cli/                    dispatch, key=value parsing, global contract
+                                   (verbs: init, apply, diff, verify, status, describe)
   internal/manifest/               data model; json+yaml (de)serialise;
                                    resolve-format; canonical-model hashing
   internal/state/                  describe-actual-state: the single live reader
@@ -206,7 +207,13 @@ The tool runs as root, so `rpm -V` can read everything.
   `package_name` and is NOT an unpackaged file carries `status` == "changed" and a
   non-empty `changes` list (binds the field build 12 dropped). Because `rpm -V`
   reports only changes, pristine files never appear and the over-emission class
-  cannot recur; (1b)/(1c) ensure the ghost pass is not silently missing.
+  cannot recur; (1b)/(1c) ensure the ghost pass is not silently missing. (4)
+  IDEMPOTENCE: `describe out=/tmp/m.json` then `diff manifest-path=/tmp/m.json` MUST
+  produce an EMPTY drift report (no `files_extra`, no `files_modified`) on the
+  unchanged machine; equivalently `init out=/tmp/m.json` then the same `diff`.
+  This binds the drift-reference fix: if drift compares against the applied record
+  instead of the desired manifest, this assertion fails on a machine with unpackaged
+  /etc.
 
 ## Filesystem object model (the /etc and full-scan walks)
 
@@ -220,7 +227,25 @@ The tool runs as root, so `rpm -V` can read everything.
   Hardlinks: treat per path by content+type, do not detect or preserve hardlink
   identity.
 - `[spec]` In `compute-drift`, type is part of identity: differing type -> modified;
-  same type compares sha256 (file) or target (link).
+  same type compares sha256 (file) or target (link). `compute-drift`'s `reference`
+  is a Manifest that may be a DESIRED MANIFEST or an APPLIED RECORD (same schema);
+  the comparison is identical, the caller chooses which. CRITICAL for `diff`: pass
+  the DESIRED MANIFEST as the drift reference, NOT the applied record. On SL Micro
+  most of `/etc` is unpackaged, and diffing actual against an absent/empty applied
+  record reported all of it as `files_extra`; the desired manifest already contains
+  those paths, so drift is empty. The applied record is the reference only for the
+  intent diff and for apply's post-converge check.
+- `[spec]` `init` verb (onboarding): one command that adopts the current state as
+  the managed baseline. It INCLUDES the describe read (call the same actual-state
+  path describe uses, with content-store population if `content-store=` is set),
+  acquires the transaction context (it TAKES A SNAPSHOT), writes the described state
+  as the applied record inside the snapshot (its `meta.desired_sha256` is the hash
+  of that state, it is its own desired), CONVERGES NOTHING (no /etc write, no
+  package, no unit), also writes the adopted manifest to `out` for the operator,
+  then seals. After init, `diff` against the adopted manifest is empty (intent and
+  drift) and `verify` matches. A never-onboarded machine (no applied record) is
+  expected to show a large intent diff from `diff`, that is the signal to run init,
+  not a bug.
 
 ## Full-scan integrity (scope=full)
 
@@ -277,6 +302,16 @@ The tool runs as root, so `rpm -V` can read everything.
   executable in `/usr/lib/zypper/commands`) and invocable directly.
 - `[spec]` Installed via an OBS package on build.opensuse.org; no curl-based
   installation.
+- `[pcd]` Version single-source: a top-level `VERSION` file (one line, e.g. `0.6.7`)
+  is the sole version authority. The RPM spec reads it for `Version:`, the Makefile
+  reads it for the `make dist` tarball, and the binary embeds it (via `-ldflags -X`
+  from `$(cat VERSION)`), so the `version` output, RPM `Version:`, and tarball dir
+  are identical.
+- `[pcd]` `make dist` target in the Makefile (conventional name): produce
+  `zypper-declarative-X.Y.Z.tar.gz` containing a single top-level
+  `zypper-declarative-X.Y.Z/` directory, `X.Y.Z` read from `VERSION`, so rpmbuild's
+  default `%setup`/`%autosetup` (cd into `%{name}-%{version}/`) finds it. Exclude VCS
+  dirs and build output from the tarball.
 - `[spec]` Signal handling: clean exit on SIGTERM/SIGINT; an interrupted `apply`
   discards the transaction and leaves no new snapshot as the default boot target.
   Document the approach in `TRANSLATION_REPORT.md`.
@@ -292,6 +327,11 @@ The tool runs as root, so `rpm -V` can read everything.
 
 ## Changelog
 
+- 2026-06-02: Tracks spec v0.6.7. Added the `init` verb (onboarding: includes
+  describe, takes a snapshot, writes the adopted current state as the applied record,
+  converges nothing). Fixed `diff` to compute drift against the DESIRED MANIFEST, not
+  the applied record (the SL Micro unpackaged-/etc bug); added the idempotence
+  self-check (describe-then-diff yields empty drift).
 - 2026-06-02: Tracks spec v0.6.6. Split ghost handling into ghost FILES (emit if
   on-disk content) and ghost SYMLINKS (the `/etc/alternatives/*` case: suppress when
   the link equals the alternatives auto/best target, emit a manually-set link),
