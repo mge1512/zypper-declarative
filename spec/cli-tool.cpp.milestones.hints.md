@@ -55,7 +55,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Dependencies are DYNAMICALLY linked distro libraries (see component hints).
 find_package(PkgConfig REQUIRED)
-# pkg_check_modules(... ) / find_package(...) per the component decisions file.
+# Prefer pkg_check_modules(... REQUIRED IMPORTED_TARGET ...) for the distro libs
+# (libzypp, jsoncpp, yaml-cpp): their CMake configs are fragile across service packs
+# (some are Meson-generated and omit the package-config helper), whereas the .pc
+# files are stable on both SPs. See the component decisions file.
 
 add_executable(zypper-declarative
   src/main.cpp src/cli.cpp src/command_runner.cpp
