@@ -204,8 +204,10 @@
   (`zypp::target::rpm::librpmDb::db_const_iterator` for the installed set via
   `findAll()` and ownership via `findByFile()`;
   `RpmHeader::tag_fileinfos()` → `FileInfo` for the per-file baseline). No
-  librpm, no `rpm`/`zypper` subprocess. CMake found libzypp via its shipped
-  `ZyppConfig.cmake`; detected version **17.37.18** on the build host.
+  librpm, no `rpm`/`zypper` subprocess. CMake discovers libzypp via
+  `pkg_check_modules(ZYPP REQUIRED IMPORTED_TARGET libzypp)` and links
+  `PkgConfig::ZYPP` (the cross-SP-stable `libzypp.pc`, not `find_package`);
+  detected version **17.37.18** on the build host.
 - **Discovered detail (recorded for the maintainer):** `FileInfo.md5sum` on this
   rpm carries a **64-hex SHA256** file digest (modern rpm), not MD5. The
   pristine comparison therefore selects the on-disk digest algorithm by the
@@ -213,9 +215,16 @@
   sha256; 32 = MD5 via `md5_file_hex`; other = SHA256 fallback). This fixed an
   initial over-emission (every changed-vs-pristine file misclassified) caught by
   the live self-checks below.
-- **JSON:** jsoncpp, found via `jsoncppConfig.cmake`; version **1.8.4**.
-- **YAML:** yaml-cpp, found via `find_package`; version **0.6.3**
-  (`libyaml-cpp0_6`). Usage restricted to the 0.6↔0.8-stable surface.
+- **JSON:** jsoncpp, discovered via `pkg_check_modules(JSONCPP REQUIRED
+  IMPORTED_TARGET jsoncpp)` and linked as `PkgConfig::JSONCPP`; version **1.8.4**.
+  (Not `find_package(jsoncpp)`: on SLE 16 the Meson-generated
+  `jsoncppConfig.cmake` omits `include(CMakePackageConfigHelpers)`, so its
+  trailing `check_required_components(jsoncpp)` fails with "Unknown CMake
+  command"; the `.pc` file is stable on both SPs.)
+- **YAML:** yaml-cpp, discovered via `pkg_check_modules(YAMLCPP REQUIRED
+  IMPORTED_TARGET yaml-cpp)` and linked as `PkgConfig::YAMLCPP`; version
+  **0.6.3** (`libyaml-cpp0_6`). Usage restricted to the 0.6↔0.8-stable surface.
+  (Not `find_package(yaml-cpp)`, for the same per-SP CMake-config fragility.)
 - **SHA256/MD5:** libcrypto (OpenSSL **3.2.3**), `EVP_*` API.
 - **Services:** offline `systemctl --root <root> list-unit-files` via
   `OSCommandRunner` (not libsystemd/sd-bus, which cannot answer enablement under
@@ -256,8 +265,13 @@ digest-length fix:
   file applies.
 - **Step 2 — Compilation:** `make build` → CMake configure + `cmake --build` with
   **g++-15** → **success**, `-Wall -Wextra` clean (no warnings). The binary is a
-  dynamically-linked ELF; `ldd` confirms libzypp, libjsoncpp, libyaml-cpp, and
-  libcrypto are linked (dynamic by design — no static-binary check).
+  dynamically-linked ELF; `ldd` confirms libzypp (`libzypp.so.1735`), libjsoncpp
+  (`libjsoncpp.so.19`), libyaml-cpp (`libyaml-cpp.so.0.6`), and libcrypto
+  (`libcrypto.so.3`) are linked (dynamic by design — no static-binary check).
+  CMake's configure log confirms the three pkg-config IMPORTED targets resolve:
+  jsoncpp 1.8.4, yaml-cpp 0.6.3, libzypp 17.37.18. No C++ source change was
+  required for this build fix — only the dependency-discovery mechanism in
+  `CMakeLists.txt`.
 - **Step 3 — Translator test run:** `make test` builds and runs the black-box
   suite → **27 passed, 0 failed, 27 total**. The `test:` target is executable
   (it compiles and runs the suite, exiting non-zero on any failure), not a

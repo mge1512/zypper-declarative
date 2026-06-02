@@ -19,28 +19,29 @@ add_compile_options(-Wall -Wextra)
 # --- Dependencies (DYNAMICALLY linked distribution libraries) --------------
 # Per the C++ decisions hints: dynamic linking against the service pack's own
 # sonames; no static binary, no vendoring. Build per-SP via OBS.
+#
+# Discover jsoncpp, yaml-cpp, and libzypp via pkg-config IMPORTED targets, NOT
+# find_package(). On SLE 16 the jsoncpp jsoncppConfig.cmake is Meson-generated
+# and omits include(CMakePackageConfigHelpers), so its trailing
+# check_required_components(jsoncpp) fails with "Unknown CMake command" and
+# breaks the build; yaml-cpp's CMake config has the same per-SP fragility. The
+# .pc files (jsoncpp.pc, yaml-cpp.pc, libzypp.pc) are present and stable on both
+# SLE 15 SP7 and SLE 16.0, so pkg-config is the robust cross-SP discovery and
+# immune to the per-SP CMake-config drift. (decisions hints, 2026-06-02.)
 find_package(PkgConfig REQUIRED)
 
-# JSON: jsoncpp (jsoncpp-devel). Prefer the CMake config, fall back to pkg-config.
-find_package(jsoncpp QUIET)
-if(NOT jsoncpp_FOUND)
-  pkg_check_modules(JSONCPP REQUIRED jsoncpp)
-endif()
+# JSON: jsoncpp (jsoncpp-devel). 1.8.4 on SLE 15 SP7, 1.9.6 on SLE 16.0.
+pkg_check_modules(JSONCPP REQUIRED IMPORTED_TARGET jsoncpp)
 
 # YAML: yaml-cpp (libyaml-cpp). 0.6 on SLE 15 SP7, 0.8 on SLE 16.0; restrict to
-# the API stable across both.
-find_package(yaml-cpp QUIET)
-if(NOT yaml-cpp_FOUND)
-  pkg_check_modules(YAMLCPP REQUIRED yaml-cpp)
-endif()
+# the API stable across both. Branch on YAMLCPP_VERSION if ever needed.
+pkg_check_modules(YAMLCPP REQUIRED IMPORTED_TARGET yaml-cpp)
 
 # Package database / ownership / per-file baseline: libzypp (libzypp-devel).
-find_package(Zypp QUIET)
-if(NOT Zypp_FOUND)
-  pkg_check_modules(ZYPP REQUIRED libzypp)
-endif()
+pkg_check_modules(ZYPP REQUIRED IMPORTED_TARGET libzypp)
 
-# SHA256/MD5: libcrypto (OpenSSL 3).
+# SHA256/MD5: libcrypto (OpenSSL 3). No major-version/soname split across SPs;
+# the CMake config is stable, so find_package is fine here.
 find_package(OpenSSL REQUIRED)
 
 # --- Generated metadata header --------------------------------------------
@@ -65,35 +66,13 @@ target_include_directories(zypper-declarative PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
-# jsoncpp linkage
-if(jsoncpp_FOUND)
-  if(TARGET jsoncpp_lib)
-    target_link_libraries(zypper-declarative PRIVATE jsoncpp_lib)
-  elseif(TARGET JsonCpp::JsonCpp)
-    target_link_libraries(zypper-declarative PRIVATE JsonCpp::JsonCpp)
-  endif()
-else()
-  target_include_directories(zypper-declarative PRIVATE ${JSONCPP_INCLUDE_DIRS})
-  target_link_libraries(zypper-declarative PRIVATE ${JSONCPP_LIBRARIES})
-endif()
-
-# yaml-cpp linkage
-if(yaml-cpp_FOUND)
-  target_link_libraries(zypper-declarative PRIVATE yaml-cpp)
-else()
-  target_include_directories(zypper-declarative PRIVATE ${YAMLCPP_INCLUDE_DIRS})
-  target_link_libraries(zypper-declarative PRIVATE ${YAMLCPP_LIBRARIES})
-endif()
-
-# libzypp linkage
-if(Zypp_FOUND)
-  target_link_libraries(zypper-declarative PRIVATE zypp)
-else()
-  target_include_directories(zypper-declarative PRIVATE ${ZYPP_INCLUDE_DIRS})
-  target_link_libraries(zypper-declarative PRIVATE ${ZYPP_LIBRARIES})
-endif()
-
-target_link_libraries(zypper-declarative PRIVATE OpenSSL::Crypto)
+# Link the pkg-config IMPORTED targets (carry include dirs and link flags).
+target_link_libraries(zypper-declarative PRIVATE
+  PkgConfig::JSONCPP
+  PkgConfig::YAMLCPP
+  PkgConfig::ZYPP
+  OpenSSL::Crypto
+)
 
 include(GNUInstallDirs)
 install(TARGETS zypper-declarative RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
