@@ -46,6 +46,13 @@ and the code must not assume one version's API.
 - `[verified]` Link libzypp for every package operation: the installed set (name,
   version, release, arch), a file's owning package, AND the per-file recorded
   baseline for the pristine/ghost/type-mismatch determination.
+- `[pcd]` These libzypp queries are READS of the rpmdb: run them at TRANSLATION
+  TIME against the build host's real database, do NOT defer them to on-target.
+  Build 01 deferred the package enumeration and `tag_fileinfos()` ownership, emitted
+  an empty `packages` scope and 2221 all-unpackaged `/etc` files, and then
+  rationalised the empty output as "a real absence of ownership". On a host with a
+  populated rpmdb that is wrong: an empty result from a query you did not run is a
+  SKIPPED lookup, not an absence. Only mutating operations (snapshot/apply) defer.
 - `[verified from libzypp source]` The per-file baseline comes from
   `zypp::target::rpm::RpmHeader::tag_fileinfos()`, returning
   `std::list<zypp::target::rpm::FileInfo>`. `RpmHeader.cc` builds each `FileInfo`
@@ -289,9 +296,27 @@ and the code must not assume one version's API.
   are black-box assertions; the symlink and fifo cases are constructible under a
   synthetic root without root privilege, cover them rather than leaving them
   code-review-only.
+- `[spec]` Required self-checks (black-box, run as root in the test step, against
+  the build host's real rpmdb): run `describe` and assert (1) the `packages` scope
+  is present and NON-EMPTY (build 01 omitted it); (2) ownership resolves a known
+  file, `/etc/ssh/sshd_config` -> `openssh-server`; (3) a known-pristine
+  `/etc/ImageMagick-7-SUSE/*.xml` is ABSENT; (4) the pam pair, `common-auth` present
+  as type "link", `common-auth-pc` present as type "file" with a sha256. These bind
+  the libzypp read: if `tag_fileinfos()` returned nothing, (1)-(4) fail and the
+  build cannot pass by rationalising empty output. (Go and Rust carry the
+  equivalent checks against `rpm -V`; this is how the three stay convergent.)
 
 ## Changelog
 
+- 2026-06-02: Fixed the build-01 failure (hints only, no spec change): the libzypp
+  rpmdb reads (package enumeration, `tag_fileinfos()` ownership) were deferred to
+  on-target and the empty output rationalised as correct, giving an absent
+  `packages` scope and 2221 all-unpackaged files. Pinned these as TRANSLATION-TIME
+  reads (only mutations defer) and added binding self-checks (packages non-empty,
+  ownership resolves, pristine absent, pam pair) so an empty libzypp result fails
+  the build instead of passing. The matching one-sentence fix is in
+  `cli-tool.cpp.milestones.hints.md` (defer by privilege/mutation, not by naming
+  package work).
 - 2026-06-01: Compressed losslessly from the accreted v0.5.0-v0.6.5 file (same rule
   coverage; per-build changelog diary removed; the duplicate do-not-carry list folded
   into the rules above). The verified library bindings (libzypp/libsnapper/jsoncpp/

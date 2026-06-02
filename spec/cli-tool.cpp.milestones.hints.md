@@ -294,9 +294,15 @@ with `--version` accepted as a tolerated alias. There is no static-binary check
 here (this build is dynamic by design); instead confirm with `ldd` that the
 expected shared libraries are linked.
 
-Operations requiring root or a live SUSE host (real package, snapshot, and
-transaction work) are deferred to on-target human verification; only the
-unprivileged paths above are verifiable during translation.
+Only operations that MUTATE the system or genuinely require root to run (real
+snapshot creation and the apply/transaction path) are deferred to on-target human
+verification. Read-only system queries are NOT deferred: they run during
+translation and their behaviour is verified there. In particular a read-only
+package-database query (whether via a linked library such as libzypp or via an
+`rpm -q`-class command) is exercised at translation time against the build host's
+real database; do not defer it, and do not treat an empty result from a query you
+chose not to run as a real absence of data. Only the unprivileged paths above plus
+these read-only queries are verifiable during translation; the mutating paths defer.
 
 ---
 
