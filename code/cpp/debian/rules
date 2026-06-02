@@ -1,28 +1,36 @@
 #!/usr/bin/make -f
-# debian/rules for zypper-declarative
-# X-PCD-Spec-SHA256: f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
-
+# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Use GCC 15 for C++17 where a side-by-side g++-15 is available.
+ifeq ($(shell command -v g++-15 2>/dev/null),)
+  export CXX = g++
+else
+  export CXX = g++-15
+endif
 
 %:
 	dh $@
 
 override_dh_auto_configure:
-	cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+	cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_CXX_COMPILER=$(CXX)
 
 override_dh_auto_build:
 	cmake --build build -j
 	pandoc zypper-declarative.1.md -s -t man -o zypper-declarative.1
 
 override_dh_auto_install:
-	DESTDIR=$(CURDIR)/debian/zypper-declarative cmake --install build
-	install -d $(CURDIR)/debian/zypper-declarative/usr/share/man/man1
-	install -m 0644 zypper-declarative.1 \
-	  $(CURDIR)/debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
-	install -d $(CURDIR)/debian/zypper-declarative/usr/lib/zypper/commands
-	ln -sf /usr/bin/zypper-declarative \
-	  $(CURDIR)/debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
+	install -D -m0755 build/zypper-declarative \
+		debian/zypper-declarative/usr/bin/zypper-declarative
+	install -D -m0755 build/zypper-declarative \
+		debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
+	install -D -m0644 zypper-declarative.1 \
+		debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
 
 override_dh_auto_test:
-	# black-box tests require building the binary; run via the Makefile target
-	$(MAKE) test
+	# black-box tests require the built binary at the project root
+	cp -f build/zypper-declarative ./zypper-declarative
+	$(CXX) -std=c++17 -Wall -o independent_tests/claude-opus-4-8/run_tests \
+		independent_tests/claude-opus-4-8/zypper_declarative_test.cpp
+	cd independent_tests/claude-opus-4-8 && ./run_tests

@@ -1,26 +1,22 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// commands.hpp -- the five CLI verbs (apply, diff, verify, status, describe).
-// Each returns an ExitCode (0/1/2) and writes diagnostics to stderr, output to
-// stdout, per the deployment template stream rules. The verb layer is the only
-// place that maps results to a process exit code.
+// The CLI verbs (apply, diff, verify, status, describe). Each returns an exit
+// code and writes diagnostics to stderr and normal output to stdout. The verb
+// layer is the only place that maps an internal Diagnostic to an exit code.
 #ifndef ZD_COMMANDS_HPP
 #define ZD_COMMANDS_HPP
 
-#include "config.hpp"
 #include "command_runner.hpp"
-#include "describe.hpp"
+#include "config.hpp"
 
 namespace zd {
 
-// Each verb takes the resolved Config and a CommandRunner / SystemReader seam.
-// reader may be nullptr (synthetic-root / no live integration available).
-int cmd_apply(const Config& cfg, const CommandRunner& runner, const SystemReader* reader);
-int cmd_diff(const Config& cfg, const CommandRunner& runner, const SystemReader* reader);
-int cmd_verify(const Config& cfg, const CommandRunner& runner, const SystemReader* reader);
-int cmd_status(const Config& cfg, const CommandRunner& runner, const SystemReader* reader);
-int cmd_describe(const Config& cfg, const CommandRunner& runner, const SystemReader* reader);
+int cmd_apply(const Config& cfg, const CommandRunner& runner);
+int cmd_diff(const Config& cfg, const CommandRunner& runner);
+int cmd_verify(const Config& cfg, const CommandRunner& runner);
+int cmd_status(const Config& cfg, const CommandRunner& runner);
+int cmd_describe(const Config& cfg, const CommandRunner& runner);
 
-} // namespace zd
+}  // namespace zd
 
-#endif // ZD_COMMANDS_HPP
+#endif  // ZD_COMMANDS_HPP

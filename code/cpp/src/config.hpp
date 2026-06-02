@@ -1,44 +1,59 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// config.hpp -- the resolved CONFIG knobs and the key=value option model.
-// Control via environment variables is forbidden (CONFIG-ENV-VARS: forbidden);
-// the only env var consulted anywhere is ZYPPER_DECLARATIVE_DEBUG, a trace gate.
+// Resolved CONFIG knobs and the small Result type the internal behaviours use
+// to return errors to their caller (only the verb layer maps to an exit code).
 #ifndef ZD_CONFIG_HPP
 #define ZD_CONFIG_HPP
 
-#include "types.hpp"
-#include <string>
-#include <map>
 #include <optional>
+#include <string>
+
+#include "types.hpp"
 
 namespace zd {
 
+// CONFIG knobs (CONFIG section of the spec). All are key=value options;
+// command-line overrides preset. Defaults match the spec.
 struct Config {
     TransactionMode transaction_mode = TransactionMode::Auto;
-    std::optional<std::string> manifest_path;
-    ManifestFormat manifest_format = ManifestFormat::Json; // default json
-    OnUnreadable on_unreadable = OnUnreadable::Error;       // default error
-    ScanScope scope = ScanScope::Etc;                        // default etc
-    std::optional<std::string> repo_lock;
-    std::optional<std::string> content_store;
-    std::optional<std::string> keep_list;
-    bool signature_verification = true;                      // default on
-    std::optional<std::string> keyring;
+    std::string manifest_path;                 // default supplied by delivery
+    ManifestFormat manifest_format = ManifestFormat::Json;  // fallback default
+    bool on_unreadable_error = true;           // on-unreadable: error (default)
+    ScanScope scope = ScanScope::Etc;          // etc (default) or full
+    std::string repo_lock;
+    std::string content_store;                 // "" = read-only describe
+    std::string keep_list;                     // path to allowlist
+    bool signature_verification = true;        // default on
+    std::string keyring;
     std::string activation_policy = "reboot";
-    std::string applied_root = "/";
+    std::string applied_root = "/";            // load-applied-record root
     // describe-specific
-    std::string root = "/";
-    std::optional<std::string> out;
-    std::optional<ManifestFormat> explicit_format;           // format= for this invocation
-    std::optional<std::string> state_path;
+    std::string root = "/";                    // describe root
+    std::string out;                           // describe output ("" = stdout)
+    std::optional<ManifestFormat> explicit_format;  // format= if given
+    std::optional<std::string> state_path;     // verify/diff captured state
+    bool state_path_given = false;
+    bool manifest_path_given = false;
 };
 
-// One parsed key=value option.
-struct Option { std::string key; std::string value; };
+// Result<T>: an internal behaviour returns either a value or a Diagnostic.
+template <class T>
+struct Result {
+    bool ok = false;
+    T value{};
+    Diagnostic error;
+    static Result success(T v) { return Result{true, std::move(v), {}}; }
+    static Result fail(Diagnostic d) { return Result{false, {}, std::move(d)}; }
+};
 
-// Debug trace gate (NOT behaviour control).
-void debug_log(const std::string& msg);
+// Result<void> equivalent.
+struct Status {
+    bool ok = false;
+    Diagnostic error;
+    static Status success() { return Status{true, {}}; }
+    static Status fail(Diagnostic d) { return Status{false, std::move(d)}; }
+};
 
-} // namespace zd
+}  // namespace zd
 
-#endif // ZD_CONFIG_HPP
+#endif  // ZD_CONFIG_HPP

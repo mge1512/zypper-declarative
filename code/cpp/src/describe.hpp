@@ -1,62 +1,38 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// describe.hpp -- describe-actual-state, the single live-state reader, and the
-// system-integration seam it uses (SystemReader) so tests can supply a double.
+// describe-actual-state: the single live-state reader. Reads the four
+// declarable scopes (packages, repositories, services, config_files) under a
+// root and returns a Manifest in the shared schema. Optionally adds the two
+// observational scopes under scope=full. This is the only TU that talks to
+// libzypp's rpmdb, reads /etc/zypp/repos.d, reads unit enablement, or walks
+// /etc; keep the library linkage concentrated here.
 #ifndef ZD_DESCRIBE_HPP
 #define ZD_DESCRIBE_HPP
 
-#include "types.hpp"
-#include "config.hpp"
-#include "diff.hpp"
+#include <set>
 #include <string>
 #include <vector>
-#include <optional>
+
+#include "command_runner.hpp"
+#include "config.hpp"
+#include "types.hpp"
 
 namespace zd {
 
-// Result of describe-actual-state.
-struct ActualStateResult {
-    bool ok = true;                       // false under on_unreadable=error
+struct DescribeResult {
+    bool ok = false;                 // false only under on_unreadable=error
     Manifest manifest;
     std::vector<Diagnostic> diagnostics;  // warn diagnostics
-    Diagnostic error;                     // set when ok=false
+    Diagnostic error;                // set when !ok
 };
 
-// The system-integration seam: package ownership and rpmdb query, unit
-// enablement. The on-disk repos.d read and the /etc walk are filesystem reads
-// done directly by describe-actual-state. A SystemReader supplies the parts
-// that need libzypp / systemd; the production reader links those libraries, a
-// test double can stand in. nullptr = no system integration available (synthetic
-// root mode), in which case packages and services scopes are read as empty and
-// every /etc regular file/symlink is treated as unpackaged.
-class SystemReader {
-public:
-    virtual ~SystemReader() = default;
-    // Query the installed package set under root; ok=false if rpmdb unreadable.
-    virtual PackagesScope query_packages(const std::string& root, bool& ok) const = 0;
-    // Query unit enablement under root; ok=false if unreadable.
-    virtual ServicesScope query_services(const std::string& root, bool& ok) const = 0;
-    // Owning package of a path under root ("" if unpackaged).
-    virtual std::string owning_package(const std::string& root,
-                                       const std::string& path) const = 0;
-    // Does this regular file differ from its package baseline content? For an
-    // unpackaged file returns true (it has no baseline to match).
-    virtual bool file_differs_from_baseline(const std::string& root,
-                                            const std::string& path,
-                                            const std::string& actual_sha256) const = 0;
-    // Does this symlink differ from its package-recorded target?
-    virtual bool link_differs_from_baseline(const std::string& root,
-                                            const std::string& path,
-                                            const std::string& actual_target) const = 0;
-};
+// describe-actual-state on `root`. on_unreadable_error selects strict vs warn.
+DescribeResult describe_actual_state(const std::string& root,
+                                     bool on_unreadable_error, ScanScope scope,
+                                     const std::set<std::string>& keep_list,
+                                     const std::string& content_store,
+                                     const CommandRunner& runner);
 
-// BEHAVIOR/INTERNAL: describe-actual-state
-ActualStateResult describe_actual_state(const std::string& root,
-                                        OnUnreadable on_unreadable,
-                                        ScanScope scope,
-                                        const KeepList& keep,
-                                        const SystemReader* reader);
+}  // namespace zd
 
-} // namespace zd
-
-#endif // ZD_DESCRIBE_HPP
+#endif  // ZD_DESCRIBE_HPP

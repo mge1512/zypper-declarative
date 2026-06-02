@@ -14,96 +14,106 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "ZYPPER-DECLARATIVE" "1" "June 2026" "zypper-declarative 0.6.2" ""
+.TH "ZYPPER-DECLARATIVE" "1" "June 2026" "zypper-declarative 0.6.6" "User Commands"
 .hy
 .SH NAME
 .PP
-zypper-declarative - declarative reconciling converger surfaced as a
-zypper subcommand
+zypper-declarative - declarative system convergence for zypper
+(Machinery subset)
 .SH SYNOPSIS
 .PP
-\f[B]zypper declarative\f[R] \f[I]verb\f[R] [\f[I]key=value\f[R] \&...]
+\f[B]zypper declarative\f[R] \f[I]verb\f[R]
+[\f[I]key\f[R]=\f[I]value\f[R] \&...]
 .PP
-\f[B]zypper-declarative\f[R] \f[I]verb\f[R] [\f[I]key=value\f[R] \&...]
+\f[B]zypper-declarative\f[R] \f[I]verb\f[R]
+[\f[I]key\f[R]=\f[I]value\f[R] \&...]
 .SH DESCRIPTION
 .PP
 \f[B]zypper-declarative\f[R] converges a SUSE system to a desired
-manifest inside a single snapshot transaction, recording what was
-applied.
-The manifest is the declarable subset of the SUSE Machinery system
-description: \f[B]packages\f[R], \f[B]repositories\f[R],
-\f[B]services\f[R], and \f[B]config_files\f[R].
-Its canonical serialisation is JSON (Machinery \f[V]format_version\f[R]
-1); YAML is an opt-in alternative serialisation of the identical data
-model.
+manifest expressed in the declarable subset of the SUSE Machinery system
+description: the \f[B]packages\f[R], \f[B]repositories\f[R],
+\f[B]services\f[R], and \f[B]config_files\f[R] scopes.
+Convergence happens inside a single snapshot transaction and records
+what was applied; running it twice against an unchanged manifest and an
+undrifted system makes no changes (idempotent).
+The tool also reads the actual state of a system into the same data
+model (\f[B]describe\f[R]), prints a dry-run plan (\f[B]diff\f[R]), and
+checks drift against a reference (\f[B]verify\f[R]).
 .PP
-Options use \f[B]key=value\f[R] syntax (POSIX \f[V]--flag\f[R] style is
-not used for options).
-Bare-word global commands \f[B]version\f[R] and \f[B]help\f[R] are
-accepted, with \f[V]--version\f[R], \f[V]--help\f[R], and \f[V]-h\f[R]
-as tolerated aliases.
+The manifest\[cq]s canonical serialisation is JSON (Machinery
+\f[V]format_version\f[R] 1).
+YAML is an opt-in input and output serialisation of the identical data
+model, selected by an explicit \f[B]format=\f[R] option or by the file
+extension (\f[V].yaml\f[R]/\f[V].yml\f[R]).
+The applied record is always canonical JSON.
 .SH VERBS
 .TP
 \f[B]apply\f[R]
 Converge the system to the desired manifest inside a snapshot
 transaction.
-Idempotent.
 .TP
 \f[B]diff\f[R]
-Dry run.
-Print what \f[B]apply\f[R] would change, making no modification and
-opening no transaction.
+Print what \f[B]apply\f[R] would change.
+Makes no modification and opens no transaction.
 .TP
 \f[B]verify\f[R]
-Check whether the actual state equals a reference declaration, modulo
-the keep-list.
+Check whether the actual state equals a reference declaration (the
+applied record by default, or a manifest given with
+\f[B]manifest-path=\f[R]), modulo the keep-list.
 .TP
 \f[B]status\f[R]
-Print the current declarative state: which manifest is applied, the
-generation, and a one-line drift summary.
+Print the current declarative state: applied manifest hash, generation,
+and a one-line drift summary.
 .TP
 \f[B]describe\f[R]
 Read the actual state of the declarable scopes and emit it in the
-selected serialisation (JSON by default, YAML on request).
-.SH OPTIONS
+resolved serialisation.
+.SH GLOBAL COMMANDS
 .TP
-\f[B]mode=auto|external|internal\f[R]
-Transaction binding.
-Default \f[B]auto\f[R].
+\f[B]version\f[R] (alias \f[B]\[en]version\f[R])
+Print the program name, version, and the embedded spec hash; exit 0.
+.TP
+\f[B]help\f[R] (aliases \f[B]\[en]help\f[R], \f[B]-h\f[R])
+Print usage; exit 0.
+.PP
+A bare invocation with no verb prints usage to stdout and exits 0.
+.SH OPTIONS
+.PP
+Options are \f[B]key=value\f[R] pairs; POSIX \f[V]--flag\f[R] style is
+not used for options.
+.TP
+\f[B]mode=\f[R]auto|external|internal
+Transaction binding (default auto).
 .TP
 \f[B]manifest-path=\f[R]<path>
 Desired manifest (apply, diff); reference manifest for verify.
 .TP
-\f[B]format=json|yaml\f[R]
+\f[B]format=\f[R]json|yaml
 Serialisation for this invocation\[cq]s manifest I/O.
-When omitted, the operative file extension decides, else
+When omitted, the file extension decides, else
 \f[B]manifest-format\f[R].
 .TP
 \f[B]state-path=\f[R]<path>
-Captured actual state for verify and diff (offline; default reads the
-live system).
+Captured actual state for verify and diff (offline; default reads live).
 .TP
 \f[B]root=\f[R]<path>
-Root to describe.
-Default \f[B]/\f[R].
+Root to describe (default \[lq]/\[rq]).
 .TP
 \f[B]out=\f[R]<path>
-describe output file.
-Default stdout.
+describe output file (default stdout).
 .TP
-\f[B]on-unreadable=error|warn\f[R]
-describe handling of an unreadable scope source.
-Default \f[B]error\f[R].
+\f[B]on-unreadable=\f[R]error|warn
+describe: fail (default) or omit+warn on an unreadable scope source.
 .TP
-\f[B]scope=etc|full\f[R]
-describe/verify read scope.
-\f[B]etc\f[R] (default) inspects only /etc; \f[B]full\f[R] also audits
+\f[B]scope=\f[R]etc|full
+describe/verify read scope; etc (default) is /etc only, full also audits
 /usr and /boot (expensive, opt-in).
 .PP
-Additional CONFIG knobs accepted as key=value options:
-\f[B]manifest-format\f[R], \f[B]repo-lock\f[R], \f[B]content-store\f[R],
-\f[B]keep-list\f[R], \f[B]signature-verification\f[R],
-\f[B]keyring\f[R], \f[B]activation-policy\f[R], \f[B]applied-root\f[R].
+Other CONFIG knobs accepted as options: \f[B]manifest-format\f[R],
+\f[B]repo-lock\f[R], \f[B]content-store\f[R], \f[B]keep-list\f[R],
+\f[B]signature-verification\f[R], \f[B]keyring\f[R],
+\f[B]activation-policy\f[R], \f[B]applied-root\f[R].
+A command-line option overrides the corresponding preset value.
 .SH EXIT STATUS
 .TP
 \f[B]0\f[R]
@@ -120,10 +130,11 @@ unreadable; insufficient privilege; transaction mechanism unavailable;
 output path unwritable; malformed state dump.
 .SH FILES
 .TP
-\f[B]/usr/lib/zypper-declarative/applied.json\f[R]
-The applied record of a generation (stored inside the snapshot).
+\f[I]/usr/lib/zypper-declarative/applied.json\f[R]
+The applied record of the current generation.
 .SH SEE ALSO
 .PP
-zypper(8), snapper(8), transactional-update(8)
+\f[B]zypper\f[R](8), \f[B]snapper\f[R](8),
+\f[B]transactional-update\f[R](8)
 .SH AUTHORS
 Matthias G. Eckermann.

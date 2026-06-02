@@ -1,108 +1,115 @@
-<!-- generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e -->
 # zypper-declarative
 
-A declarative reconciling converger for SUSE systems, surfaced as a zypper
-subcommand. It converges a system to a desired **manifest** — the declarable
-subset of the SUSE Machinery system description (`packages`, `repositories`,
-`services`, `config_files`) — inside a single snapshot transaction, recording
-what was applied.
+<!-- generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03 -->
 
-Module identity: `github.com/mge1512/zypper-declarative`.
-Spec version: 0.6.2. Spec SHA256:
-`f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e`.
+Declarative system convergence for SUSE systems. `zypper-declarative` converges
+a system to a desired manifest expressed in the **declarable subset** of the
+SUSE Machinery system description — the `packages`, `repositories`, `services`,
+and `config_files` scopes — inside a single snapshot transaction, records what
+was applied, and is idempotent. It also reads the actual state into the same
+data model (`describe`), prints a dry-run plan (`diff`), and checks drift
+(`verify`).
 
-## Installation (via OBS)
+It is surfaced as the `zypper declarative` subcommand and is also invokable
+directly as `zypper-declarative`.
 
-Distributed via the openSUSE Build Service. Install with your system package
-manager:
+## Manifest format
+
+The manifest is a typed data model. Its canonical serialisation is JSON
+(Machinery `format_version` 1, the `_attributes`/`_elements` `ScopeWrapper`
+idiom, `underscore_style` field names). YAML is an opt-in serialisation of the
+identical model, selected by an explicit `format=` option or the file extension
+(`.yaml` / `.yml`); the `manifest-format` default applies otherwise. JSON output
+is Machinery-compatible; YAML output is not. The applied record is always
+canonical JSON. Manifest identity (`desired_sha256`) is the hash of a canonical
+serialisation of the parsed model, so the same intent in JSON or YAML yields the
+same hash.
+
+## Installation
+
+Distributed via the openSUSE Build Service (OBS). curl-based installation is not
+supported.
 
 ```sh
-# openSUSE / SLE (RPM)
+# openSUSE / SLE (zypper)
 sudo zypper install zypper-declarative
 
-# Fedora / RHEL family (RPM)
+# Fedora / RHEL family (dnf)
 sudo dnf install zypper-declarative
 
-# Debian / Ubuntu (DEB)
+# Debian / Ubuntu family (apt)
 sudo apt install zypper-declarative
 ```
 
-curl-based installation is **not** supported (supply-chain security
-requirement).
-
 ## Usage
 
-Invoke as a zypper subcommand or directly:
-
 ```sh
-zypper declarative <verb> [key=value ...]
-zypper-declarative <verb> [key=value ...]
+zypper declarative apply
+zypper declarative apply mode=external
+zypper declarative apply manifest-path=/var/lib/zypper-declarative/desired.json
+zypper declarative diff
+zypper declarative verify
+zypper declarative verify state-path=/tmp/state.json
+zypper declarative status
+zypper declarative describe
+zypper declarative describe > desired.json              # bootstrap a manifest
+zypper declarative describe format=yaml > desired.yaml
+zypper declarative describe root=/mnt out=/tmp/state.json
+zypper declarative describe scope=full out=/tmp/full.json   # include /usr,/boot
+zypper declarative diff manifest-path=baseline.json state-path=after.json   # offline
+zypper declarative verify manifest-path=baseline.json state-path=after.json # offline
 ```
 
-Verbs:
+Equivalent direct form: `zypper-declarative <verb> [key=value ...]`.
+
+### Verbs
 
 | Verb | Purpose |
 |------|---------|
-| `apply` | Converge the system to the desired manifest (inside a snapshot transaction). |
-| `diff` | Dry run: print what `apply` would change. No modification, no transaction. |
-| `verify` | Check the actual state against a reference declaration (modulo the keep-list). |
-| `status` | Print the current declarative state and a one-line drift summary. |
-| `describe` | Emit the actual state of the declarable scopes as a manifest. |
+| `apply` | converge the system to the desired manifest |
+| `diff` | print what `apply` would change (dry run) |
+| `verify` | check the actual state against a reference, modulo the keep-list |
+| `status` | print the current declarative state and a drift summary |
+| `describe` | emit the actual state as a manifest |
 
-Global commands (bare words, with tolerated flag aliases):
+`version` and `help` are bare-word global commands (with tolerated `--version`,
+`--help`, `-h` aliases). A bare invocation prints usage and exits 0.
 
-```sh
-zypper-declarative version      # prints name, version, and the embedded spec hash
-zypper-declarative help         # prints usage
-zypper-declarative --version    # tolerated alias for version
-zypper-declarative --help / -h  # tolerated aliases for help
-```
+### Key=value options
 
-### Examples
-
-```sh
-zypper declarative describe > desired.json          # bootstrap a manifest (JSON)
-zypper declarative describe format=yaml > desired.yaml
-zypper declarative diff manifest-path=desired.json
-zypper declarative verify
-zypper declarative verify scope=full                 # /usr + /boot integrity audit
-zypper declarative diff manifest-path=baseline.json state-path=after.json  # offline
-zypper declarative apply manifest-path=/etc/zypper-declarative/desired.json
-```
-
-## Options (key=value; accepted in any position)
-
+Options are `key=value` pairs (POSIX `--flag` style is not used for options):
 `mode`, `manifest-path`, `format`, `state-path`, `root`, `out`,
 `on-unreadable`, `scope`, plus the CONFIG knobs `manifest-format`, `repo-lock`,
 `content-store`, `keep-list`, `signature-verification`, `keyring`,
-`activation-policy`, `applied-root`. POSIX `--flag` style is not used for
-options. Behaviour is never controlled via environment variables.
+`activation-policy`, `applied-root`. A command-line option overrides the
+corresponding preset value.
 
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success (converged, no-op, matches declaration, or describe emitted). |
-| `1` | Logical failure (convergence failed/discarded; verify drift; invalid/unsafe/unverified manifest; state collection failed). |
-| `2` | Invocation error (bad arguments; unknown format value; manifest unreadable; insufficient privilege; transaction mechanism unavailable; output path unwritable; malformed state dump). |
+| `0` | success: converged, no-op, system matches declaration, or describe emitted |
+| `1` | logical failure: convergence discarded; verify drift; invalid/unsafe/unverified manifest; state collection failed |
+| `2` | invocation error: bad arguments; unknown format; manifest unreadable; insufficient privilege; transaction unavailable; output unwritable; malformed state dump |
+
+Diagnostics go to stderr; normal output (summaries, plan, status, the describe
+document) goes to stdout.
 
 ## Building from source
 
-C++17, built with CMake. Dependencies are **dynamically** linked distribution
-shared libraries (no static binary, no vendoring): `libzypp`, `jsoncpp`,
-`yaml-cpp`, `libsnapper`, and OpenSSL `libcrypto`.
-
-On **SLE 15 SP7**, build with the side-by-side GCC 15 (`gcc15-c++`), since the
-default `gcc-c++` is GCC 7 (too old for clean C++17). On **SLE 16** the default
-toolchain is already GCC 15.
+C++17, built with CMake against the distribution's shared libraries
+(`libzypp`, `libsnapper`, `jsoncpp`, `yaml-cpp`, `libcrypto`) — dynamic
+linking, no vendoring. On SLE 15 SP7 use the side-by-side GCC 15 (`gcc15-c++`,
+`CXX=g++-15`); on SLE 16.0 the default toolchain is GCC 15.
 
 ```sh
-make build       # cmake configure + build, binary copied to project root
-make test        # build and run the black-box test suite
-make man         # generate the man page via pandoc
-sudo make install
+make build      # configure + compile, copies the binary to the project root
+make test       # build, then run the black-box test suite
+make man        # render the man page (requires pandoc)
+make install    # install binary, zypper subcommand, and man page
+make clean
 ```
 
-## Platform
+## Documentation
 
-Linux only. Target: SL Micro 6.2 and SLES 16.1.
+See the man page `zypper-declarative.1` (`man zypper-declarative`).

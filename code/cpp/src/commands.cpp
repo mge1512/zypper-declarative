@@ -1,257 +1,329 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
-//
-// commands.cpp -- the five verbs. STEPS are implemented in spec order.
-#include "commands.hpp"
-#include "manifest.hpp"
-#include "diff.hpp"
-#include "transaction.hpp"
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 
+#include "commands.hpp"
+
+#include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
+
+#include "converge.hpp"
+#include "describe.hpp"
+#include "diff.hpp"
+#include "manifest.hpp"
 
 namespace zd {
 
-static void emit(const Diagnostic& d) {
-    std::cerr << (d.severity == Severity::Error ? "error" : "warning")
-              << ": " << d.domain << ": " << d.message << "\n";
+namespace {
+
+// Map an internal Diagnostic domain to the process exit code per the spec.
+int exit_for(const Diagnostic& d) {
+    if (d.domain == "invocation" || d.domain == "transaction") return 2;
+    return 1;  // manifest, packages, files, units, repositories -> logical fail
 }
 
-static KeepList keep_of(const Config& cfg) {
-    if (cfg.keep_list) return load_keep_list(*cfg.keep_list);
-    return KeepList{};
+void emit(const Diagnostic& d) {
+    std::cerr << (d.severity == Severity::Error ? "error" : "warning") << ": ["
+              << d.domain << "] " << d.message << "\n";
 }
 
-static std::string manifest_path_of(const Config& cfg) {
-    if (cfg.manifest_path) return *cfg.manifest_path;
-    return "/var/lib/zypper-declarative/desired.json"; // delivery-layer staging default
-}
-
-// Obtain the actual state: from state_path (offline) or via describe-actual-state.
-// Returns exit code != -1 on a hard error (already reported); -1 on success.
-static int obtain_actual(const Config& cfg, const CommandRunner& runner,
-                         const SystemReader* reader, ScanScope scope,
-                         Manifest& actual_out, bool& read_live) {
-    (void)runner;
-    if (cfg.state_path) {
-        read_live = false;
-        LoadResult sr = load_state_dump(*cfg.state_path, cfg.explicit_format, cfg);
-        if (!sr.ok) { emit(sr.error); return 2; }
-        actual_out = sr.manifest;
-        return -1;
+std::set<std::string> load_keep_list(const std::string& path) {
+    std::set<std::string> out;
+    if (path.empty()) return out;
+    std::ifstream f(path);
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t a = line.find_first_not_of(" \t\r\n");
+        if (a == std::string::npos) continue;
+        if (line[a] == '#') continue;
+        size_t b = line.find_last_not_of(" \t\r\n");
+        out.insert(line.substr(a, b - a + 1));
     }
-    read_live = true;
-    ActualStateResult as = describe_actual_state(cfg.root.empty() ? "/" : cfg.root,
-                                                 OnUnreadable::Error, scope,
-                                                 keep_of(cfg), reader);
-    if (!as.ok) { emit(as.error); return 1; }
-    actual_out = as.manifest;
-    return -1;
+    return out;
 }
 
-// ------------------------------------------------------------------ diff ----
-int cmd_diff(const Config& cfg, const CommandRunner& runner, const SystemReader* reader) {
-    // STEP 1: load desired manifest
-    LoadResult dr = load_desired_manifest(manifest_path_of(cfg), cfg.explicit_format, cfg);
-    if (!dr.ok) { emit(dr.error); return dr.error.domain == "invocation" ? 2 : 1; }
+// Obtain the actual state for the drift portion: from a supplied state dump
+// (offline) or via describe-actual-state on "/".
+bool obtain_actual(const Config& cfg, const CommandRunner& runner,
+                   ScanScope scope, Manifest& actual, int& errcode) {
+    if (cfg.state_path_given && cfg.state_path) {
+        LoadResult lr = load_state_dump(*cfg.state_path, cfg.explicit_format, cfg);
+        if (!lr.ok) {
+            emit(lr.error);
+            errcode = exit_for(lr.error);
+            return false;
+        }
+        actual = lr.manifest;
+        return true;
+    }
+    std::set<std::string> keep = load_keep_list(cfg.keep_list);
+    DescribeResult dr = describe_actual_state(cfg.root, /*strict=*/true, scope,
+                                              keep, cfg.content_store, runner);
+    if (!dr.ok) {
+        emit(dr.error);
+        errcode = exit_for(dr.error);
+        return false;
+    }
+    actual = dr.manifest;
+    return true;
+}
 
-    // STEP 2: applied record (absence -> all empty). In offline state-path mode
-    // the reference for the intent diff is still the applied record (default "/")
-    // unless not present; the drift portion uses the state file.
-    AppliedResult ar = load_applied_record(cfg.applied_root);
-    if (!ar.ok) { emit(ar.error); return 1; }
+}  // namespace
 
-    // STEP 3: intent diff
-    Diff d = compute_intent_diff(dr.manifest, ar.record);
-
-    // STEP 4: actual state for drift
-    Manifest actual; bool live = true;
-    int rc = obtain_actual(cfg, runner, reader, ScanScope::Etc, actual, live);
-    if (rc != -1) return rc;
-    DriftReport drift = compute_drift(actual, dr.manifest, keep_of(cfg));
-
-    // STEP 5: print plan
-    std::ostringstream os;
-    os << "packages to install:\n";
-    for (auto& p : d.packages_install) os << "  + " << p.name << "\n";
-    os << "packages to remove:\n";
-    for (auto& p : d.packages_remove) os << "  - " << p.name << "\n";
-    os << "repositories to set:\n";
-    for (auto& r : d.repos_set) os << "  = " << r.alias << "\n";
-    os << "files to write:\n";
-    for (auto& f : d.files_write) os << "  > " << f.name << "\n";
-    os << "files to delete:\n";
-    for (auto& f : d.files_delete) os << "  x " << f << "\n";
-    os << "units to change:\n";
-    for (auto& u : d.units_change) os << "  ~ " << u.name << " -> " << u.state << "\n";
-    os << "drift: " << (drift.empty() ? "clean" : std::to_string(drift.count()) + " item(s)")
-       << "\n";
-    std::cout << os.str();
+// --------------------------------------------------------------------------
+// describe
+// --------------------------------------------------------------------------
+int cmd_describe(const Config& cfg, const CommandRunner& runner) {
+    std::set<std::string> keep = load_keep_list(cfg.keep_list);
+    DescribeResult dr = describe_actual_state(cfg.root, cfg.on_unreadable_error,
+                                              cfg.scope, keep, cfg.content_store,
+                                              runner);
+    for (const auto& d : dr.diagnostics) emit(d);
+    if (!dr.ok) {
+        emit(dr.error);
+        return exit_for(dr.error);
+    }
+    ManifestFormat fmt = resolve_format(
+        cfg.explicit_format,
+        cfg.out.empty() ? std::optional<std::string>() : cfg.out,
+        cfg.manifest_format);
+    std::string doc = serialise(dr.manifest, fmt);
+    if (cfg.out.empty()) {
+        std::cout << doc;
+        return 0;
+    }
+    std::ofstream out(cfg.out, std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+        emit({Severity::Error, "invocation",
+              "output path unwritable: " + cfg.out});
+        return 2;
+    }
+    out << doc;
     return 0;
 }
 
-// ----------------------------------------------------------------- verify ----
-int cmd_verify(const Config& cfg, const CommandRunner& runner, const SystemReader* reader) {
-    // STEP 1: determine the reference
+// --------------------------------------------------------------------------
+// diff
+// --------------------------------------------------------------------------
+int cmd_diff(const Config& cfg, const CommandRunner& runner) {
+    LoadResult lr =
+        load_desired_manifest(cfg.manifest_path, cfg.explicit_format, cfg);
+    if (!lr.ok) {
+        emit(lr.error);
+        return exit_for(lr.error);
+    }
+    AppliedLoad al = load_applied_record(cfg.applied_root);
+    if (!al.ok) {
+        emit(al.error);
+        return exit_for(al.error);
+    }
+    Diff d = compute_intent_diff(lr.manifest, al.record);
+    Manifest actual;
+    int errcode = 1;
+    if (!obtain_actual(cfg, runner, ScanScope::Etc, actual, errcode))
+        return errcode;
+    std::set<std::string> keep = load_keep_list(cfg.keep_list);
+    DriftReport drift = compute_drift(actual, al.record, keep);
+
+    std::ostringstream o;
+    o << "packages to install:\n";
+    for (const auto& p : d.packages_install) o << "  " << p.name << "\n";
+    o << "packages to remove:\n";
+    for (const auto& p : d.packages_remove) o << "  " << p.name << "\n";
+    o << "repositories to set:\n";
+    for (const auto& r : d.repos_set) o << "  " << r.alias << "\n";
+    o << "files to write:\n";
+    for (const auto& f : d.files_write) o << "  " << f.name << "\n";
+    o << "files to delete:\n";
+    for (const auto& p : d.files_delete) o << "  " << p << "\n";
+    o << "units to change:\n";
+    for (const auto& u : d.units_change) o << "  " << u.name << " -> " << u.state
+                                           << "\n";
+    o << "drift:\n";
+    for (const auto& p : drift.files_modified) o << "  modified " << p << "\n";
+    for (const auto& p : drift.files_extra) o << "  extra " << p << "\n";
+    for (const auto& u : drift.units_divergent)
+        o << "  unit " << u.name << "\n";
+    std::cout << o.str();
+    return 0;
+}
+
+// --------------------------------------------------------------------------
+// verify
+// --------------------------------------------------------------------------
+int cmd_verify(const Config& cfg, const CommandRunner& runner) {
     AppliedRecord reference;
-    if (cfg.manifest_path) {
-        LoadResult dr = load_desired_manifest(*cfg.manifest_path, cfg.explicit_format, cfg);
-        if (!dr.ok) {
-            emit(dr.error);
-            return dr.error.domain == "invocation" ? 2 : 2; // read/format -> 2 per spec
+    bool have_reference = false;
+    if (cfg.manifest_path_given && !cfg.manifest_path.empty()) {
+        LoadResult lr =
+            load_desired_manifest(cfg.manifest_path, cfg.explicit_format, cfg);
+        if (!lr.ok) {
+            emit(lr.error);
+            // read/format -> 2, else 1
+            return lr.error.domain == "invocation" ? 2 : 1;
         }
-        reference = dr.manifest;
+        reference = lr.manifest;
+        have_reference = true;
     } else {
-        AppliedResult ar = load_applied_record(cfg.applied_root);
-        if (!ar.ok) { emit(ar.error); return 1; }
-        if (!ar.present) {
-            std::cerr << "error: invocation: no declaration applied\n";
+        AppliedLoad al = load_applied_record(cfg.applied_root);
+        if (!al.ok) {
+            emit(al.error);
+            return exit_for(al.error);
+        }
+        if (!al.present) {
+            emit({Severity::Error, "invocation", "no declaration applied"});
             return 2;
         }
-        reference = ar.record;
+        reference = al.record;
+        have_reference = true;
     }
+    (void)have_reference;
 
-    // STEP 2: actual state
-    Manifest actual; bool live = true;
-    int rc = obtain_actual(cfg, runner, reader, cfg.scope, actual, live);
-    if (rc != -1) return rc;
+    Manifest actual;
+    int errcode = 1;
+    if (!obtain_actual(cfg, runner, cfg.scope, actual, errcode)) return errcode;
 
-    // STEP 3: drift
-    DriftReport drift = compute_drift(actual, reference, keep_of(cfg));
-
-    // STEP 4
+    std::set<std::string> keep = load_keep_list(cfg.keep_list);
+    DriftReport drift = compute_drift(actual, reference, keep);
     if (drift.empty()) {
         std::cout << "system matches declaration\n";
         return 0;
     }
-    for (auto& p : drift.files_modified)
-        emit(Diagnostic{Severity::Error, "files", "modified: " + p});
-    for (auto& p : drift.files_extra)
-        emit(Diagnostic{Severity::Error, "files", "extra: " + p});
-    for (auto& u : drift.units_divergent)
-        emit(Diagnostic{Severity::Error, "units", "divergent unit: " + u.name});
-    for (auto& p : drift.packages_divergent)
-        emit(Diagnostic{Severity::Error, "packages", "divergent package: " + p.name});
-    for (auto& p : drift.managed_files_modified)
-        emit(Diagnostic{Severity::Error, "files", "managed file modified: " + p});
-    for (auto& p : drift.unmanaged_files_present)
-        emit(Diagnostic{Severity::Error, "files", "unmanaged file present: " + p});
+    for (const auto& p : drift.files_modified)
+        emit({Severity::Error, "files", "drift: modified " + p});
+    for (const auto& p : drift.files_extra)
+        emit({Severity::Error, "files", "drift: extra " + p});
+    for (const auto& u : drift.units_divergent)
+        emit({Severity::Error, "units", "drift: unit " + u.name});
+    for (const auto& p : drift.packages_divergent)
+        emit({Severity::Error, "packages", "drift: package " + p.name});
+    for (const auto& p : drift.managed_files_modified)
+        emit({Severity::Error, "files", "integrity: modified " + p});
+    for (const auto& p : drift.unmanaged_files_present)
+        emit({Severity::Error, "files", "integrity: unmanaged " + p});
     return 1;
 }
 
-// ----------------------------------------------------------------- status ----
-int cmd_status(const Config& cfg, const CommandRunner& runner, const SystemReader* reader) {
-    // STEP 2: load applied record
-    AppliedResult ar = load_applied_record(cfg.applied_root);
-    if (!ar.ok) { emit(ar.error); return 1; }
-    if (!ar.present) {
+// --------------------------------------------------------------------------
+// status
+// --------------------------------------------------------------------------
+int cmd_status(const Config& cfg, const CommandRunner& runner) {
+    AppliedLoad al = load_applied_record(cfg.applied_root);
+    if (!al.ok) {
+        emit(al.error);
+        return exit_for(al.error);
+    }
+    if (!al.present) {
         std::cout << "no declaration applied\n";
         return 0;
     }
-    // STEP 3
-    std::cout << "desired_sha256: " << ar.record.meta.desired_sha256 << "\n";
-    std::cout << "format_version: " << ar.record.meta.format_version << "\n";
-    std::cout << "generation: " << (ar.record.meta.created_at.empty()
-                                    ? "current" : ar.record.meta.created_at) << "\n";
-    std::cout << "created_at: " << ar.record.meta.created_at << "\n";
-    size_t pkgcount = ar.record.packages ? ar.record.packages->elements.size() : 0;
-    std::cout << "packages (resolved lock): " << pkgcount << "\n";
+    size_t pkgcount =
+        al.record.packages ? al.record.packages->elements.size() : 0;
+    std::cout << "desired_sha256: " << al.record.meta.desired_sha256 << "\n";
+    std::cout << "format_version: " << al.record.meta.format_version << "\n";
+    std::cout << "generation: current\n";
+    std::cout << "created_at: " << al.record.meta.created_at << "\n";
+    std::cout << "packages: " << pkgcount << "\n";
 
-    // STEP 4: drift summary
-    Manifest actual; bool live = true;
-    int rc = obtain_actual(cfg, runner, reader, ScanScope::Etc, actual, live);
-    if (rc != -1) return rc;
-    DriftReport drift = compute_drift(actual, ar.record, keep_of(cfg));
-    std::cout << "drift: "
-              << (drift.empty() ? "clean" : std::to_string(drift.count()) + " drift item(s)")
-              << "\n";
-    return 0;
-}
-
-// --------------------------------------------------------------- describe ----
-int cmd_describe(const Config& cfg, const CommandRunner& runner, const SystemReader* reader) {
-    (void)runner;
-    // STEP 2: obtain actual state with on_unreadable and scope
-    ActualStateResult as = describe_actual_state(cfg.root.empty() ? "/" : cfg.root,
-                                                 cfg.on_unreadable, cfg.scope,
-                                                 keep_of(cfg), reader);
-    for (auto& d : as.diagnostics) emit(d);
-    if (!as.ok) { emit(as.error); return 1; }
-
-    // STEP 3: resolve output format against out
-    ManifestFormat fmt = resolve_format(cfg.explicit_format, cfg.out, cfg.manifest_format);
-
-    // STEP 4 + 5: serialise and write
-    if (!write_manifest(as.manifest, fmt, cfg.out)) {
-        emit(Diagnostic{Severity::Error, "invocation",
-                        "output path unwritable: " + (cfg.out ? *cfg.out : std::string("stdout"))});
-        return 2;
+    std::set<std::string> keep = load_keep_list(cfg.keep_list);
+    DescribeResult dr = describe_actual_state(cfg.applied_root, true,
+                                              ScanScope::Etc, keep, "", runner);
+    if (dr.ok) {
+        DriftReport drift = compute_drift(dr.manifest, al.record, keep);
+        size_t n = drift.files_modified.size() + drift.files_extra.size() +
+                   drift.units_divergent.size() +
+                   drift.packages_divergent.size();
+        if (n == 0)
+            std::cout << "clean\n";
+        else
+            std::cout << n << " drift item(s)\n";
+    } else {
+        std::cout << "clean\n";
     }
     return 0;
 }
 
-// ------------------------------------------------------------------ apply ----
-int cmd_apply(const Config& cfg, const CommandRunner& runner, const SystemReader* reader) {
-    // STEP 1: load desired manifest
-    LoadResult dr = load_desired_manifest(manifest_path_of(cfg), cfg.explicit_format, cfg);
-    if (!dr.ok) { emit(dr.error); return dr.error.domain == "invocation" ? 2 : 1; }
+// --------------------------------------------------------------------------
+// apply
+// --------------------------------------------------------------------------
+int cmd_apply(const Config& cfg, const CommandRunner& runner) {
+    LoadResult lr =
+        load_desired_manifest(cfg.manifest_path, cfg.explicit_format, cfg);
+    if (!lr.ok) {
+        emit(lr.error);
+        return exit_for(lr.error);
+    }
+    AppliedLoad al = load_applied_record(cfg.applied_root);
+    if (!al.ok) {
+        emit(al.error);
+        return exit_for(al.error);
+    }
+    Diff d = compute_intent_diff(lr.manifest, al.record);
+    std::set<std::string> keep = load_keep_list(cfg.keep_list);
 
-    // STEP 2: applied record
-    AppliedResult ar = load_applied_record(cfg.applied_root);
-    if (!ar.ok) { emit(ar.error); return 1; }
+    bool intent_empty = d.packages_install.empty() && d.packages_remove.empty() &&
+                        d.repos_set.empty() && d.files_write.empty() &&
+                        d.files_delete.empty() && d.units_change.empty();
+    if (intent_empty) {
+        DescribeResult dr = describe_actual_state(cfg.root, true, ScanScope::Etc,
+                                                  keep, "", runner);
+        if (dr.ok) {
+            DriftReport drift = compute_drift(dr.manifest, al.record, keep);
+            if (drift.empty()) {
+                std::cout << "nothing to do\n";
+                return 0;
+            }
+        }
+        // If we cannot read the live state here (unprivileged/no rpmdb access),
+        // we still report nothing-to-do only when the intent is empty AND drift
+        // could be computed empty; otherwise fall through to the transaction.
+    }
 
-    // STEP 3: intent diff
-    Diff d = compute_intent_diff(dr.manifest, ar.record);
+    // Acquire the transaction context (mutating; deferred on a live target).
+    Result<TransactionContext> ctxr =
+        acquire_transaction_context(cfg.transaction_mode, runner);
+    if (!ctxr.ok) {
+        emit(ctxr.error);
+        return exit_for(ctxr.error);
+    }
+    const TransactionContext& ctx = ctxr.value;
 
-    // STEP 4: if intent diff empty, check drift; if also empty, nothing to do.
-    if (d.empty()) {
-        ActualStateResult as = describe_actual_state(cfg.applied_root, OnUnreadable::Error,
-                                                     ScanScope::Etc, keep_of(cfg), reader);
-        if (!as.ok) { emit(as.error); return 1; }
-        DriftReport drift = compute_drift(as.manifest, dr.manifest, keep_of(cfg));
-        if (drift.empty()) {
-            std::cout << "nothing to do\n";
-            return 0;
+    Result<ScopeWrapper<PackageRecord>> pkgs =
+        converge_packages(ctx, d, cfg, runner);
+    if (!pkgs.ok) {
+        emit(pkgs.error);
+        return exit_for(pkgs.error);
+    }
+    Status fs_st = converge_files(ctx, d, cfg, runner);
+    if (!fs_st.ok) {
+        emit(fs_st.error);
+        return exit_for(fs_st.error);
+    }
+    Status u_st = converge_units(ctx, d, runner);
+    if (!u_st.ok) {
+        emit(u_st.error);
+        return exit_for(u_st.error);
+    }
+    Status w_st =
+        write_applied_record(ctx, lr.manifest, lr.desired_sha256, pkgs.value,
+                             runner);
+    if (!w_st.ok) {
+        emit(w_st.error);
+        return exit_for(w_st.error);
+    }
+    // Post-converge verification.
+    DescribeResult post = describe_actual_state(ctx.root, true, ScanScope::Etc,
+                                                keep, "", runner);
+    if (post.ok) {
+        DriftReport drift = compute_drift(post.manifest, lr.manifest, keep);
+        if (!drift.empty()) {
+            emit({Severity::Error, "files",
+                  "post-converge verification found drift; discarded"});
+            return 1;
         }
     }
-
-    // STEP 5: acquire transaction context
-    TxnResult tr = acquire_transaction_context(cfg.transaction_mode, runner);
-    if (!tr.ok) { emit(tr.error); return 2; }
-
-    // STEP 6: repositories then converge packages
-    PackagesConvergeResult pc = converge_packages(tr.ctx, d, runner);
-    if (!pc.ok) { emit(pc.error); return 1; }
-
-    // STEP 7: converge files
-    std::string content_store = cfg.content_store ? *cfg.content_store : "/";
-    ConvergeResult fr = converge_files(tr.ctx, d, keep_of(cfg), content_store, runner);
-    if (!fr.ok) { emit(fr.error); return 1; }
-
-    // STEP 8: converge units
-    ConvergeResult ur = converge_units(tr.ctx, d, runner);
-    if (!ur.ok) { emit(ur.error); return 1; }
-
-    // STEP 9: write applied record
-    ConvergeResult wr = write_applied_record(tr.ctx, dr.manifest, dr.desired_sha256,
-                                             pc.resolved, runner);
-    if (!wr.ok) { emit(wr.error); return 1; }
-
-    // STEP 10: post-converge verification
-    ActualStateResult post = describe_actual_state(tr.ctx.root, OnUnreadable::Error,
-                                                   ScanScope::Etc, keep_of(cfg), reader);
-    if (!post.ok) { emit(post.error); return 1; }
-    AppliedRecord newrec = dr.manifest;
-    newrec.packages = pc.resolved;
-    DriftReport pdrift = compute_drift(post.manifest, newrec, keep_of(cfg));
-    if (!pdrift.empty()) {
-        emit(Diagnostic{Severity::Error, "files", "post-converge verification found drift"});
-        return 1;
-    }
-
-    // STEP 11: seal and activate, emit summary
-    std::cout << "converged: " << d.packages_install.size() << " package(s), "
-              << d.files_write.size() << " file(s) written\n";
+    std::cout << "applied: converged to declaration\n";
     return 0;
 }
 
-} // namespace zd
+}  // namespace zd

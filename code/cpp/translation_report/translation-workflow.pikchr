@@ -1,20 +1,21 @@
-# translation-workflow.pikchr
-# Auxiliary artefact: a pikchr diagram of the translation workflow for
-# zypper-declarative (C++ / cli-tool). Renders with the pikchr processor.
+# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+# Translation workflow for zypper-declarative (C++ / cli-tool).
+# Render with: pikchr translation-workflow.pikchr > translation-workflow.svg
 
 box "spec" "zypper-declarative.spec.md" fit
-arrow right
-box "cli-tool" "template" fit
-arrow right
-box "C++ hints" "(milestones," "decisions)" fit
+arrow right 0.4
+box "template" "cli-tool.template.md" fit
+arrow right 0.4
+box "hints" "cpp.decisions" "+ cpp.milestones" fit
 
-arrow down from last box.s
-box "Phase 1" "tests first" "independent_tests/" "claude-opus-4-8/" fit
-arrow down
-box "Phase 2" "src/*.cpp,.hpp" "CMakeLists.txt" fit
-arrow down
-box "Phase 3" "Makefile, RPM," "debian/*, LICENSE" fit
-arrow down
-box "Phase 6" "compile gate:" "cmake build + make test" fit
-arrow down
-box "Phase 7" "TRANSLATION_REPORT.md" fit
+down
+arrow from last box.s down 0.4
+box "Tests First" "independent_tests/" "claude-opus-4-8/" fit
+arrow down 0.4
+box "implementation" "src/*.{hpp,cpp}" "CMake, dynamic libs" fit
+arrow down 0.4
+box "packaging" "Makefile, RPM, DEB" "man, LICENSE" fit
+arrow down 0.4
+box "compile gate" "cmake + run tests" fit
+arrow down 0.4
+box "TRANSLATION_REPORT.md" fit

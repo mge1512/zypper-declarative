@@ -4,25 +4,24 @@ Priority: optional
 Maintainer: Matthias G. Eckermann <pcd@mailbox.org>
 Build-Depends: debhelper-compat (= 13),
  cmake (>= 3.20),
- g++,
+ g++ (>= 15) | g++-15,
  pkg-config,
  pandoc,
  libzypp-devel,
+ libsnapper-devel,
  libjsoncpp-dev,
- libsnapper-dev,
  libyaml-cpp-dev,
  libssl-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/mge1512/zypper-declarative
-X-PCD-Spec-SHA256: f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+X-PCD-Spec-SHA256: 51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 
 Package: zypper-declarative
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Declarative reconciling converger surfaced as a zypper subcommand
- zypper-declarative converges a SUSE system to a desired manifest (the
- declarable subset of the SUSE Machinery system description: packages,
- repositories, services, config_files) inside a single snapshot transaction,
- recording what was applied. It provides the verbs apply, diff, verify, status,
- and describe, and is surfaced as a zypper subcommand (zypper declarative
- <verb>) as well as being invokable directly.
+Description: Declarative system convergence for zypper (Machinery subset)
+ zypper-declarative converges a SUSE system to a desired manifest expressed in
+ the declarable subset of the SUSE Machinery system description (packages,
+ repositories, services, config_files). It applies inside a single snapshot
+ transaction, records what was applied, and is idempotent. It also describes
+ the actual state, computes diffs, and verifies drift.

@@ -1,16 +1,16 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// command_runner.hpp -- the CommandRunner seam (abstract base + production
-// OSCommandRunner + FakeCommandRunner test double). Some operations have no
-// library API and are done by executing a command; a non-zero exit is returned
-// in `code`, not thrown, because some tools report "differences found" with a
-// non-zero exit the caller must interpret as data, not failure.
+// OSCommandRunner: executes external commands via fork/execvp with separate
+// stdout/stderr pipes and a clean PATH. A non-zero exit is returned in the
+// result, never thrown, because some tools report differences with a non-zero
+// status the caller must interpret as data. Abstract CommandRunner allows a
+// test double to be substituted without a live system.
 #ifndef ZD_COMMAND_RUNNER_HPP
 #define ZD_COMMAND_RUNNER_HPP
 
+#include <map>
 #include <string>
 #include <vector>
-#include <map>
 
 namespace zd {
 
@@ -27,15 +27,13 @@ public:
                               const std::vector<std::string>& args) const = 0;
 };
 
-// Production runner: fork/execvp with separate stdout/stderr pipes and a fixed
-// PATH in the child. Never goes through a shell.
 class OSCommandRunner : public CommandRunner {
 public:
     CommandResult run(const std::string& cmd,
                       const std::vector<std::string>& args) const override;
 };
 
-// Test double: returns canned responses keyed by command name.
+// Test double: returns a canned response keyed by command name.
 class FakeCommandRunner : public CommandRunner {
 public:
     std::map<std::string, CommandResult> responses;
@@ -46,6 +44,6 @@ public:
     }
 };
 
-} // namespace zd
+}  // namespace zd
 
-#endif // ZD_COMMAND_RUNNER_HPP
+#endif  // ZD_COMMAND_RUNNER_HPP

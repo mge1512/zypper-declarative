@@ -1,23 +1,23 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// cli.hpp -- CLI dispatch: key=value parsing, the bare-word global commands
-// (version, help) and their tolerated flag aliases, usage, and option/value
-// validation. The entry point (main.cpp) contains only signal wiring and a call
-// into run(); all dispatch logic lives here.
+// CLI dispatch: key=value option parsing, the bare-word global commands
+// (version, help), bare invocation, and routing to the verb handlers. POSIX
+// --flag style is not used for options; --version/--help/-h are tolerated
+// aliases only.
 #ifndef ZD_CLI_HPP
 #define ZD_CLI_HPP
 
-#include <string>
 #include <vector>
+#include <string>
+
+#include "command_runner.hpp"
 
 namespace zd {
 
-// Run the CLI with argv[1..argc-1]. Returns the process exit code (0/1/2).
-int run(const std::vector<std::string>& args);
+// Entry point for dispatch. argv excludes the program name. Returns the
+// process exit code.
+int dispatch(const std::vector<std::string>& argv, const CommandRunner& runner);
 
-// Usage text (printed to stdout for help/bare, to stderr for invocation errors).
-std::string usage_text();
+}  // namespace zd
 
-} // namespace zd
-
-#endif // ZD_CLI_HPP
+#endif  // ZD_CLI_HPP

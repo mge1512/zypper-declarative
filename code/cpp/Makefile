@@ -1,63 +1,52 @@
-# generated from spec: zypper-declarative.spec.md
-# Makefile -- thin wrapper over CMake. The build target copies the binary to the
-# project root (BINARY-LOCATION: project-root) where tests invoke it via
-# ../../zypper-declarative. The test target is executable: it builds the suite
-# and runs it, exiting non-zero on any failure.
+# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+#
+# Build orchestration for zypper-declarative (C++17, CMake, dynamic linking).
+# On SLE 15 SP7 select the side-by-side GCC 15 toolchain (CXX=g++-15); on
+# SLE 16.0 the default toolchain is already GCC 15.
 
-SPEC_SHA256 = f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
-NAME = zypper-declarative
-LLM = claude-opus-4-8
-BUILDDIR = build
+SPEC_SHA256 := 51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
+NAME        := zypper-declarative
+VERSION     := 0.6.6
+BUILD_DIR   := build
 
-# On SLE 15 SP7 select the side-by-side GCC 15 (the default gcc-c++ is GCC 7,
-# too old for clean C++17). On SLE 16 the default toolchain is already GCC 15.
-# Note: make pre-defines CXX=g++, so a plain `CXX ?=` would not take effect;
-# we therefore pick g++-15 when present unless the caller overrides CXX on the
-# command line (make CXX=...) or in the environment (export CXX=...).
-ifeq ($(origin CXX),default)
-  CXX := $(shell command -v g++-15 >/dev/null 2>&1 && echo g++-15 || echo g++)
-endif
+LLM_NAME    := claude-opus-4-8
+TESTDIR     := independent_tests/$(LLM_NAME)
 
-PREFIX ?= /usr
-BINDIR ?= $(PREFIX)/bin
-MANDIR ?= $(PREFIX)/share/man/man1
-ZYPPER_CMDDIR ?= $(PREFIX)/lib/zypper/commands
+# Pick GCC 15 for C++17 when a side-by-side g++-15 exists (SLE 15 SP7); else
+# the default toolchain (SLE 16.0 ships GCC 15 as default). Note: a bare
+# `CXX ?=` does not work here because Make predefines CXX=g++.
+CXX := $(shell command -v g++-15 2>/dev/null || command -v c++)
 
 .PHONY: all build test install clean man
 
 all: build
 
+# build: configure + compile with CMake, then copy the binary to the project
+# root (BINARY-LOCATION: project-root), where both test suites invoke it.
 build:
-	cmake -S . -B $(BUILDDIR) -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=$(CXX)
-	cmake --build $(BUILDDIR) -j
-	cp -f $(BUILDDIR)/$(NAME) ./$(NAME)
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_CXX_COMPILER=$(CXX)
+	cmake --build $(BUILD_DIR) -j
+	cp -f $(BUILD_DIR)/$(NAME) ./$(NAME)
 
-# Executable test target: build the implementation (so the binary exists at the
-# project root) then compile and run the black-box suite, which invokes
-# ../../$(NAME). Exits non-zero on any test failure.
+# test: compile and run the black-box test suite, which invokes ../../$(NAME).
+# Exits non-zero on any test failure.
 test: build
-	$(CXX) -std=c++17 -Wall -Wextra \
-	  -o independent_tests/$(LLM)/run_tests \
-	  independent_tests/$(LLM)/test_main.cpp \
-	  independent_tests/$(LLM)/test_cli_contract.cpp \
-	  independent_tests/$(LLM)/test_manifest_format.cpp \
-	  independent_tests/$(LLM)/test_diff_verify.cpp \
-	  independent_tests/$(LLM)/test_describe_status.cpp
-	cd independent_tests/$(LLM) && ./run_tests
+	$(CXX) -std=c++17 -Wall -Wextra -o $(TESTDIR)/run_tests \
+		$(TESTDIR)/zypper_declarative_test.cpp
+	cd $(TESTDIR) && ./run_tests
+	rm -f $(TESTDIR)/run_tests
 
+# man: render the troff man page from its Markdown source.
 man: $(NAME).1
 
 $(NAME).1: $(NAME).1.md
 	pandoc $(NAME).1.md -s -t man -o $(NAME).1
 
 install: build man
-	install -d $(DESTDIR)$(BINDIR)
-	install -m 0755 $(NAME) $(DESTDIR)$(BINDIR)/$(NAME)
-	install -d $(DESTDIR)$(MANDIR)
-	install -m 0644 $(NAME).1 $(DESTDIR)$(MANDIR)/$(NAME).1
-	install -d $(DESTDIR)$(ZYPPER_CMDDIR)
-	ln -sf $(BINDIR)/$(NAME) $(DESTDIR)$(ZYPPER_CMDDIR)/zypper-declarative
+	install -D -m0755 $(NAME) $(DESTDIR)/usr/bin/$(NAME)
+	install -D -m0755 $(NAME) $(DESTDIR)/usr/lib/zypper/commands/$(NAME)
+	install -D -m0644 $(NAME).1 $(DESTDIR)/usr/share/man/man1/$(NAME).1
 
 clean:
-	rm -rf $(BUILDDIR) ./$(NAME) $(NAME).1 \
-	  independent_tests/$(LLM)/run_tests
+	rm -rf $(BUILD_DIR) ./$(NAME) $(NAME).1 $(TESTDIR)/run_tests

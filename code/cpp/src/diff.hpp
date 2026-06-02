@@ -1,29 +1,26 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// diff.hpp -- compute-intent-diff and compute-drift, both pure comparisons
-// (no filesystem, rpmdb, or process I/O), and the keep-list helper.
+// compute-intent-diff and compute-drift. Both are pure functions over
+// in-memory Manifest values; they perform no filesystem, rpmdb, or process
+// I/O. The keep-list (paths never reported or deleted) is passed in.
 #ifndef ZD_DIFF_HPP
 #define ZD_DIFF_HPP
 
-#include "types.hpp"
 #include <set>
 #include <string>
 
+#include "types.hpp"
+
 namespace zd {
 
-// A keep-list: paths describe/drift/converge must never report or delete.
-using KeepList = std::set<std::string>;
-
-// BEHAVIOR/INTERNAL: compute-intent-diff (desired_new versus applied_old).
+// compute-intent-diff: desired vs applied, scope by scope.
 Diff compute_intent_diff(const Manifest& desired, const AppliedRecord& applied);
 
-// BEHAVIOR/INTERNAL: compute-drift (actual versus declaration), keep-list aware.
+// compute-drift: actual vs reference, scope by scope on identity fields.
+// keep_list paths and /etc/etc.syncpoint never appear in files_extra.
 DriftReport compute_drift(const Manifest& actual, const AppliedRecord& reference,
-                          const KeepList& keep);
+                          const std::set<std::string>& keep_list);
 
-// Load a keep-list file (one path per line, '#' comments). Missing file = empty.
-KeepList load_keep_list(const std::string& path);
+}  // namespace zd
 
-} // namespace zd
-
-#endif // ZD_DIFF_HPP
+#endif  // ZD_DIFF_HPP

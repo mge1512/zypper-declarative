@@ -1,94 +1,124 @@
-// generated from spec: zypper-declarative.spec.md sha256:f2cc80627e483a48bb8411d297711bc5f6c6e74c28dbf0dafc8fe7bd8817251e
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 // tests by: claude-opus-4-8
 //
 // Minimal black-box test harness for the zypper-declarative CLI binary.
-// Tests invoke the built binary via fork/execvp (the interface declared in the
-// spec's DEPLOYMENT section: a CLI tool invoked with bare-word verbs and
-// key=value options). Tests assert on stdout, stderr, and the process exit
-// code. They never link or call the implementation's internal functions.
-//
-// The binary is located at the canonical BINARY-LOCATION the cli-tool template
-// mandates: project root, which is "../../zypper-declarative" relative to this
-// test directory (independent_tests/<llm-name>/).
+// The harness invokes the built binary as a subprocess (per the cli-tool
+// deployment template's BINARY-LOCATION constraint: ../../<binary-name>,
+// i.e. two directories up from independent_tests/<llm-name>/ to the project
+// root) and asserts on stdout, stderr and exit code. It NEVER links the
+// implementation's internals.
 #ifndef ZD_TEST_HARNESS_HPP
 #define ZD_TEST_HARNESS_HPP
 
-#include <string>
-#include <vector>
+#include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
-#include <sstream>
-#include <cstdlib>
-#include <unistd.h>
+#include <string>
 #include <sys/wait.h>
-#include <fcntl.h>
+#include <unistd.h>
+#include <vector>
 
 namespace zdtest {
 
-// Canonical binary path per cli-tool template BINARY-LOCATION: project-root,
-// expressed relative to independent_tests/<llm-name>/ -> "../../zypper-declarative".
+// The canonical path to the binary under test, relative to this test
+// directory, per the cli-tool template's BINARY-LOCATION: project-root.
 inline const char* binary_path() { return "../../zypper-declarative"; }
 
 struct RunResult {
     std::string out;
     std::string err;
-    int code = -1;
+    int code = 0;
 };
 
-// Run the binary with the given args (argv[1..]); capture stdout, stderr, exit.
-inline RunResult run(const std::vector<std::string>& args) {
+// Run the binary under test with the given argv (not including the program
+// name) and an optional stdin payload. Captures stdout and stderr separately
+// and the exit code. Uses fork/exec with pipes; does not go through a shell.
+inline RunResult run(const std::vector<std::string>& args,
+                     const std::string& stdin_data = std::string()) {
     int outpipe[2];
     int errpipe[2];
-    if (pipe(outpipe) != 0 || pipe(errpipe) != 0) {
-        return RunResult{"", "pipe failed", -1};
+    int inpipe[2];
+    if (pipe(outpipe) != 0 || pipe(errpipe) != 0 || pipe(inpipe) != 0) {
+        std::perror("pipe");
+        std::exit(70);
     }
     pid_t pid = fork();
     if (pid < 0) {
-        return RunResult{"", "fork failed", -1};
+        std::perror("fork");
+        std::exit(70);
     }
     if (pid == 0) {
         // child
+        dup2(inpipe[0], STDIN_FILENO);
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(errpipe[1], STDERR_FILENO);
-        close(outpipe[0]); close(outpipe[1]);
-        close(errpipe[0]); close(errpipe[1]);
+        close(inpipe[0]);
+        close(inpipe[1]);
+        close(outpipe[0]);
+        close(outpipe[1]);
+        close(errpipe[0]);
+        close(errpipe[1]);
         std::vector<char*> argv;
-        std::string bp = binary_path();
-        argv.push_back(const_cast<char*>(bp.c_str()));
-        for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+        argv.push_back(const_cast<char*>(binary_path()));
+        for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
         argv.push_back(nullptr);
-        execv(bp.c_str(), argv.data());
+        execv(binary_path(), argv.data());
         // exec failed
+        std::perror("execv");
         _exit(127);
     }
     // parent
+    close(inpipe[0]);
     close(outpipe[1]);
     close(errpipe[1]);
+    if (!stdin_data.empty()) {
+        ssize_t w = write(inpipe[1], stdin_data.data(), stdin_data.size());
+        (void)w;
+    }
+    close(inpipe[1]);
+
     RunResult r;
-    char buf[4096];
-    ssize_t n;
-    while ((n = read(outpipe[0], buf, sizeof(buf))) > 0) r.out.append(buf, n);
-    while ((n = read(errpipe[0], buf, sizeof(buf))) > 0) r.err.append(buf, n);
+    auto drain = [](int fd, std::string& dst) {
+        std::array<char, 4096> buf;
+        ssize_t n;
+        while ((n = read(fd, buf.data(), buf.size())) > 0)
+            dst.append(buf.data(), static_cast<size_t>(n));
+    };
+    drain(outpipe[0], r.out);
+    drain(errpipe[0], r.err);
     close(outpipe[0]);
     close(errpipe[0]);
+
     int status = 0;
     waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) r.code = WEXITSTATUS(status);
-    else r.code = -2;
+    if (WIFEXITED(status))
+        r.code = WEXITSTATUS(status);
+    else
+        r.code = -1;
     return r;
 }
 
-// --- assertion + test registry ---------------------------------------------
+inline bool contains(const std::string& haystack, const std::string& needle) {
+    return haystack.find(needle) != std::string::npos;
+}
 
-struct TestCase { std::string name; std::function<void()> fn; };
+// --- tiny test registry -------------------------------------------------
+struct Case {
+    std::string name;
+    std::function<void()> fn;
+};
 
-inline std::vector<TestCase>& registry() {
-    static std::vector<TestCase> r;
+inline std::vector<Case>& registry() {
+    static std::vector<Case> r;
     return r;
 }
 
-inline int& failures() { static int f = 0; return f; }
-inline std::string& current_test() { static std::string s; return s; }
+inline int& failure_count() {
+    static int f = 0;
+    return f;
+}
 
 struct Registrar {
     Registrar(const std::string& name, std::function<void()> fn) {
@@ -96,64 +126,43 @@ struct Registrar {
     }
 };
 
-#define ZD_CONCAT_(a,b) a##b
-#define ZD_CONCAT(a,b) ZD_CONCAT_(a,b)
-#define TEST(name) \
-    static void name(); \
-    static ::zdtest::Registrar ZD_CONCAT(reg_, name)(#name, name); \
-    static void name()
-
-inline void fail(const std::string& msg) {
-    failures()++;
-    std::cerr << "  FAIL [" << current_test() << "]: " << msg << "\n";
-}
+struct AssertionFailure {
+    std::string msg;
+};
 
 inline void check(bool cond, const std::string& msg) {
-    if (!cond) fail(msg);
-}
-
-inline void expect_eq_int(int got, int want, const std::string& what) {
-    if (got != want) {
-        std::ostringstream os;
-        os << what << ": got " << got << " want " << want;
-        fail(os.str());
-    }
-}
-
-inline bool contains(const std::string& hay, const std::string& needle) {
-    return hay.find(needle) != std::string::npos;
-}
-
-inline void expect_contains(const std::string& hay, const std::string& needle,
-                            const std::string& what) {
-    if (!contains(hay, needle)) {
-        fail(what + ": expected to contain \"" + needle + "\" but got: " + hay);
-    }
-}
-
-inline void expect_not_contains(const std::string& hay, const std::string& needle,
-                                const std::string& what) {
-    if (contains(hay, needle)) {
-        fail(what + ": expected NOT to contain \"" + needle + "\" but got: " + hay);
-    }
+    if (!cond) throw AssertionFailure{msg};
 }
 
 inline int run_all() {
-    int n = 0;
-    for (auto& tc : registry()) {
-        current_test() = tc.name;
-        int before = failures();
-        tc.fn();
-        ++n;
-        if (failures() == before)
-            std::cout << "ok   " << tc.name << "\n";
-        else
-            std::cout << "FAIL " << tc.name << "\n";
+    int failed = 0;
+    int passed = 0;
+    for (auto& c : registry()) {
+        try {
+            c.fn();
+            std::cout << "PASS " << c.name << "\n";
+            ++passed;
+        } catch (const AssertionFailure& f) {
+            std::cout << "FAIL " << c.name << ": " << f.msg << "\n";
+            ++failed;
+        } catch (const std::exception& e) {
+            std::cout << "FAIL " << c.name << ": unexpected exception: "
+                      << e.what() << "\n";
+            ++failed;
+        }
     }
-    std::cout << "\n" << n << " tests, " << failures() << " failures\n";
-    return failures() == 0 ? 0 : 1;
+    std::cout << "\n" << passed << " passed, " << failed << " failed, "
+              << registry().size() << " total\n";
+    return failed == 0 ? 0 : 1;
 }
 
-} // namespace zdtest
+}  // namespace zdtest
 
-#endif // ZD_TEST_HARNESS_HPP
+#define ZD_CONCAT_(a, b) a##b
+#define ZD_CONCAT(a, b) ZD_CONCAT_(a, b)
+#define ZD_TEST(name)                                                       \
+    static void name();                                                     \
+    static ::zdtest::Registrar ZD_CONCAT(reg_, name)(#name, name);          \
+    static void name()
+
+#endif  // ZD_TEST_HARNESS_HPP
