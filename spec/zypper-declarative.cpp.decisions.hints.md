@@ -368,8 +368,13 @@ and the code must not assume one version's API.
   are black-box assertions; the symlink and fifo cases are constructible under a
   synthetic root without root privilege, cover them rather than leaving them
   code-review-only.
-- `[spec]` Required self-checks (black-box, run as root in the test step, against
-  the build host's real rpmdb): run `describe` and assert (1) the `packages` scope
+- `[spec]` Required self-checks (black-box, against the build host's real rpmdb). Run
+  with the binary invoked as the build user, NOT via `sudo` and NOT assuming root:
+  run `describe` with `on-unreadable=warn` so a protected root-only file (e.g.
+  `/etc/libaudit.conf`) is skipped with a diagnostic instead of aborting describe;
+  never call `sudo` in a test step (an interactive password prompt hangs the build,
+  this happened twice). The asserted paths are world-readable, so the check is
+  satisfiable unprivileged. Run `describe` and assert (1) the `packages` scope
   is present and NON-EMPTY (build 01 omitted it); (2) ownership is attached where rpm
   reports an owner, pick a path that `rpm -qf` resolves on the build host and assert
   the record's `package_name` matches (on a package-managed host
@@ -387,3 +392,6 @@ and the code must not assume one version's API.
   failed. (Go and Rust carry the equivalent checks; this is how the three stay
   convergent.)
 
+## Spec tracking
+
+- Tracks spec zypper-declarative.spec.md v0.6.7 (hash e302a3b3...). History is in git and in the spec CHANGELOG.md, not here.

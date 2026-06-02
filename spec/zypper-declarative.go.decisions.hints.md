@@ -197,8 +197,12 @@ The tool runs as root, so `rpm -V` can read everything.
   unreadable follows `on_unreadable` (error, or under warn emit with `content_ref`
   "" plus a diagnostic), never silent. The manifest references content, never inlines
   it.
-- `[spec]` Required self-checks (black-box, run as root in the test step), each MUST
-  actually run and fail the build if unmet: run `describe` and assert (1a)
+- `[spec]` Required self-checks (black-box). Run them with the binary invoked as the
+  build user, NOT via `sudo` and NOT assuming root: run `describe` with
+  `on-unreadable=warn` so a protected root-only file (e.g. `/etc/libaudit.conf`) is
+  skipped with a diagnostic instead of aborting the whole describe. Do NOT call
+  `sudo` in any test step; an interactive sudo password prompt hangs the build. Each
+  check MUST actually run and fail the build if unmet. Assert (1a)
   `/etc/pam.d/common-auth` present as type "link"; (1b) `/etc/pam.d/common-auth-pc`
   present as type "file" with a non-empty sha256 (the CONTENT-BEARING GHOST, this
   binds the separate ghost pass); (1c) at least one other content-bearing ghost,
@@ -325,3 +329,6 @@ The tool runs as root, so `rpm -V` can read everything.
   `describe out=...yaml`, `verify state-path=...yaml`, unreadable and genuinely-empty
   repositories) are black-box assertions of exactly this kind.
 
+## Spec tracking
+
+- Tracks spec zypper-declarative.spec.md v0.6.7 (hash e302a3b3...). History is in git and in the spec CHANGELOG.md, not here.

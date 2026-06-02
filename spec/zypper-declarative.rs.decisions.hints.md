@@ -225,8 +225,13 @@ spec's examples are the shared target and the three-way diff is the check.)
 - `[spec]` `created_at` is a real RFC3339 timestamp (a properly converted
   `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`),
   informational and excluded from comparison and the hash, but correct.
-- `[spec]` Required self-checks (black-box, run as root in the test step), each MUST
-  actually run and fail the build if unmet: run `describe` and assert (1a)
+- `[spec]` Required self-checks (black-box). Run with the binary invoked as the build
+  user, NOT via `sudo` and NOT assuming root: run `describe` with `on-unreadable=warn`
+  so a protected root-only file (e.g. `/etc/libaudit.conf`) is skipped with a
+  diagnostic instead of aborting describe; never call `sudo` in a test step (an
+  interactive password prompt hangs the build). The asserted paths below are
+  world-readable, so the check is satisfiable unprivileged. Each MUST actually run
+  and fail the build if unmet: run `describe` and assert (1a)
   `/etc/pam.d/common-auth` present as type "link" (the type-mismatch case); (1b)
   `/etc/pam.d/common-auth-pc` present as type "file" with a non-empty sha256 (the
   CONTENT-BEARING GHOST, build 04 dropped this because it skipped the ghost pass, so
@@ -310,3 +315,6 @@ spec's examples are the shared target and the three-way diff is the check.)
   black-box assertions; the symlink and fifo cases are constructible under a
   synthetic root, cover them rather than leaving them code-review-only.
 
+## Spec tracking
+
+- Tracks spec zypper-declarative.spec.md v0.6.7 (hash e302a3b3...). History is in git and in the spec CHANGELOG.md, not here.
