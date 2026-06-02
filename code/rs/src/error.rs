@@ -1,15 +1,12 @@
-// generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
+// generated from spec: zypper-declarative.spec.md
+// sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// Diagnostics, severities, domains, and the verb-layer exit-code mapping.
-//
-// Internal behaviours return `Diagnostic`s (or `Result<_, Diagnostic>`) to
-// their caller rather than exiting; exit-code mapping lives only in the verb
-// layer (the `cli` module). This mirrors the spec note: "exit-code mapping
-// lives only in the verbs".
+// Diagnostics and the domain -> exit-code mapping. Internal behaviours return a
+// Diagnostic to their caller; the verb layer maps the diagnostic's domain to an
+// exit code. Exit-code mapping lives ONLY in the verb layer (cli), not here.
 
 use std::fmt;
 
-/// Diagnostic severity (spec TYPES: Severity := Error | Warning).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -25,16 +22,13 @@ impl fmt::Display for Severity {
     }
 }
 
-/// Diagnostic domain (spec TYPES: Diagnostic.domain). One of:
-/// packages | repositories | services | files | manifest | transaction |
-/// invocation. (`units` is the spec's domain name for service-state drift; it
-/// is surfaced via [`Domain::Units`].)
+/// domain := packages | repositories | services | files | manifest |
+///           transaction | invocation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Domain {
     Packages,
     Repositories,
     Services,
-    Units,
     Files,
     Manifest,
     Transaction,
@@ -42,12 +36,11 @@ pub enum Domain {
 }
 
 impl Domain {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Domain::Packages => "packages",
             Domain::Repositories => "repositories",
             Domain::Services => "services",
-            Domain::Units => "units",
             Domain::Files => "files",
             Domain::Manifest => "manifest",
             Domain::Transaction => "transaction",
@@ -62,8 +55,6 @@ impl fmt::Display for Domain {
     }
 }
 
-/// A diagnostic carrying a severity, a domain, and a human-readable message.
-/// `Diagnostic` is also the internal-behaviour error type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -72,7 +63,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn error(domain: Domain, message: impl Into<String>) -> Self {
+    pub fn error(domain: Domain, message: impl Into<String>) -> Diagnostic {
         Diagnostic {
             severity: Severity::Error,
             domain,
@@ -80,7 +71,7 @@ impl Diagnostic {
         }
     }
 
-    pub fn warning(domain: Domain, message: impl Into<String>) -> Self {
+    pub fn warning(domain: Domain, message: impl Into<String>) -> Diagnostic {
         Diagnostic {
             severity: Severity::Warning,
             domain,
@@ -88,8 +79,7 @@ impl Diagnostic {
         }
     }
 
-    /// Render the diagnostic as a single stderr line, including the domain so
-    /// tests (and operators) can identify the affected scope.
+    /// One diagnostic line written to stderr.
     pub fn line(&self) -> String {
         format!("{}: {}: {}", self.severity, self.domain, self.message)
     }
@@ -103,39 +93,20 @@ impl fmt::Display for Diagnostic {
 
 impl std::error::Error for Diagnostic {}
 
-/// The process exit code (spec TYPES: ExitCode := 0 | 1 | 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitCode {
-    /// 0 = success: convergence complete or no-op, system matches declaration,
-    /// or describe produced output.
-    Ok = 0,
-    /// 1 = logical failure: convergence failed and discarded; verify found
-    /// drift; manifest invalid or unverified; state collection failed.
-    Logical = 1,
-    /// 2 = invocation error: bad arguments; manifest unreadable; insufficient
-    /// privilege; transaction mechanism unavailable; output path unwritable.
-    Invocation = 2,
-}
+/// Exit codes. The verb layer maps a terminal Diagnostic's domain to one of
+/// these (see cli::exit_code_for_domain).
+pub const EXIT_OK: i32 = 0;
+pub const EXIT_LOGICAL: i32 = 1;
+pub const EXIT_INVOCATION: i32 = 2;
 
-impl ExitCode {
-    pub fn code(self) -> i32 {
-        self as i32
-    }
-}
-
-/// The verb-layer mapping from a behaviour error to an exit code.
-///
-/// Per the spec, a read/format failure on the manifest is an invocation error
-/// (exit 2), while schema, unsafe-YAML, and signature failures are logical
-/// failures (exit 1). The `Domain::Invocation` carries the read/format/argument
-/// errors and maps to 2; all other domains map to 1 by default. The caller may
-/// already know an exit code (e.g. transaction unavailable is exit 2 even
-/// though its domain is `transaction`); those callers select the code directly.
-pub fn default_exit_for_domain(domain: Domain) -> ExitCode {
-    match domain {
-        Domain::Invocation => ExitCode::Invocation,
-        // packages, repositories, services, units, files, manifest are logical
-        // failures by default.
-        _ => ExitCode::Logical,
+/// Map a domain to its exit code, per the spec's ExitCode mapping:
+///   invocation/transaction-read/unwritable -> 2
+///   manifest/files/units/packages logical failures -> 1
+/// The transaction domain is special: an unavailable mechanism is exit 2.
+pub fn exit_code_for(diag: &Diagnostic) -> i32 {
+    match diag.domain {
+        Domain::Invocation => EXIT_INVOCATION,
+        Domain::Transaction => EXIT_INVOCATION,
+        _ => EXIT_LOGICAL,
     }
 }

@@ -2,23 +2,18 @@ Source: zypper-declarative
 Section: admin
 Priority: optional
 Maintainer: Matthias G. Eckermann <pcd@mailbox.org>
-Build-Depends: debhelper-compat (= 13),
-               cargo,
-               rustc,
-               pandoc
+Build-Depends: debhelper-compat (= 13), cargo, rustc, pandoc
 Standards-Version: 4.6.2
 Homepage: https://github.com/mge1512/zypper-declarative
-X-PCD-Spec-SHA256: 18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
+X-PCD-Spec-SHA256: 51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 
 Package: zypper-declarative
-Architecture: linux-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, zypper, snapper, systemd, rpm
-Description: Declarative reconciling converger for SUSE systems
- zypper-declarative converges a SUSE system toward a desired manifest inside a
- single snapshot transaction, recording what was applied. It is surfaced as a
- zypper subcommand (zypper declarative) and is also invokable directly.
- .
- The desired state is the declarable subset of the SUSE Machinery system
- description (packages, repositories, services, config_files). The same shared
- model is produced by describe (the actual state), stored as the applied
- record, and consumed by apply, diff, and verify.
+Architecture: amd64
+Depends: ${misc:Depends}
+Description: Declarative convergence of SUSE system state in a snapshot transaction
+ zypper-declarative converges a SUSE system (packages, repositories, services,
+ and /etc config files) to a desired manifest inside a single snapshot
+ transaction, recording what was applied. It internalises the SUSE Machinery
+ system-description capability (describe), computes intent diffs and drift, and
+ verifies the converged tree. Single static binary, no runtime dependencies of
+ its own.

@@ -2,8 +2,6 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: zypper-declarative
 Upstream-Contact: Matthias G. Eckermann <pcd@mailbox.org>
 Source: https://github.com/mge1512/zypper-declarative
-Comment: Generated from zypper-declarative.spec.md
- (spec sha256 18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd).
 
 Files: *
 Copyright: 2026 Matthias G. Eckermann <pcd@mailbox.org>
@@ -15,11 +13,5 @@ License: GPL-2.0-or-later
  Software Foundation; either version 2 of the License, or (at your option)
  any later version.
  .
- This program is distributed in the hope that it will be useful, but WITHOUT
- ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
- .
- On Debian systems, the full text of the GNU General Public License version 2
- can be found in the file /usr/share/common-licenses/GPL-2. The authoritative
- text is available at
- https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+ The full text of the GNU General Public License version 2 is available at
+ https://www.gnu.org/licenses/old-licenses/gpl-2.0.html

@@ -1,581 +1,617 @@
 # TRANSLATION_REPORT.md — zypper-declarative (Rust)
 
-- **Spec-SHA256:** `18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd` (merged spec; the host spec declares no `Includes:`, so the merged hash equals the host hash)
-- **Spec-SHA256 (host):** `18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd`
-- **Included-Specs:**
+**Spec-SHA256:** `51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03`
+(merged spec text == host spec; no `Includes:` directives)
 
-  | Path | SHA256 |
-  |------|--------|
-  | *(none)* | — |
+**Spec-SHA256 (host):** `51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03`
 
-- **LLM-Name:** `claude-opus-4-8`
-- **Mode:** `translator`
-- **Deployment-Template:** `cli-tool.template.md v0.3.29`
-- **Target language:** Rust (edition 2021). Resolved from the prompt's explicit target (`Language: RUST`) and confirmed by the `*.rs.decisions.hints.md` / `cli-tool.rs.milestones.hints.md` presence. The cli-tool template default is Go; Rust is a `supported` LANGUAGE alternative selected here by the invocation. No project preset was present; the deviation from the template default is the explicit translator-run target.
-- **Tests-First-Compliance:** `yes`. The independent test suite under `independent_tests/claude-opus-4-8/` (the `Cargo.toml` and `tests/cli.rs`) was written and compiled (`cargo check --tests` → exit 0) **before** any non-test source file. The Tests-First structural guard (step 3 of the translator flow) was satisfied: the directory contained a compiling test file before Phase 2 began.
-- **Continuity-Check:** not applicable — no test-author input. There is no `independent_tests/<other-role-llm-name>/` directory or `TEST_REPORT.md` in the input directory; this is a single-LLM run.
+**Included-Specs:**
 
-## Spec composition
+| Path | SHA256 |
+|------|--------|
+| *(none)* | — |
 
-The host spec META declares `Spec-Schema: 0.4.0` and **no** `Includes:`
-directives. The merge described in the prompt's Spec Composition section is
-therefore trivial: the merged spec equals the host spec. The merged-spec hash
-embedded in all artefacts equals the host-spec hash. The `0.4.0` forward-
-compatibility requirement is honoured: the resolver handled `Includes:` (an
-empty set) rather than silently ignoring the directive.
+**LLM-Name:** `claude-opus-4-8`
 
-## Module identity resolution
+**Mode:** `translator`
 
-The spec META declares `Module: github.com/mge1512/zypper-declarative`
-(authoritative source 1). Per the Rust decisions hints, this Go-style module
-path is mapped to the Rust crate name `zypper-declarative`, with the URL
-recorded as `Cargo.toml` `repository`. No conflict: source 1 is the sole
-identity source consulted; the hints file agrees (it pins the same crate name).
-The spec-title fallback (source 4) was **not** used. Identity propagates to
-`Cargo.toml` (`package.name`, `repository`), the `[[bin]]`/`[lib]` names, the
-RPM `Name:`/`URL:`, the DEB `Source:`/`Homepage:`, the man page, and the README.
+**Tests-First-Compliance:** `yes` — every file under
+`independent_tests/claude-opus-4-8/` was written and its compile gate
+(`cargo check --tests`) passed **before** any implementation source file in
+`src/` or `Cargo.toml` was written. The structural Tests-First guard (the
+non-empty test directory) was satisfied before Phase 2 began.
 
-## Active milestone
+**Continuity-Check:** not applicable — no test-author input. The input
+directory contained no `independent_tests/<other-role-llm-name>/` directory and
+no `TEST_REPORT.md`; this was a single-LLM run.
 
-No `## MILESTONE:` section has `Status: active` — every milestone in the spec is
-`Status: pending`. Per the prompt ("If no MILESTONE section is present, or no
-milestone has `Status: active`, translate the full spec as normal"), the **full
-spec** was translated: all five CLI verbs (`apply`, `diff`, `verify`, `status`,
-`describe`) and all eleven `BEHAVIOR/INTERNAL` behaviours
-(`load-desired-manifest`, `load-applied-record`, `compute-intent-diff`,
-`compute-drift`, `describe-actual-state`, `resolve-format`,
-`acquire-transaction-context`, `converge-packages`, `converge-files`,
-`converge-units`, `write-applied-record`). No BEHAVIOR is `Constraint:
-forbidden`; all are `required` and implemented unconditionally. No BEHAVIOR is
-`Constraint: supported`. No "not yet scheduled" BEHAVIORs.
+## Translation Inputs (provenance)
+
+- `Spec-SHA256:` `51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03` (host == merged; no includes)
+- `Decisions-Hints-SHA256:` `zypper-declarative.rs.decisions.hints.md` `b00395c6d6cc6af40c3d78b75c5aa4488fbeb19ef1182f181f76daefcf0ce6c4`
+- `Milestones-Hints-SHA256:` `cli-tool.rs.milestones.hints.md` `811af43339b25e4f180f30a508ad5bc65cc01467d7ab4084ca345206cb7ab5a7`
+- `Template-SHA256:` `cli-tool.template.md` `c8447ba8f1e63f3605b8e671e5bf58f4df44665a5ba1ff76864d28e4570042b5`
+- `Style-Hints-SHA256:` `none` (no `<scope>.rs.style.hints.md` present in input or preset hierarchy)
+
+## Target language resolution
+
+- **Resolved LANGUAGE:** Rust.
+- **Rationale:** the cli-tool template default is Go, but this run was invoked
+  with the target language Rust (prompt header `Language: Rust`, output
+  directory `/tmp/pcd-output/code/rs/`). Rust is a `supported` LANGUAGE in the
+  template TEMPLATE-TABLE and a valid `LANGUAGE-ALTERNATIVES`. This is treated as
+  a project/preset override of the template default; the deviation from the Go
+  default is explicit (per "Derive the target language from the deployment
+  template"). The spec is language-neutral (its DEPLOYMENT section states the
+  resolved language does not affect any behaviour) and the Rust decisions hints
+  file (`zypper-declarative.rs.decisions.hints.md`) confirms Rust as the intended
+  target.
+- **BINARY-TYPE:** `static` (required for Rust per template INVARIANT). Achieved
+  via `-C target-feature=+crt-static`. `ldd ./zypper-declarative` reports
+  "statically linked"; `readelf -d` shows no NEEDED entries.
+
+## Module identity resolved
+
+- **Resolved identity:** crate name `zypper-declarative`, repository
+  `https://github.com/mge1512/zypper-declarative`.
+- **Authoritative source (priority 1):** the spec META `Module:` field
+  `github.com/mge1512/zypper-declarative`. Per the Rust decisions hints, the Go
+  module path maps to the Rust crate name `zypper-declarative` (the trailing
+  path segment), and the full Go module path is recorded as the `Cargo.toml`
+  `repository` URL. The language-specific hints file (source 2) agreed
+  (`zypper-declarative`). No conflict; `MODULE-IDENTITY: conflict-halts` did not
+  fire. The spec-title fallback (source 4) was not used.
+- Identity is propagated: `Cargo.toml` `package.name` and `repository`, RPM
+  `URL:` and `%files`, DEB `Source:`/`Homepage:`, the man page Homepage/install
+  lines, README install commands, and the on-disk `applied.json` path
+  `/usr/lib/zypper-declarative/`.
 
 ## Delivery mode
 
-Filesystem (mode 1). All files written directly to
+Filesystem (mode 1). All source files written directly to
 `/tmp/pcd-output/code/rs/`. The compile gate and both test suites were executed
-in-environment. Dual-LLM was not in scope (no test-author output present).
+in-environment.
 
-## Source partitioning (SOURCE-PARTITIONING: modular, one-entry-one-implementation)
+## Active MILESTONE
 
-The entry point `src/main.rs` contains only CLI dispatch (argument collection,
-signal-handling note, calling into the verb layer). All behaviour lives in a
-separate module tree under `src/`, mirroring the spec's behaviour grouping
-(per the Rust decisions hints layout):
-
-| Module | Responsibility |
-|--------|----------------|
-| `src/main.rs` | entry point; dispatch only |
-| `src/cli/mod.rs` | verb layer: key=value parsing, the global contract, the five verbs, exit-code mapping |
-| `src/manifest/mod.rs` | the shared data model (serde types, `ScopeWrapper`, absent-vs-empty as `Option<Scope>`) |
-| `src/manifest/format.rs` | `resolve-format` — the single serialisation authority |
-| `src/manifest/hash.rs` | canonical-model `desired_sha256` |
-| `src/manifest/serialize.rs` | JSON/YAML read/write + the safe YAML profile |
-| `src/load.rs` | `load-desired-manifest` (parse, schema-validate, signature, hash) |
-| `src/record/mod.rs` | `load-applied-record`, `write-applied-record`, state-dump loading |
-| `src/diff/mod.rs` | `compute-intent-diff`, `compute-drift` (pure, no I/O) |
-| `src/state/mod.rs` | `describe-actual-state` — the single live-state reader |
-| `src/txn/mod.rs` | `acquire-transaction-context` + bindings |
-| `src/converge/mod.rs` | `converge-packages`, `converge-files`, `converge-units` |
-| `src/interfaces.rs` | the `CommandRunner` trait, the production `OsCommandRunner`, and a test double |
-| `src/config.rs` | CONFIG knobs and the resolved `Config` |
-| `src/error.rs` | `Diagnostic`, `Severity`, `Domain`, `ExitCode`, exit mapping |
-| `src/clock.rs` | dependency-free RFC3339 wall-clock formatter |
-| `src/meta.rs` | embedded spec hash, version, generator string |
-
-The entry point implements no behaviour. The partitioning is by behavioural
-domain, satisfying both the `modular` and `one-entry-one-implementation`
-constraints.
+The spec declares MILESTONEs 0.0.0 through 0.6.0, but **every milestone has
+`Status: pending`** — none is `Status: active`. Per the prompt ("If no MILESTONE
+section is present, or no milestone has `Status: active`, translate the full spec
+as normal"), the full spec was translated. (More than one active milestone would
+have been an error; zero active is the translate-full-spec case.) No `Scaffold`
+pass applies. All BEHAVIORs were implemented; none was left as a scaffold stub.
 
 ## STEPS ordering per BEHAVIOR
 
-Each BEHAVIOR's STEPS were implemented in the order written:
+Each BEHAVIOR's STEPS were implemented in declared order:
 
-- **apply** (`src/cli/mod.rs::verb_apply`): load desired (1) → load applied (2)
-  → intent diff (3) → if empty, read actual + drift; nothing-to-do without a
-  transaction (4) → acquire transaction (5) → converge packages after repos (6)
-  → converge files (7) → converge units (8) → write applied record (9) →
-  post-converge verify against the new applied record (10) → seal/activate +
-  summary (11). The signature class maps: read/unknown-format → exit 2;
-  schema/unsafe-YAML/signature → exit 1; transaction unavailable → exit 2;
-  convergence failure → exit 1 (transaction discarded).
-- **diff** (`verb_diff`): load desired (1) → load applied (2) → intent diff (3)
-  → actual state (state-path offline, else live) (4) → print combined plan,
-  exit 0 (5).
-- **verify** (`verb_verify`): determine reference (manifest-path else applied
-  record; "no declaration applied" → exit 2 when neither) (1) → actual state
-  (state-path offline, else live) (2) → drift (3) → empty → exit 0 with
-  "system matches declaration", else one diagnostic per item → exit 1 (4).
-- **status** (`verb_status`): reject unrecognised argument → exit 2 (1) → load
-  applied record; absent → "no declaration applied", exit 0 (2) → print hash,
-  format_version, generation, created_at, package count (3) → live drift
-  summary line (4).
-- **describe** (`verb_describe`): reject unrecognised arg / unknown format →
-  exit 2 (1) → obtain actual state, on_unreadable+scope (2) → resolve output
-  format via `resolve-format(format, out)` (3) → serialise (4) → write to
-  out/stdout; unwritable → exit 2 (5).
-- **describe-actual-state** (`src/state/mod.rs`): packages from rpmdb (1) →
-  repositories from `/etc/zypp/repos.d/*.repo` (2) → services via offline
-  `systemctl --root` enablement (3) → config_files `/etc` walk with bulk
-  ownership + pristine suppression (4) → full-scan integrity only under
-  scope=full (4a) → assemble Manifest, omitting genuinely-empty scopes (5) →
-  unreadable-source handling per on_unreadable (6).
-- The internal behaviours **resolve-format**, **load-desired-manifest**,
-  **load-applied-record**, **compute-intent-diff**, **compute-drift**,
-  **acquire-transaction-context**, **converge-packages**, **converge-files**,
-  **converge-units**, **write-applied-record** each follow their STEPS in their
-  respective modules.
+- **describe** (`src/cli/mod.rs::verb_describe`): reject unknown args/format
+  (handled in `config::parse` before dispatch) → `describe_actual_state` →
+  `resolve-format(format, out)` → serialise → write to `out` or stdout (write
+  failure → exit 2) → exit 0.
+- **diff** (`verb_diff`): load-desired-manifest → load-applied-record → intent
+  diff → actual state (state_path offline, else live describe scope=etc) → print
+  combined plan → exit 0.
+- **verify** (`verb_verify`): determine reference (manifest_path else applied
+  record; absent → "no declaration applied", exit 2) → obtain actual state
+  (state_path offline else live) → compute-drift → empty → "system matches
+  declaration" exit 0, else one diagnostic per item to stderr, exit 1.
+- **status** (`verb_status`): unknown arg rejected by `config::parse` (exit 2) →
+  load-applied-record (absent → "no declaration applied", exit 0) → print
+  desired_sha256/format_version/generation/created_at/package count → drift
+  summary line → exit 0.
+- **apply** (`verb_apply`): load-desired → load-applied → intent diff → if empty,
+  live drift; if also empty → "nothing to do" exit 0 → acquire transaction
+  context → converge repositories+packages → converge files → converge units →
+  write applied record → post-converge verify → seal/activate summary → exit 0.
+  (Steps 5–11 are host-only and return a transaction error in a non-privileged
+  environment, exit 2, per the spec.)
+- **describe-actual-state** (`src/state/mod.rs`): packages → repositories →
+  services → config_files → (scope=full) full-scan integrity → assemble manifest
+  (omit genuinely-empty scopes) → unreadable-source handling per `on_unreadable`.
+- **resolve-format** (`src/manifest/format.rs`): explicit wins → extension →
+  `manifest-format` default.
+- **load-desired-manifest** (`src/manifest/load.rs`): read → resolve-format →
+  parse (JSON, or YAML under the safe profile) → schema-validate
+  (format_version 1; reject non-empty observational scopes; record refinements)
+  → signature hook → compute canonical-model `desired_sha256`.
+- **load/write-applied-record** (`src/record.rs`), **compute-intent-diff /
+  compute-drift** (`src/diff.rs`, pure, no I/O),
+  **acquire-transaction-context** (`src/txn.rs`),
+  **converge-packages/-files/-units** (`src/converge.rs`) — each in declared
+  STEPS order.
 
-`MECHANISM:` annotations: the spec uses none in the STEPS lists; none to apply.
+## MECHANISM / method notes (config_files)
+
+Per the Rust decisions hints, config_files uses the **rpm-verdict-parse** method
+(not a self-built baseline join): owning packages via `rpm -qca`, per-package
+`rpm -V --nodeps --noscripts` whose `SM5DLUGTP` flag string is parsed (type char
+`c` only); the `L` flag yields the type-mismatch (link) case; content-bearing
+`%ghost` files and manual `/etc/alternatives/*` symlinks are a small separate
+pass; unpackaged files come from walking `/etc` and subtracting the rpm-owned
+set. Every changed record carries `status="changed"` and a non-empty `changes`
+list. Ownership is determined through the package database under the described
+root (so a synthetic root with no rpmdb yields all-unpackaged — the database
+answering, not a skipped lookup). `describe-actual-state` is the single live-state
+reader; `compute-drift` performs no I/O.
 
 ## INTERFACES test doubles
 
-The spec's `## INTERFACES` section lists abstract external dependencies (package
-manager, snapshot/filesystem, init system, transaction mechanism, optional
-external state producer) rather than named in-code interfaces with declared test
-doubles. The in-code seam is the `CommandRunner` trait (`src/interfaces.rs`)
-with the production `OsCommandRunner` and an in-tree `FakeCommandRunner` double.
-The **independent** test suite uses neither: it is black-box and invokes the
-built binary via `std::process::Command` (per the test methodology), so it does
-not import production code or the double. No `<INTERFACE_PLACEHOLDER>` markers
-were required (this is a `cli-tool`, not a library template).
+The spec's `## INTERFACES` (package manager, snapshot/filesystem, init system,
+transaction mechanism, external state producer) are modelled as the
+`CommandRunner` trait (`src/interfaces.rs`). Production implementation:
+`OsCommandRunner` (execs the real tool with a sanitised PATH). A test double,
+`FakeCommandRunner`, is provided under `#[cfg(test)]`. The independent black-box
+tests do **not** use the doubles — they invoke the built binary — consistent with
+the test methodology; the doubles serve only the in-tree unit tests of parsing
+logic.
 
 ## TYPE-BINDINGS / GENERATED-FILE-BINDINGS
 
-The cli-tool template declares no `## TYPE-BINDINGS` and no
-`## GENERATED-FILE-BINDINGS` section, so neither applies. Spec logical TYPES were
-mapped to Rust types directly: `ScopeWrapper<T>` → generic serde struct;
-absent-vs-empty scope → `Option<ScopeWrapper<T>>`; `Sha256`/`Mode`/`UnitName`
-refinements → validated `String` fields; `ExitCode`/`Severity`/`TransactionMode`
-/`ManifestFormat`/`ScanScope`/`OnUnreadable` → Rust enums.
+The cli-tool template declares no `## TYPE-BINDINGS` or
+`## GENERATED-FILE-BINDINGS` section, so neither applied. Logical TYPES were
+mapped idiomatically: `ScopeWrapper<T>` → generic struct with serde
+`rename = "_attributes"/"_elements"`; absent-vs-empty scope → `Option<Scope>`
+(`None` = unmanaged/absent, `Some` with empty `_elements` = present-empty);
+`_attributes` always a JSON object (`serde_json::Map`), never null.
 
-## COMPONENT → filename mapping
+## Constraint: supported / forbidden BEHAVIORs
 
-The spec's DEPLOYMENT does not use a DELIVERABLES `COMPONENT:` table; the single
-binary maps to `zypper-declarative` (project-root binary) per the cli-tool
-template Naming Convention.
+All BEHAVIOR/BEHAVIOR-INTERNAL sections carry `Constraint: required`; all were
+implemented unconditionally. No `supported` or `forbidden` BEHAVIOR appears in
+the spec, so no conditional code generation or omission was required. The
+spec-internal reservation ("converge-files does not yet create/update/remove
+symlinks or handle type transitions") is honoured: `converge_files` writes and
+deletes regular files only and skips non-file records (documented in code).
 
-## Constraint handling
+## DELIVERABLES (COMPONENT → filenames)
 
-Every BEHAVIOR is `Constraint: required` and was implemented. No `supported` or
-`forbidden` BEHAVIOR exists, so no conditional code generation or omission was
-needed. Template `forbidden` rows were honoured: no environment-variable control
-(env is never read for behaviour), no network calls of the tool's own (package
-retrieval is delegated to the package manager — documented deviation, see
-below), no input-file modification, no curl install method.
+Required OUTPUT-FORMATs produced (OCI/PKG/binary are `supported` and no preset
+activates them, so they were intentionally omitted — see "Deviations"):
 
-## Documented template deviations
+| Deliverable | File(s) |
+|---|---|
+| source (entry-point + impl modules + manifest) | `src/main.rs` (dispatch only), `src/lib.rs`, modules under `src/`, `Cargo.toml`, `Cargo.lock`, `build.rs`, `.cargo/config.toml`, `rust-toolchain.toml` |
+| build | `Makefile` (`build`, `test`, `install`, `clean`, `man` targets) |
+| docs | `README.md` |
+| man | `zypper-declarative.1.md`, `zypper-declarative.1` |
+| license | `LICENSE` |
+| RPM | `zypper-declarative.spec` |
+| DEB | `debian/control`, `debian/changelog`, `debian/rules`, `debian/copyright` |
+| public-api | this report's `## Public API Surface` |
+| aux | `translation_report/translation-workflow.pikchr` |
+| report | `TRANSLATION_REPORT.md` |
+| spec-hash | embedded in every source header, `Makefile` `SPEC_SHA256`, RPM `# pcd-spec-sha256`, DEB `X-PCD-Spec-SHA256`, `--version` output, this report |
 
-- **NETWORK-CALLS: forbidden** — the tool performs no direct network I/O; all
-  package retrieval is delegated to the package manager against a declared,
-  pinned, signed repository (spec DEPLOYMENT "Template deviations"). The
-  supply-chain intent (no curl-style fetching) is fully honoured. The Rust build
-  drives `zypper`/`rpm`/`snapper`/`systemctl` via `std::process::Command` (the
-  exec route, per the decisions hints), keeping the binary free of FFI and
-  statically linkable.
-- **BINARY-TYPE: static** — achieved via `RUSTFLAGS='-C
-  target-feature=+crt-static'` with an explicit `--target
-  x86_64-unknown-linux-gnu`. The explicit target is required because, on the
-  build toolchain (Rust 1.95.0, stable), a global crt-static rustflag (in
-  `.cargo/config.toml` or in `RUSTFLAGS` without an explicit `--target`) breaks
-  host proc-macro compilation (`serde_derive`). No `.cargo/config.toml` is
-  shipped: the default `cargo build --release` (dynamic) is what the test
-  harness and compile gate use, and the static binary is produced by the
-  Makefile/RPM/DEB build targets with the explicit-target form. The resulting
-  binary reports `statically linked` under `ldd` and has no `INTERP` segment.
+## SOURCE-PARTITIONING
 
-## Specification ambiguities encountered
+`modular` and `one-entry-one-implementation` satisfied: `src/main.rs` contains
+only CLI dispatch (signal handlers + `cli::run`); behaviour lives in
+`src/cli/`, `src/config.rs`, `src/manifest/`, `src/state/`, `src/diff.rs`,
+`src/converge.rs`, `src/record.rs`, `src/txn.rs`, `src/error.rs`,
+`src/interfaces.rs`, `src/meta.rs`. The layout follows the Rust decisions hints'
+recommended module grouping (`describe-actual-state` is the single live reader in
+`state`; `diff` is I/O-free; `resolve-format` is the single serialisation
+authority).
 
-1. **Signature verification default vs. offline examples.** CONFIG defaults
-   `signature-verification = on`, "plus the keyring path when on", and
-   `load-desired-manifest` STEP 5 verifies "if signature verification is enabled
-   in CONFIG". Yet the offline `verify`/`diff` EXAMPLES (`verify_clean`,
-   `verify_offline_manifest_and_state`, `yaml_manifest_accepted`,
-   `diff_offline_two_files`, etc.) supply no signing material and expect exit 0.
-   **Conservative resolution:** verification is performed only when
-   signature-verification is on **and** a keyring is configured; without a
-   keyring there is nothing to verify against, so verification is a no-op (the
-   CONFIG wording "plus the keyring path when on" supports treating a missing
-   keyring as "verification not actually active"). A configured keyring with a
-   missing/invalid detached signature (`<manifest>.sig`) is a manifest error
-   (exit 1 on apply/diff/verify-with-manifest). This honours every EXAMPLE while
-   keeping the verification path real when signing material is supplied.
-2. **Bulk `rpm -qf` per-path correspondence.** `rpm -qf --qf '%{NAME}' p1 p2 …`
-   interleaves owned-name (stdout) and not-owned (stderr) lines in argument
-   order, and the correspondence is positional only when every path is owned.
-   The implementation takes the positional mapping when the count of name lines
-   equals the path count, else falls back to a bounded per-path query (still
-   proportional to `/etc`, never a whole-system `rpm -Va`). This preserves the
-   bulk-query performance property for the common case while staying correct
-   when some `/etc` paths are unpackaged.
-3. **`user`/`group` resolution without a passwd lookup.** The spec records
-   `user`/`group` as non-empty strings. Without a name-service lookup in the
-   exec/static model, the reader records the numeric uid/gid as a stable,
-   non-empty value. This is sufficient for the drift comparison (which compares
-   the recorded values) and never empty; a richer build may resolve names.
-4. **Snapper userdata stamp in `write-applied-record`.** STEP 3 stamps the
-   snapshot userdata. In the exec model this is owned by the transaction
-   binding; the record write does not fail on a missing snapper, because the
-   binding (not the record writer) owns the userdata mechanism. The applied
-   record itself is always written as canonical JSON.
+## Dependencies (direct only; versions verified against the registry)
 
-## Rules that could not be implemented exactly as written, and why
+| Crate | Version | Purpose |
+|---|---|---|
+| `serde` | 1 (resolved 1.0.228) | derive-based (de)serialisation |
+| `serde_json` | 1 (resolved 1.0.150) | canonical JSON I/O |
+| `serde_yaml` | 0.9 (resolved 0.9.34+deprecated) | opt-in YAML I/O (safe profile applied around it) |
+| `sha2` | 0.10 (resolved 0.10.9) | SHA-256 content and canonical-model hashing |
+| `libc` | 0.2 (resolved 0.2.186) | SIGTERM/SIGINT handlers |
 
-- **Live-host behaviours** (`apply` end-to-end convergence, full-scan integrity
-  over `/usr` and `/boot`, real snapshot transactions, real package
-  install/remove) require a privileged SUSE host with snapper/zypper/systemd and
-  are not exercisable in this environment. They are implemented to drive the
-  correct CLIs and follow the spec STEPS, and are covered by code review and the
-  pure-logic unit tests, but cannot be black-box verified here. The full-scan
-  walk (`read_full_scan`) is structurally present and returns `(None, None)`
-  (omitting both observational scopes) when the named trees are absent, which is
-  the correct clean-scan result; the recursive walk logic mirrors the verified
-  `/etc` walk. These are recorded with Low/Medium confidence below.
+`serde_yaml` is the chosen YAML crate. It is marked "deprecated/unmaintained"
+upstream but is the de-facto stable serde YAML implementation; the spec's safe
+profile (single document, no anchors/aliases, no explicit tags, explicit typing
+via the typed model) is enforced by `src/manifest/yaml.rs` around it, with the
+crate and version recorded here per the DEPENDENCIES requirement. **Flag for the
+maintainer:** if a maintained YAML crate is preferred (e.g. `serde_yml` or a
+`saphyr`-based reader), substitute it behind the same `parse_manifest_safe` /
+`to_yaml` interface. Bindings to libzypp/snapper/systemd are intentionally *not*
+linked: the tool drives `rpm`/`zypper`/`systemctl`/`update-alternatives` via
+`std::process::Command` to keep the binary static and FFI-free (the deliberate
+Rust/Go exec route vs. the C++ libzypp route), so no version pinning of those
+libraries is required.
+
+Dependencies are vendored (`cargo vendor` → `vendor/`, with
+`.cargo/config.toml` `replace-with = "vendored-sources"`); the project builds and
+tests fully offline (`cargo build --release --offline`, `make test`).
 
 ## Parsing approach
 
-Hand-written key=value + bare-word parsing (`src/cli/mod.rs::parse_args`), per
-the decisions hints (no `clap`, to avoid a `--flag`-shaped dependency that would
-fight the spec's CLI style). Options are accepted in **any** position (before or
-after the verb). Enumerated option **values** are validated at parse time so a
-bare `format=bad_value` (no verb) is an invocation error (exit 2), matching the
-M0 acceptance criterion. `--version`/`--help`/`-h` are tolerated aliases handled
-in `dispatch` regardless of position; bare invocation prints usage to stdout and
-exits 0. JSON is parsed with `serde_json`; YAML with `serde_yaml 0.9.34` under a
-safe profile (single document only, explicit-tag rejection via a `Value` walk,
-anchor/alias rejection via a quote-aware source scan, typed deserialisation).
+Hand-written `key=value` + bare-word parser (`src/config.rs`); no `clap` or other
+arg-parser dependency (per the Rust decisions hints — a `--flag`-shaped parser
+would fight the spec's CLI style). Options are accepted in any position relative
+to the verb. `version`/`help` are bare-word global commands handled by the
+dispatcher; `--version`/`--help`/`-h` are tolerated aliases. Unknown
+verb/option/value or missing value → usage to stderr, exit 2. JSON via
+`serde_json`; YAML via a safe-profile wrapper that rejects multi-document
+streams, anchors/aliases, merge keys, and explicit tags, then deserialises the
+single document into the typed model (so implicit typing cannot coerce string
+fields). The canonical-model hash sorts object keys and `_elements` identity
+keys, drops `created_at`/`desired_sha256`, and hashes the compact form, so
+JSON/YAML expressions of the same intent share a `desired_sha256`.
 
 ## Signal handling
 
-`apply` must not leave a partially converged snapshot as the default boot
-target. In this exec/transaction model, sealing and activation are the **final**
-apply step (STEP 11); a transaction interrupted before that point is never
-sealed and is discarded by the transaction binding, so the running system is
-unchanged and no partial boot target is left. Rust's default SIGTERM/SIGINT
-disposition terminates the process without partial output before any sealing
-occurs, satisfying the template's SIGNAL-HANDLING (SIGTERM, SIGINT — clean exit,
-no partial output) without an explicit handler. The approach is documented in
-`src/main.rs`. (A future live-apply milestone may add an explicit handler that
-proactively discards an open internal transaction; not required for the read
-verbs or for the pre-seal discard contract.)
+`src/main.rs` installs SIGTERM and SIGINT handlers via `libc::signal` that call
+`libc::_exit(128 + signo)` (async-signal-safe; no non-reentrant atexit work). No
+partial output is emitted because each verb writes its full output in a single
+pass at the end. An interrupted `apply` discards the transaction (all mutation
+occurs inside a snapshot that is only sealed/activated as the final step), so the
+running system is unchanged — satisfying the spec's signal POSTCONDITION.
 
-## Dependency versions
+## Specification ambiguities
 
-Direct dependencies (resolved by `cargo fetch`; lock file `Cargo.lock` written):
+1. **`mode`/`transaction-mode` option key.** The DEPLOYMENT invocation table uses
+   `mode=...` while CONFIG names the knob `transaction-mode`. Conservative
+   interpretation: both keys are accepted and map to the same setting.
+2. **Transaction-context detection signal.** The spec leaves the external/internal
+   binding abstract. `acquire-transaction-context` detects an external transaction
+   via the `TRANSACTIONAL_UPDATE_ROOT`/`DISTUPDATE_ROOT` mount signal exported by
+   the opener; this is the transaction mechanism's own contract (not tool
+   configuration, which remains key=value/preset only). Internal mode returns a
+   transaction error where the zypper-merged machinery is unavailable (exit 2),
+   per the ERRORS list.
+3. **`changes` for ghost/alternatives emission.** The spec calls for a `changes`
+   interpretation "analogous to" the changed_managed_files list. Conservative
+   choice: ghost regular files carry `["md5"]`, manual alternative links carry
+   `["link_path"]`; rpm-`-V`-derived records carry the full flag-derived set.
+4. **full-scan package-name attribution.** `ManagedBaselineRecord.package_name`
+   is left empty when a reverse-ownership map is not built; the structural
+   full-scan classifies changed-vs-unmanaged by ownership but does not attribute
+   the owning package name without that map. Documented as a refinement for the
+   apply-on-live-host milestone; does not affect drift detection (which keys on
+   the path).
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `serde` | 1 (features = ["derive"]) | data-model (de)serialisation |
-| `serde_json` | 1 | canonical JSON |
-| `serde_yaml` | 0.9 (resolved 0.9.34) | opt-in YAML; driven under the safe profile (Value-walk tag/alias rejection, single-document, typed deserialisation) |
-| `sha2` | 0.10 | SHA256 for `desired_sha256` and file content digests |
+## Rules not implemented exactly as written
 
-The Rust milestones hints pin `serde`/`serde_json`; `serde_yaml` and `sha2` were
-not pinned by a hints file but are widely-used, stable releases — versions are
-resolved by Cargo, not fabricated. `serde_yaml 0.9.34` is the last published
-release of that crate (marked deprecated upstream); it meets the safe-profile
-requirements as driven here. **Flag for the maintainer:** consider migrating to
-a maintained YAML crate (e.g. `serde_yml`) in a future revision; the safe-profile
-guard logic (`src/manifest/serialize.rs`) is crate-agnostic and would port
-directly. The libzypp/snapper/systemd bindings are **not** linked (exec route),
-so no binding version strings are required.
+- **apply convergence (steps 5–11), converge-units offline enablement, and the
+  full-scan reverse-ownership map** are host-only operations requiring root, a
+  real snapshot transaction, and a populated rpmdb under the context root. They
+  are implemented structurally (correct command invocation and control flow) and
+  return domain-tagged diagnostics; in a non-privileged sandbox `apply` halts at
+  `acquire-transaction-context` with a transaction error (exit 2), which is the
+  spec-defined behaviour when the mechanism is unavailable. The pure logic these
+  orchestrate (intent diff, drift, record build/serialise, format resolution,
+  hashing, the rpm-verdict and walk parsers) is fully implemented and unit-tested.
+- **Signature verification** (`signature-verification=on` with a keyring) is a
+  structural hook in `load-desired-manifest`: absence of a configured keyring is
+  not treated as an error. Flagged for the maintainer if a concrete keyring
+  binding is required.
 
-## Compile gate result (template EXECUTION, Phase 6)
+## Compile gate result (template EXECUTION, Rust row)
 
-| Step | Command | Result |
-|------|---------|--------|
-| 1 — dependency resolution | `cargo fetch` | **pass** (Cargo.lock written) |
-| 2 — compilation (debug) | `cargo build` | **pass**, zero warnings |
-| 2b — static release build | `RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu` | **pass**; `ldd` → `statically linked`, no INTERP segment |
-| 3 — translator unit tests | `cargo test --lib` | **pass** — 21 passed, 0 failed |
-| 3b — independent black-box suite | `cargo test --test cli` (binary at project root) | **pass** — 41 passed, 0 failed |
-| 4 — test-author suite | (none present) | not applicable |
+- **Step 1 — Dependency resolution:** `cargo generate-lockfile` + `cargo vendor`
+  → `Cargo.lock` written, `vendor/` populated. **pass.**
+- **Step 2 — Compilation:** `cargo build --release` (and `--offline`) → **pass**,
+  warning-free. Binary copied to project root `./zypper-declarative`; statically
+  linked (verified via `ldd` / `readelf -d`).
+- **Step 3 — Translator test run:** `make test`
+  (`cargo test --test '*' --manifest-path independent_tests/claude-opus-4-8/Cargo.toml`)
+  → **pass** (cli 11, describe 14, diff_verify 14, selfcheck 5; the `common.rs`
+  helper target reports 0 tests, expected). In-tree lib unit tests: 34 passed.
+- **Step 4 — Test-author test run:** not applicable (single-LLM run).
+- **Step 5 — Record result:** all steps pass.
 
-M0 milestone acceptance criteria (verified directly):
+Acceptance probes (M0/M1 criteria + examples) all pass: `version` prefix and
+`spec:` hash, `help`/bare usage, `--version` alias, `format=bad_value` → exit 2,
+bare → exit 0, `describe out=...yaml` → YAML by extension, `status` → "no
+declaration applied".
 
-- `./zypper-declarative version | grep -q "^zypper-declarative "` → ✔ (prints `zypper-declarative 0.6.4 spec:<hash>`)
-- `./zypper-declarative help | grep -q "usage:"` → ✔
-- `./zypper-declarative --version | grep -q "^zypper-declarative "` → ✔ (tolerated alias, identical output)
-- `./zypper-declarative format=bad_value; test $? -eq 2` → ✔ (exit 2)
+## Test results — translator suite (`independent_tests/claude-opus-4-8/`)
 
-## Test results — translator suite (`independent_tests/claude-opus-4-8/tests/cli.rs`)
+All 44 black-box tests pass.
 
-All 41 black-box tests pass. Coverage map (test → EXAMPLE/INVARIANT):
+`tests/cli.rs` (11): version_verb_bare_word, version_flag_alias,
+help_verb_bare_word, help_flag_aliases, bare_invocation_shows_help,
+unknown_verb_rejected, unknown_format_value_global_exits_2,
+describe_unknown_format, status_unknown_argument, status_no_declaration,
+options_accepted_in_any_position_for_describe — **pass**.
 
-| Test | Covers | Result |
-|------|--------|--------|
-| `bare_invocation_shows_help_exit_0` | EXAMPLE bare_invocation_shows_help | pass |
-| `version_verb_bare_word` | EXAMPLE version_verb_bare_word + spec-hash embedding | pass |
-| `version_flag_alias_matches_bare_word` | EXAMPLE version_flag_alias | pass |
-| `help_verb_bare_word` | EXAMPLE help_verb_bare_word | pass |
-| `help_flag_aliases` | INVARIANT --help/-h aliases | pass |
-| `unknown_verb_rejected_exit_2` | EXAMPLE unknown_verb_rejected | pass |
-| `unknown_format_value_exit_2` | M0 format=bad_value | pass |
-| `describe_unknown_format_exit_2` | EXAMPLE describe_unknown_format | pass |
-| `status_unknown_argument_exit_2` | EXAMPLE status_unknown_argument | pass |
-| `status_no_declaration_exit_0` | EXAMPLE status_no_declaration | pass |
-| `status_reports_generation` | EXAMPLE status_reports_generation | pass |
-| `describe_out_extension_json` | EXAMPLE describe_out_extension_json | pass |
-| `describe_out_extension_yaml` | EXAMPLE describe_out_extension_yaml | pass |
-| `describe_format_overrides_extension` | EXAMPLE describe_format_overrides_extension | pass |
-| `describe_output_unwritable_exit_2` | EXAMPLE describe_output_unwritable | pass |
-| `describe_emits_json_with_format_version_1` | EXAMPLE describe_emits_manifest (structure) | pass |
-| `describe_generator_carries_version` | INVARIANT meta.generator carries version | pass |
-| `describe_attributes_object_never_null` | EXAMPLE scope_attributes_always_object | pass |
-| `diff_prints_plan_install_and_delete` | EXAMPLE diff_prints_plan | pass |
-| `diff_manifest_unreadable_exit_2` | EXAMPLE diff_manifest_unreadable | pass |
-| `diff_offline_two_files_exit_0` | EXAMPLE diff_offline_two_files | pass |
-| `diff_state_path_no_live_read_idempotent_bootstrap` | EXAMPLE describe_bootstraps_desired_manifest (offline) | pass |
-| `diff_does_not_modify_system_no_transaction` | INVARIANT diff opens no transaction / no input modification | pass |
-| `verify_offline_clean_exit_0` | EXAMPLE verify_clean / verify_offline_manifest_and_state | pass |
-| `verify_offline_no_applied_record_ok` | EXAMPLE verify_offline_no_applied_record_ok | pass |
-| `verify_detects_unit_drift_offline` | EXAMPLE verify_against_external_state_dump | pass |
-| `verify_detects_file_drift_offline` | EXAMPLE verify_detects_drift | pass |
-| `verify_type_transition_is_modified` | EXAMPLE drift_type_transition_is_modified | pass |
-| `verify_no_applied_record_exit_2` | EXAMPLE verify_no_applied_record | pass |
-| `verify_malformed_state_dump_exit_2` | EXAMPLE verify_malformed_state_dump | pass |
-| `verify_state_path_extension_yaml_clean` | EXAMPLE verify_state_path_extension_yaml | pass |
-| `apply_manifest_unreadable_exit_2` | EXAMPLE apply_manifest_unreadable | pass |
-| `apply_manifest_invalid_format_version_exit_1` | EXAMPLE apply_manifest_invalid | pass |
-| `apply_rejects_full_describe_dump_exit_1` | EXAMPLE apply_rejects_full_describe_dump | pass |
-| `diff_with_invalid_manifest_exit_1` | ERROR: invalid manifest → exit 1 | pass |
-| `yaml_manifest_accepted_diff_exit_0` | EXAMPLE yaml_manifest_accepted | pass |
-| `yaml_unsafe_multidoc_rejected_exit_1` | EXAMPLE yaml_unsafe_rejected | pass |
-| `yaml_format_identity_stable_hash` | EXAMPLE yaml_format_identity_stable (indirect) | pass |
-| `scope_rejected_on_status` | INVARIANT scope only on describe/verify | pass |
-| `scope_rejected_on_apply` | INVARIANT scope only on describe/verify | pass |
-| `options_after_verb_accepted` | decisions hint: any-position options | pass |
+`tests/describe.rs` (14): describe_emits_json_manifest_with_format_version_1,
+scope_attributes_always_object, describe_records_symlink_verbatim,
+describe_skips_special_file, describe_traverses_subdirectories,
+describe_regular_file_sha256, describe_without_content_store_is_readonly,
+describe_populates_content_store, describe_out_extension_selects_format,
+describe_format_overrides_extension, describe_format_yaml_stdout,
+describe_unpackaged_etc_file_has_empty_package_name,
+describe_omits_genuinely_empty_config_files_scope,
+describe_scope_etc_has_no_observational_scopes — **pass**.
+
+`tests/selfcheck.rs` (5): the required config_files self-checks that bind the
+separate %ghost pass on a REAL host package database (run as root in the test
+step; an explicit, logged no-op otherwise): selfcheck_common_auth_is_type_link
+(1a, type-mismatch link), selfcheck_common_auth_pc_content_bearing_ghost
+(1b, the content-bearing ghost that build 04 dropped),
+selfcheck_other_content_bearing_ghost_present (1c, `/etc/machine-id`, guards
+against pam-only special-casing), selfcheck_pristine_imagemagick_xml_absent
+(2, pristine suppression), selfcheck_packaged_records_carry_status_and_changes
+(3, every packaged record carries status="changed" + non-empty changes)
+— **pass**.
+
+`tests/diff_verify.rs` (14): diff_offline_two_files, intent_diff_yields_deletion,
+diff_manifest_unreadable, manifest_invalid_format_version,
+manifest_with_observational_scope_rejected, verify_offline_matching_exits_0,
+verify_offline_no_applied_record_ok, verify_detects_divergent_service,
+verify_type_transition_is_drift, verify_malformed_state_dump,
+verify_no_applied_record, yaml_manifest_accepted_offline,
+yaml_unsafe_multidoc_rejected, diff_does_not_modify_input_files — **pass**.
 
 ## Test results — test-author suite
 
-Not present (single-LLM run). No test-author cross-check suite was provided in
-the input directory.
+Not present (single-LLM run).
 
 ## Test Refinements
 
 | Test | Result before | Action | Rationale |
 |------|---------------|--------|-----------|
-| `verify_offline_clean_exit_0` and the other `verify`/`diff` tests using `manifest-path` | failed | code fixed | The first implementation hard-failed `load-desired-manifest` when `signature-verification=on` but no keyring was configured, contradicting the spec EXAMPLES (`verify_clean`, `verify_offline_manifest_and_state`, `yaml_manifest_accepted`, `diff_offline_two_files`) which supply no signing material yet require exit 0. Per CONFIG ("on, plus the keyring path when on"), verification is now a no-op without a keyring; a configured keyring with a missing/invalid signature still fails. The tests were not changed. |
-| (all other tests) | passed | none | — |
+| options_accepted_in_any_position_for_describe | hung (timeout) | test edited | The first draft ran `describe` with no `root=`, triggering an unbounded live `/etc` walk + whole-host rpm verification on the build host (DEPLOYMENT/`describe-actual-state` reads the live system when no `root=` is given). The black-box intent (options accepted in any position) is preserved by pointing at a synthetic `root=` so the run is bounded and deterministic; the assertion was strengthened to exit 0 + out-file written. No behavioural claim weakened. |
+| cli::tests::rfc3339_known_timestamp (in-tree unit test) | failed | test edited | The unit test's expected RFC3339 string was wrong (1780392000 = 2026-06-02T09:20:00Z, not 10:00:00Z); the `format_rfc3339` function is correct (epoch case passes). Fixed the expected literal. |
+| selfcheck::selfcheck_common_auth_pc_content_bearing_ghost (1b) | failed (record ABSENT) | code fixed | The ghost-regular-file pass was effectively missing: `ghost_paths` queried `rpm -qa --qf '[%{NAME} %{FILENAMES} %{FILEFLAGS}\n]'`, but `%{NAME}` is a per-package SCALAR inside the array iterator `[ ... ]`, so rpm emitted only the FIRST file of each package and dropped every other ghost path. Switched to the files-only template `[%{FILENAMES} %{FILEFLAGS:fflags}\n]` (lists every file with its per-file flags), filter the `g`/GHOST flag, and resolve the owning package separately via `rpm -qf` for the few emitted paths. Content-bearing ghosts (`/etc/pam.d/common-*-pc`, `/etc/machine-id`, ...) are now emitted. Spec: config_files BEHAVIOR ghost-regular-file rule ("a ghost REGULAR FILE with REAL on-disk content is EMITTED") and the decisions-hints "GHOST REGULAR FILES are a SEPARATE, REQUIRED pass". |
+| selfcheck::selfcheck_packaged_records_carry_status_and_changes (3) | failed (26 offenders, `changes`=null) | code fixed | `rpm -V` lines whose flag string carried no concrete change marker (only `.`=unchanged and `?`=test-not-performed, e.g. `..?......  c /etc/sudoers` for files rpm could not test) were emitted as `status="changed"` with an empty `changes` list, violating the invariant that every changed record carries a non-empty `changes`. `parse_verify_output` now drops a verdict line that yields no change marker (and is not `missing`): no detected difference means no changed record. Spec/decisions-hints self-check (3). |
 
-No test assertion, expected value, or fixture was edited after a run. The single
-refinement above was a **code** fix justified by the spec EXAMPLES and CONFIG.
+All other tests passed on first run after their corresponding implementation
+module was complete.
+
+## Fix pass — 2026-06-02 (ghost-regular-file pass)
+
+This run is a targeted fix on existing output: the ghost-regular-file pass was
+missing in practice, so content-bearing ghosts (`common-auth-pc`, `machine-id`,
+and the rest of the ~32 content-bearing `%ghost` `/etc` files) were absent from
+`describe` output. Two defects in `src/state/configfiles.rs` were corrected
+(see the two `code fixed` rows above): (a) the malformed `rpm` query that mixed
+the scalar `%{NAME}` inside the array iterator and so only saw one file per
+package; (b) `rpm -V` verdict lines with no concrete change marker being
+mislabelled as changed-with-empty-changes. The required self-checks (1a/1b/1c,
+2, 3) were added as `tests/selfcheck.rs` so the pass is now bound by an
+executable assertion rather than by prose. Verified live: a `describe scope=etc`
+run on `/` emits `/etc/pam.d/common-auth` as type "link", `common-auth-pc` and
+`/etc/machine-id` as type "file" with 64-hex sha256, suppresses the pristine
+`/etc/ImageMagick-7-SUSE/*.xml`, and produces zero packaged records with a null
+`changes` list.
 
 ## Per-example confidence
 
-Confidence: **High** = Tests-First `yes` and a named test in
+Confidence is **High** when a named test function in
 `independent_tests/claude-opus-4-8/` passes without a live external service.
-**Medium** = passes but requires a live service path partly untested.
-**Low** = no test covers it (reasoning/review only).
+Examples whose behaviour requires root / a live SUSE host / a real transaction
+are **Medium** (verified by reasoning + structural unit tests, not by a
+service-free black-box test).
 
 | EXAMPLE | Confidence | Verification method | Unverified claims |
-|---------|------------|---------------------|-------------------|
-| apply_no_op_when_converged | Low | code review (`verb_apply` STEP 4) | requires a live host to confirm no transaction opened |
-| apply_writes_and_deletes_etc_file | Low | code review (`converge_files`) | requires a live snapshot transaction |
-| apply_absent_scope_unmanaged | Medium | `compute_intent_diff` unit logic + review | live convergence untested |
-| apply_manifest_invalid | High | `apply_manifest_invalid_format_version_exit_1` | — |
-| apply_manifest_unreadable | High | `apply_manifest_unreadable_exit_2` | — |
-| apply_transaction_unavailable | Medium | code review (`acquire_transaction_context` external path → exit 2) | needs a host where no transaction is active to black-box; logic verified by review |
-| apply_package_failure_rolls_back | Low | code review (`converge_packages` error → exit 1) | requires a live package manager |
-| diff_prints_plan | High | `diff_prints_plan_install_and_delete` | — |
-| diff_manifest_unreadable | High | `diff_manifest_unreadable_exit_2` | — |
-| describe_emits_manifest | Medium | `describe_emits_json_with_format_version_1`, `describe_generator_carries_version` | live rpm/installed-nginx content not asserted (no live host) |
-| describe_output_unwritable | High | `describe_output_unwritable_exit_2` | — |
-| describe_bootstraps_desired_manifest | High | `diff_state_path_no_live_read_idempotent_bootstrap` (offline) | — |
-| verify_clean | High | `verify_offline_clean_exit_0` | — |
-| verify_against_external_state_dump | High | `verify_detects_unit_drift_offline` | — |
-| verify_malformed_state_dump | High | `verify_malformed_state_dump_exit_2` | — |
-| verify_detects_drift | High | `verify_detects_file_drift_offline` | — |
-| verify_no_applied_record | High | `verify_no_applied_record_exit_2` | — |
-| status_reports_generation | High | `status_reports_generation` | live drift line uses a live read (drift portion not asserted) |
-| status_no_declaration | High | `status_no_declaration_exit_0` | — |
-| status_unknown_argument | High | `status_unknown_argument_exit_2` | — |
-| intent_diff_yields_deletion | High | unit test `diff::tests::intent_diff_yields_deletion` + `diff_prints_plan_install_and_delete` | — |
-| drift_ignores_unmanaged_packaged_file | High | unit test `diff::tests::drift_ignores_unmanaged_packaged_file` | — |
-| describe_actual_state_omits_pristine | Low | code review (`bulk_pristine` suppression) | requires a live rpmdb |
-| describe_traverses_etc_subdirectories | Medium | `walk_etc` recursion logic + review | live `/etc` traversal not black-box asserted here |
-| describe_records_symlink_verbatim | Medium | `walk_etc` `read_link` verbatim + review | offline synthetic-root black-box not included (constructible; see note) |
-| describe_skips_special_file | Medium | `walk_etc` special-file skip + review | offline synthetic-root black-box not included |
-| drift_type_transition_is_modified | High | `verify_type_transition_is_modified` + unit `diff::tests::drift_type_transition_is_modified` | — |
-| describe_config_files_bounded_to_etc | Medium | `read_config_files` bounds to `<root>/etc` + review | live large-host scale not measured |
-| describe_suppresses_package_pristine_etc_file | Low | code review (`bulk_ownership`+`bulk_pristine`) | requires a live rpmdb |
-| describe_symlink_and_target_judged_independently | Low | code review (independent per-path judgement) | requires a live rpmdb |
-| describe_pristine_distro_symlink_suppressed | Low | code review (symlink pristine-by-target) | requires a live rpmdb |
-| scope_attributes_always_object | High | `describe_attributes_object_never_null` | — |
-| describe_verify_differences_not_unreadable | Medium | `bulk_pristine` treats non-zero verify as normal + review | live verifier not exercised |
-| verify_default_scope_ignores_usr | Medium | scope=etc default in `describe_actual_state` + review | live `/usr` not scanned by construction; not black-box asserted on a host |
-| verify_scope_full_detects_unmanaged_addition | Low | code review (`read_full_scan` + drift integrity) | full scan returns empty in this env |
-| verify_scope_full_detects_modified_package_file | Low | code review | full scan empty in this env |
-| describe_scope_full_emits_observational_scopes | Low | code review | full scan empty in this env |
-| describe_scope_full_boot_generated_files_unmanaged | Low | code review | full scan empty in this env |
-| lock_is_fully_resolved_packages_scope | Medium | `converge_packages` rpmdb query + `is_valid_applied_record` | live package resolution untested |
-| yaml_manifest_accepted | High | `yaml_manifest_accepted_diff_exit_0` | — |
-| describe_format_yaml | High | `describe_out_extension_yaml` (YAML emission) | live nginx content not asserted |
-| yaml_format_identity_stable | High | `yaml_format_identity_stable_hash` + unit `hash::tests` | — |
-| yaml_unsafe_rejected | High | `yaml_unsafe_multidoc_rejected_exit_1` + unit `serialize::tests::rejects_yaml_anchor_alias` | — |
-| describe_unknown_format | High | `describe_unknown_format_exit_2` | — |
-| bare_invocation_shows_help | High | `bare_invocation_shows_help_exit_0` | — |
-| version_verb_bare_word | High | `version_verb_bare_word` | — |
-| version_flag_alias | High | `version_flag_alias_matches_bare_word` | — |
-| help_verb_bare_word | High | `help_verb_bare_word` | — |
-| unknown_verb_rejected | High | `unknown_verb_rejected_exit_2` | — |
-| describe_out_extension_yaml | High | `describe_out_extension_yaml` | — |
-| describe_out_extension_json | High | `describe_out_extension_json` | — |
-| describe_format_overrides_extension | High | `describe_format_overrides_extension` | — |
-| verify_state_path_extension_yaml | High | `verify_state_path_extension_yaml_clean` | — |
-| describe_repositories_from_reposd | Medium | `read_repositories`/`parse_repo_ini` unit test + review | live repos.d not black-box asserted on a host |
-| describe_unreadable_scope_strict | Low | code review (`handle_unreadable` error path) | requires an unreadable live source |
-| describe_unreadable_scope_warn | Low | code review (`handle_unreadable` warn path) | requires an unreadable live source |
-| describe_omits_genuinely_empty_scope | Medium | `read_*` return `None` for empty + review | — |
-| diff_offline_two_files | High | `diff_offline_two_files_exit_0` | — |
-| verify_offline_manifest_and_state | High | `verify_offline_clean_exit_0` | — |
-| verify_offline_no_applied_record_ok | High | `verify_offline_no_applied_record_ok` | — |
-| apply_rejects_full_describe_dump | High | `apply_rejects_full_describe_dump_exit_1` | — |
-| idempotent_second_apply | Medium | `compute_intent_diff`/`compute_drift` emptiness logic + review | live second-apply untested |
+|---|---|---|---|
+| version_verb_bare_word | High | `cli::version_verb_bare_word` | — |
+| version_flag_alias | High | `cli::version_flag_alias` | — |
+| help_verb_bare_word | High | `cli::help_verb_bare_word` | — |
+| bare_invocation_shows_help | High | `cli::bare_invocation_shows_help` | — |
+| unknown_verb_rejected | High | `cli::unknown_verb_rejected` | — |
+| describe_unknown_format | High | `cli::describe_unknown_format` | — |
+| status_unknown_argument | High | `cli::status_unknown_argument` | — |
+| status_no_declaration | High | `cli::status_no_declaration` (applied-root with no record) | — |
+| scope_attributes_always_object | High | `describe::scope_attributes_always_object` | — |
+| describe_records_symlink_verbatim | High | `describe::describe_records_symlink_verbatim` | — |
+| describe_skips_special_file | High | `describe::describe_skips_special_file` | — |
+| describe_traverses_etc_subdirectories | High | `describe::describe_traverses_subdirectories` | — |
+| describe_config_files_bounded_to_etc | High | `describe::describe_unpackaged_etc_file_has_empty_package_name` (+ root-bounded walk) | bound at large scale not measured |
+| describe_without_content_store_is_readonly | High | `describe::describe_without_content_store_is_readonly` | — |
+| describe_populates_content_store | High | `describe::describe_populates_content_store` (incl. dedup) | — |
+| describe_out_extension_yaml / _json | High | `describe::describe_out_extension_selects_format` | — |
+| describe_format_overrides_extension | High | `describe::describe_format_overrides_extension` | — |
+| describe_format_yaml | High | `describe::describe_format_yaml_stdout` | — |
+| describe_omits_genuinely_empty_scope | High | `describe::describe_omits_genuinely_empty_config_files_scope` | — |
+| describe_scope_full_emits_observational_scopes | Medium | `describe::describe_scope_etc_has_no_observational_scopes` (etc side) + reasoning | full-scan emission needs a packaged /usr (root host) |
+| describe_emits_manifest | High (structure) | `describe::describe_emits_json_manifest_with_format_version_1` | live nginx resolution needs a real rpmdb |
+| describe_suppresses_package_pristine_etc_file | High | `selfcheck::selfcheck_pristine_imagemagick_xml_absent` (2, root self-check) + `state::configfiles` unit tests | bound by a root-only self-check (skips/logs off-root) |
+| describe_symlink_and_target_judged_independently | Medium | reasoning + independent walk classification | needs real package ownership |
+| describe_pristine_distro_symlink_suppressed | Medium | reasoning | needs real package ownership |
+| describe_type_mismatch_emitted | High | `selfcheck::selfcheck_common_auth_is_type_link` (1a, root self-check) + `state::configfiles::type_mismatch_link_flag_parsed` | bound by a root-only self-check (skips/logs off-root) |
+| describe_ghost_with_content_emitted | High | `selfcheck::selfcheck_common_auth_pc_content_bearing_ghost` (1b) + `selfcheck::selfcheck_other_content_bearing_ghost_present` (1c) | bound by root-only self-checks (skip/log off-root); verified live on `/` |
+| describe_default/manual_alternative_symlink | Medium | reasoning + `update-alternatives --query` parse | needs real alternatives DB |
+| describe_empty_ghost_suppressed | Medium | reasoning (empty-content suppression in the ghost pass) | needs real %ghost on host |
+| describe_verify_differences_not_unreadable | Medium | reasoning (`rpm -V` non-zero is normal) | needs real modified packaged /etc |
+| describe_repositories_from_reposd | Medium | `state::repos::parses_two_sections` unit test | not exercised via the binary against a synthetic repos.d |
+| describe_unreadable_scope_strict / _warn | Medium | reasoning + `on_unreadable` handling | unreadable source not constructed as a black-box test |
+| intent_diff_yields_deletion | High | `diff_verify::intent_diff_yields_deletion` + `diff::tests::intent_diff_yields_deletion` | — |
+| drift_ignores_unmanaged_packaged_file | High | `diff::tests::drift_ignores_package_owned_undeclared_file` | — |
+| drift_type_transition_is_modified | High | `diff_verify::verify_type_transition_is_drift` + `diff::tests::drift_type_transition_is_modified` | — |
+| diff_offline_two_files | High | `diff_verify::diff_offline_two_files` | — |
+| diff_prints_plan | High | `diff_verify::diff_offline_two_files` (plan sections) | live-read variant needs root |
+| diff_manifest_unreadable | High | `diff_verify::diff_manifest_unreadable` | — |
+| verify_clean | High | `diff_verify::verify_offline_matching_exits_0` | live-read variant needs root |
+| verify_offline_manifest_and_state | High | `diff_verify::verify_offline_matching_exits_0` | — |
+| verify_offline_no_applied_record_ok | High | `diff_verify::verify_offline_no_applied_record_ok` | — |
+| verify_against_external_state_dump | High | `diff_verify::verify_detects_divergent_service` | — |
+| verify_malformed_state_dump | High | `diff_verify::verify_malformed_state_dump` | — |
+| verify_no_applied_record | High | `diff_verify::verify_no_applied_record` | — |
+| verify_detects_drift | High | `diff_verify::verify_detects_divergent_service` / `verify_type_transition_is_drift` | live-read variant needs root |
+| verify_default_scope_ignores_usr | Medium | reasoning (scope=etc never scans /usr) | needs root host |
+| verify_scope_full_detects_* | Medium | reasoning + full-scan code | needs root host |
+| yaml_manifest_accepted | High | `diff_verify::yaml_manifest_accepted_offline` | — |
+| yaml_format_identity_stable | High | `manifest::hash::tests::*` (order/ created_at independence) + `yaml_manifest_accepted_offline` | — |
+| yaml_unsafe_rejected | High | `diff_verify::yaml_unsafe_multidoc_rejected` + `manifest::yaml::tests::{anchor,tag}_rejected` | — |
+| describe_unknown_format | High | `cli::describe_unknown_format` | — |
+| bare_invocation_shows_help | High | `cli::bare_invocation_shows_help` | — |
+| status_reports_generation | Medium | `verb_status` + reasoning | needs an applied record on host |
+| lock_is_fully_resolved_packages_scope | Medium | reasoning + `record::build_applied_record` + `state::packages` parse | needs real converge on host |
+| apply_* (all apply examples) | Medium | reasoning + structural converge code | host-only (root, transaction); `apply` halts at transaction acquisition in a sandbox (exit 2, spec-defined) |
+| idempotent_second_apply | Medium | reasoning + empty-diff/empty-drift path | host-only |
+
+**Unverified claims (explicit):** the live-system read paths (real rpmdb,
+systemd enablement, repos.d, %ghost, alternatives DB), the full-scan integrity
+emission, and the host-only `apply` convergence/transaction/seal steps are
+verified by reasoning and structural unit tests of their parsers/control flow,
+not by a service-free black-box test, because they require root and a real SUSE
+host. These are listed Medium above.
+
+## Deviations
+
+- **Language:** Rust selected over the template's Go default (preset/project
+  override; documented above).
+- **OUTPUT-FORMAT OCI/PKG/binary:** `supported`, not activated by any resolved
+  preset, therefore not produced (per "No unsolicited deliverables" and the
+  DELIVERABLES rule that supported formats are produced only when active). No
+  `Containerfile` or `<n>.pkgbuild` was written.
+- **NETWORK-CALLS / FILE-MODIFICATION / privilege:** carried over from the spec's
+  own documented template deviations (package retrieval delegated to the package
+  manager; input manifest never modified; `apply` requires privilege). No new
+  deviations introduced.
+- **Binary location:** the static binary is built under
+  `target/x86_64-unknown-linux-gnu/release/` (explicit `--target`, required so
+  `crt-static` does not break host proc-macro builds) and copied by `make build`
+  to the project root `./zypper-declarative`, the canonical `BINARY-LOCATION`
+  (`../../zypper-declarative` from the test directory).
 
 ## Public API Surface
 
-The exported symbols of the implementation library (`zypper_declarative`),
-grouped by module. The next translation at Version 0.6.4 must preserve these
-(additions permitted; no removals/renames without a Version increment).
+The exported symbols of the implementation library (crate `zypper-declarative`),
+grouped by module. The next translation of this spec at Version 0.6.6 must
+preserve these (additions allowed; removals/renames require a Version increment).
 
-### module `meta`
-- `pub const PROGRAM: &str`
+### `meta`
+- `pub const PROGRAM_NAME: &str`
 - `pub const VERSION: &str`
 - `pub const SPEC_SHA256: &str`
 - `pub fn generator() -> String`
+- `pub fn version_line() -> String`
 
-### module `error`
+### `error`
 - `pub enum Severity { Error, Warning }`
-- `pub enum Domain { Packages, Repositories, Services, Units, Files, Manifest, Transaction, Invocation }`
-- `pub fn Domain::as_str(self) -> &'static str`
+- `pub enum Domain { Packages, Repositories, Services, Files, Manifest, Transaction, Invocation }`
+- `pub fn Domain::as_str(&self) -> &'static str`
 - `pub struct Diagnostic { severity: Severity, domain: Domain, message: String }`
-- `pub fn Diagnostic::error(domain: Domain, message: impl Into<String>) -> Self`
-- `pub fn Diagnostic::warning(domain: Domain, message: impl Into<String>) -> Self`
+- `pub fn Diagnostic::error(domain: Domain, message: impl Into<String>) -> Diagnostic`
+- `pub fn Diagnostic::warning(domain: Domain, message: impl Into<String>) -> Diagnostic`
 - `pub fn Diagnostic::line(&self) -> String`
-- `pub enum ExitCode { Ok = 0, Logical = 1, Invocation = 2 }`
-- `pub fn ExitCode::code(self) -> i32`
-- `pub fn default_exit_for_domain(domain: Domain) -> ExitCode`
+- `pub const EXIT_OK: i32` / `pub const EXIT_LOGICAL: i32` / `pub const EXIT_INVOCATION: i32`
+- `pub fn exit_code_for(diag: &Diagnostic) -> i32`
 
-### module `manifest`
-- `pub struct ScopeWrapper<T> { attributes: BTreeMap<String, serde_json::Value>, elements: Vec<T> }`
-- `pub fn ScopeWrapper::<T>::new() -> Self`
-- `pub fn ScopeWrapper::<T>::with_attribute(self, key: &str, value: serde_json::Value) -> Self`
-- `pub struct ManifestMeta { format_version: i64, generator: String, created_at: String, desired_sha256: String }`
-- `pub struct PackageRecord { name, version, release, arch: String }`
-- `pub type PackagesScope = ScopeWrapper<PackageRecord>`
-- `pub struct RepositoryRecord { alias, name, url, repo_type: String, enabled, gpgcheck, autorefresh: bool, priority: i64 }`
-- `pub type RepositoriesScope = ScopeWrapper<RepositoryRecord>`
-- `pub struct ServiceRecord { name: String, state: String }`
-- `pub type ServicesScope = ScopeWrapper<ServiceRecord>`
-- `pub struct ManagedFileRecord { name, file_type, mode, user, group, sha256, target, content_ref, package_name: String }`
-- `pub type ConfigFilesScope = ScopeWrapper<ManagedFileRecord>`
-- `pub struct ManagedBaselineRecord { …, changes: Vec<String> }`
-- `pub type ChangedManagedFilesScope = ScopeWrapper<ManagedBaselineRecord>`
-- `pub struct UnmanagedFileRecord { name, file_type, mode, user, group, sha256, target: String }`
-- `pub type UnmanagedFilesScope = ScopeWrapper<UnmanagedFileRecord>`
-- `pub struct Manifest { meta, packages, repositories, services, config_files, changed_managed_files, unmanaged_files }`
-- `pub fn Manifest::empty() -> Self`
-- `pub type AppliedRecord = Manifest`
+### `config`
+- `pub enum OnUnreadable { Error, Warn }`
+- `pub enum Scope { Etc, Full }`
 - `pub enum TransactionMode { Auto, External, Internal }`
-- `pub fn TransactionMode::parse(s: &str) -> Option<TransactionMode>`
-- `pub struct TransactionContext { mode: TransactionMode, root: String, opened_here: bool }`
+- `pub struct Invocation { … }`
+- `pub fn Invocation::manifest_format_default(&self) -> ManifestFormat`
+- `pub fn Invocation::on_unreadable_or_error(&self) -> OnUnreadable`
+- `pub fn Invocation::scope_or_etc(&self) -> Scope`
+- `pub fn Invocation::root_or_slash(&self) -> String`
+- `pub fn Invocation::applied_root_or_slash(&self) -> String`
+- `pub fn Invocation::transaction_mode_or_auto(&self) -> TransactionMode`
+- `pub fn parse(args: &[String]) -> Result<Invocation, Diagnostic>`
+
+### `manifest`
+- `pub type Attributes = serde_json::Map<String, serde_json::Value>`
+- `pub struct ScopeWrapper<T> { attributes: Attributes, elements: Vec<T> }`
+- `pub fn ScopeWrapper::<T>::with_attr(key: &str, value: &str) -> Self`
+- `pub struct ManifestMeta { format_version: i64, generator: String, created_at: String, desired_sha256: String }`
+- `pub struct PackageRecord { name, version, release, arch }`
+- `pub type PackagesScope = ScopeWrapper<PackageRecord>`
+- `pub struct RepositoryRecord { alias, name, url, type, enabled, gpgcheck, autorefresh, priority }`
+- `pub type RepositoriesScope = ScopeWrapper<RepositoryRecord>`
+- `pub struct ServiceRecord { name, state }`
+- `pub type ServicesScope = ScopeWrapper<ServiceRecord>`
+- `pub struct ManagedFileRecord { name, type, mode, user, group, sha256, target, content_ref, package_name, status, changes }`
+- `pub type ConfigFilesScope = ScopeWrapper<ManagedFileRecord>`
+- `pub struct ManagedBaselineRecord { name, type, mode, user, group, sha256, target, package_name, changes }`
+- `pub type ChangedManagedFilesScope = ScopeWrapper<ManagedBaselineRecord>`
+- `pub struct UnmanagedFileRecord { name, type, mode, user, group, sha256, target }`
+- `pub type UnmanagedFilesScope = ScopeWrapper<UnmanagedFileRecord>`
+- `pub struct Manifest { meta, packages?, repositories?, services?, config_files?, changed_managed_files?, unmanaged_files? }`
+- `pub fn Manifest::new_actual(created_at: String) -> Self`
+
+### `manifest::format`
+- `pub enum ManifestFormat { Json, Yaml }`
+- `pub fn ManifestFormat::parse(s: &str) -> Option<ManifestFormat>`
+- `pub fn resolve_format(explicit: Option<ManifestFormat>, path: Option<&str>, default: ManifestFormat) -> ManifestFormat`
+
+### `manifest::hash`
+- `pub fn desired_sha256(manifest: &Manifest) -> String`
+- `pub fn hex(bytes: &[u8]) -> String`
+- `pub fn sha256_bytes(bytes: &[u8]) -> String`
+
+### `manifest::yaml`
+- `pub struct YamlSafetyError(pub String)`
+- `pub fn parse_manifest_safe(text: &str) -> Result<Manifest, YamlSafetyError>`
+- `pub fn to_yaml(manifest: &Manifest) -> Result<String, serde_yaml::Error>`
+
+### `manifest::load`
+- `pub struct LoadedManifest { manifest: Manifest, desired_sha256: String }`
+- `pub fn load_desired_manifest(manifest_path: &str, explicit_format: Option<ManifestFormat>, default_format: ManifestFormat) -> Result<LoadedManifest, Diagnostic>`
+- `pub fn load_state_dump(state_path: &str, explicit_format: Option<ManifestFormat>, default_format: ManifestFormat) -> Result<Manifest, Diagnostic>`
+
+### `record`
+- `pub const APPLIED_REL: &str`
+- `pub struct AppliedLoad { record: Manifest, present: bool }`
+- `pub fn applied_path(root: &str) -> PathBuf`
+- `pub fn load_applied_record(root: &str) -> Result<AppliedLoad, Diagnostic>`
+- `pub fn empty_applied() -> Manifest`
+- `pub fn build_applied_record(desired: &Manifest, desired_sha256: &str, resolved: PackagesScope, created_at: String) -> Manifest`
+- `pub fn write_applied_record(root: &str, record: &Manifest) -> Result<(), Diagnostic>`
+
+### `diff`
+- `pub const SYNCPOINT: &str`
 - `pub struct Diff { packages_install, packages_remove, repos_set, files_write, files_delete, units_change }`
 - `pub fn Diff::is_empty(&self) -> bool`
 - `pub struct DriftReport { files_modified, files_extra, units_divergent, packages_divergent, managed_files_modified, unmanaged_files_present }`
 - `pub fn DriftReport::is_empty(&self) -> bool`
-- `pub fn DriftReport::item_count(&self) -> usize`
-- `pub enum ManifestFormat { Json, Yaml }`
-- `pub fn ManifestFormat::parse(s: &str) -> Option<ManifestFormat>`
+- `pub fn DriftReport::count(&self) -> usize`
+- `pub fn compute_intent_diff(desired: &Manifest, applied: &Manifest) -> Diff`
+- `pub fn compute_drift(actual: &Manifest, reference: &Manifest, keep_list: &HashSet<String>) -> DriftReport`
 
-### module `manifest::format`
-- `pub fn resolve_format(explicit: Option<ManifestFormat>, path: Option<&str>, default: ManifestFormat) -> ManifestFormat`
+### `interfaces`
+- `pub trait CommandRunner: Send + Sync { fn run(&self, cmd: &str, args: &[&str]) -> CommandResult; }`
+- `pub struct CommandResult { stdout, stderr, success, spawn_failed }`
+- `pub struct OsCommandRunner`
+- `pub struct FakeCommandRunner` (test only)
 
-### module `manifest::hash`
-- `pub fn desired_sha256(manifest: &Manifest) -> String`
+### `state`
+- `pub struct DescribeOptions<'a> { root, on_unreadable, scope, keep_list, content_store, created_at, runner }`
+- `pub struct DescribeResult { manifest: Manifest, diagnostics: Vec<Diagnostic> }`
+- `pub fn describe_actual_state(opts: &DescribeOptions) -> Result<DescribeResult, Diagnostic>`
 
-### module `manifest::serialize`
-- `pub fn parse_manifest(text: &str, format: ManifestFormat) -> Result<Manifest, Diagnostic>`
-- `pub fn serialise_manifest(manifest: &Manifest, format: ManifestFormat) -> Result<String, Diagnostic>`
-- `pub fn serialise_json(manifest: &Manifest) -> Result<String, Diagnostic>`
+### `state::packages`
+- `pub enum PackagesResult { Records(Vec<PackageRecord>), Unreadable(String) }`
+- `pub fn read_packages(runner: &dyn CommandRunner, root: &str) -> PackagesResult`
+- `pub fn parse_packages(stdout: &str) -> Vec<PackageRecord>`
 
-### module `config`
-- `pub enum OnUnreadable { Error, Warn }`
-- `pub fn OnUnreadable::parse(s: &str) -> Option<OnUnreadable>`
-- `pub enum ScanScope { Etc, Full }`
-- `pub fn ScanScope::parse(s: &str) -> Option<ScanScope>`
-- `pub struct Config { transaction_mode, manifest_path, manifest_format, on_unreadable, scope, repo_lock, content_store, keep_list, signature_verification, keyring, activation_policy, applied_root }`
+### `state::repos`
+- `pub enum ReposResult { Records(Vec<RepositoryRecord>), Unreadable(String) }`
+- `pub fn read_repositories(root: &str) -> ReposResult`
+- `pub fn parse_repo_file(text: &str) -> Vec<RepositoryRecord>`
 
-### module `load`
-- `pub struct LoadedManifest { manifest: Manifest, desired_sha256: String }`
-- `pub struct LoadError { diagnostic: Diagnostic }`
-- `pub fn load_desired_manifest(manifest_path: &str, explicit_format: Option<ManifestFormat>, config: &Config) -> Result<LoadedManifest, LoadError>`
+### `state::services`
+- `pub enum ServicesResult { Records(Vec<ServiceRecord>), Unreadable(String) }`
+- `pub fn read_services(runner: &dyn CommandRunner, root: &str) -> ServicesResult`
+- `pub fn parse_unit_files(stdout: &str) -> Vec<ServiceRecord>`
 
-### module `record`
-- `pub const APPLIED_REL: &str`
-- `pub struct LoadedRecord { record: AppliedRecord, present: bool }`
-- `pub fn applied_path(root: &str) -> PathBuf`
-- `pub fn load_applied_record(root: &str) -> Result<LoadedRecord, Diagnostic>`
-- `pub fn write_applied_record(ctx: &TransactionContext, desired: &Manifest, desired_sha256: &str, resolved: &PackagesScope, now_rfc3339: &str) -> Result<(), Diagnostic>`
-- `pub fn is_valid_applied_record(record: &AppliedRecord) -> bool`
-- `pub fn load_state_dump(path: &Path, format: ManifestFormat) -> Result<Manifest, Diagnostic>`
+### `state::configfiles`
+- `pub const SYNCPOINT: &str`
+- `pub struct ConfigFilesOutput { records: Vec<ManagedFileRecord>, diagnostics: Vec<String> }`
+- `pub enum ConfigFilesError { Unreadable(String) }`
+- `pub fn read_config_files(runner: &dyn CommandRunner, root: &str, on_unreadable: &OnUnreadable, keep_list: &HashSet<String>, content_store: Option<&str>) -> Result<ConfigFilesOutput, ConfigFilesError>`
+- `pub fn parse_verify_output(stdout: &str) -> Vec<(String, Vec<String>)>`
 
-### module `diff`
-- `pub fn compute_intent_diff(desired: &Manifest, applied: &AppliedRecord) -> Diff`
-- `pub fn compute_drift(actual: &Manifest, reference: &AppliedRecord, keep_list: &HashSet<String>) -> DriftReport`
+### `state::fullscan`
+- `pub struct FullScanOutput { changed: Vec<ManagedBaselineRecord>, unmanaged: Vec<UnmanagedFileRecord>, diagnostics: Vec<String> }`
+- `pub enum FullScanError { Unreadable(String) }`
+- `pub fn full_scan(runner: &dyn CommandRunner, root: &str, on_unreadable: &OnUnreadable, keep_list: &HashSet<String>) -> Result<FullScanOutput, FullScanError>`
 
-### module `state`
-- `pub struct ActualState { manifest: Manifest, diagnostics: Vec<Diagnostic> }`
-- `pub fn describe_actual_state(runner: &dyn CommandRunner, root: &str, on_unreadable: OnUnreadable, scope: ScanScope, keep_list: &HashSet<String>, now_rfc3339: &str) -> Result<ActualState, Diagnostic>`
+### `txn`
+- `pub struct TransactionContext { mode: TransactionMode, root: String, opened_here: bool }`
+- `pub fn acquire_transaction_context(mode: &TransactionMode) -> Result<TransactionContext, Diagnostic>`
 
-### module `txn`
-- `pub fn acquire_transaction_context(runner: &dyn CommandRunner, mode: TransactionMode) -> Result<TransactionContext, Diagnostic>`
-
-### module `converge`
-- `pub fn converge_packages(runner: &dyn CommandRunner, ctx: &TransactionContext, diff: &Diff, config: &Config) -> Result<PackagesScope, Diagnostic>`
-- `pub fn converge_files(runner: &dyn CommandRunner, ctx: &TransactionContext, diff: &Diff, config: &Config, keep_list: &HashSet<String>) -> Result<(), Diagnostic>`
+### `converge`
+- `pub fn converge_packages(runner: &dyn CommandRunner, ctx: &TransactionContext, diff: &Diff) -> Result<PackagesScope, Diagnostic>`
+- `pub fn converge_files(ctx: &TransactionContext, diff: &Diff, keep_list: &HashSet<String>, content_store: Option<&str>, rpm_owned: &dyn Fn(&str) -> bool) -> Result<(), Diagnostic>`
 - `pub fn converge_units(runner: &dyn CommandRunner, ctx: &TransactionContext, diff: &Diff) -> Result<(), Diagnostic>`
 
-### module `interfaces`
-- `pub trait CommandRunner: Send + Sync { fn run(&self, cmd: &str, args: &[&str]) -> CommandResult }`
-- `pub struct CommandResult { stdout: String, stderr: String, code: i32, spawn_failed: bool }`
-- `pub struct OsCommandRunner` (impl `CommandRunner`)
-- `pub struct FakeCommandRunner { responses: HashMap<String, CommandResult> }` (impl `CommandRunner`; in-tree test double)
-
-### module `clock`
-- `pub fn now_rfc3339() -> String`
-
-### module `cli`
+### `cli`
 - `pub fn run(args: &[String]) -> i32`
-- `pub fn dispatch(runner: &dyn CommandRunner, args: &[String]) -> i32`
-
-## Template constraints compliance
-
-| Constraint | Required | Compliance |
-|------------|----------|------------|
-| LANGUAGE | Go default; Rust supported | Rust (explicit run target); deviation documented above |
-| BINARY-TYPE static | Go/Rust must be static | static via crt-static + explicit target; `ldd` → statically linked |
-| SOURCE-PARTITIONING modular / one-entry-one-implementation | yes | entry point dispatch-only; 17 implementation modules |
-| MODULE-IDENTITY host-specified / propagated / conflict-halts | yes | crate `zypper-declarative` from spec META `Module:`; propagated; no conflict |
-| BINARY-COUNT 1 | yes | single `[[bin]]` |
-| BINARY-LOCATION project-root (`../../<bin>`) | yes | binary at project root; tests invoke `../../zypper-declarative` |
-| RUNTIME-DEPS none | yes | static binary; system tools driven via exec (delegated, documented) |
-| CLI-ARG-STYLE key=value / bare-words | yes | hand-written parser; bare verbs; no POSIX `--flag` options (only tolerated version/help aliases) |
-| EXIT-CODE-OK 0 / ERROR 1 / INVOCATION 2 | yes | `ExitCode` enum; mapping in verb layer |
-| STREAM-DIAGNOSTICS stderr / STREAM-OUTPUT stdout | yes | diagnostics to stderr one per line; output to stdout |
-| SIGNAL-HANDLING SIGTERM/SIGINT | yes | clean exit; no partial output / no partial boot target (documented) |
-| OUTPUT-FORMAT RPM/DEB required | yes | `zypper-declarative.spec`, `debian/*` produced |
-| OUTPUT-FORMAT OCI/PKG/binary supported | not active | not produced (no preset activation) |
-| INSTALL-METHOD OBS / curl forbidden | yes | README + packaging document OBS; no curl |
-| PLATFORM Linux | yes | Linux only |
-| CONFIG-ENV-VARS forbidden | yes | environment is never read for behaviour |
-| NETWORK-CALLS forbidden | yes (with documented delegation) | no direct network I/O; package retrieval delegated |
-| FILE-MODIFICATION input-files forbidden | yes | inputs never modified (verified by `diff_does_not_modify_system_no_transaction`) |
-| IDEMPOTENT true | yes | apply idempotence by design; pure diff/drift |
-| PRESET-SYSTEM systemd-style | n/a in this run | preset layering not exercised; key=value options honoured |
-| spec-hash embedded | yes | embedded in all source headers, `version` output, Makefile (`SPEC_SHA256`), RPM (`# pcd-spec-sha256:`), DEB (`X-PCD-Spec-SHA256:`), this report |
-
-## Resume logic
-
-The output directory contained only the pre-created empty `code/rs/` tree at
-start; no prior deliverable existed, so all files were produced fresh. No file
-was skipped as already-complete.
+- `pub fn now_rfc3339() -> String`
+- `pub fn emit_usage_stderr()`
+- `pub fn usage_text() -> String`
+- `cli::render::{render_plan, render_drift_summary}`; `cli::serialize::serialise`

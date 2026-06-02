@@ -1,33 +1,29 @@
 #!/usr/bin/make -f
-# generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
-#
-# debian/rules for zypper-declarative (Rust, static binary).
+# debian/rules for zypper-declarative
+# X-PCD-Spec-SHA256: 51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 
-export RUSTFLAGS = -C target-feature=+crt-static
-TARGET = x86_64-unknown-linux-gnu
-BINARY = zypper-declarative
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
 	dh $@
 
 override_dh_auto_build:
-	cargo build --release --target $(TARGET) --offline
-	cp target/$(TARGET)/release/$(BINARY) ./$(BINARY)
-	# Man page.
-	pandoc $(BINARY).1.md -s -t man -o $(BINARY).1
-
-override_dh_auto_test:
-	cargo build --release
-	cp target/release/$(BINARY) ./$(BINARY)
-	cd independent_tests/claude-opus-4-8 && cargo test --test cli
+	cargo build --release --offline
+	cp target/x86_64-unknown-linux-gnu/release/zypper-declarative ./zypper-declarative
+	pandoc zypper-declarative.1.md -s -t man -o zypper-declarative.1
 
 override_dh_auto_install:
-	install -D -m 0755 $(BINARY) debian/$(BINARY)/usr/bin/$(BINARY)
-	install -D -m 0644 $(BINARY).1 debian/$(BINARY)/usr/share/man/man1/$(BINARY).1
-	# Surface as a zypper subcommand.
-	install -d debian/$(BINARY)/usr/lib/zypper/commands
-	ln -sf /usr/bin/$(BINARY) debian/$(BINARY)/usr/lib/zypper/commands/zypper-declarative
+	install -D -m 0755 ./zypper-declarative \
+	    debian/zypper-declarative/usr/bin/zypper-declarative
+	install -D -m 0644 zypper-declarative.1 \
+	    debian/zypper-declarative/usr/share/man/man1/zypper-declarative.1
+	install -d debian/zypper-declarative/usr/lib/zypper/commands
+	ln -sf /usr/bin/zypper-declarative \
+	    debian/zypper-declarative/usr/lib/zypper/commands/zypper-declarative
+
+override_dh_auto_test:
+	cargo test --test '*' --manifest-path independent_tests/claude-opus-4-8/Cargo.toml
 
 override_dh_auto_clean:
-	cargo clean || true
-	rm -f ./$(BINARY) $(BINARY).1
+	cargo clean
+	rm -f ./zypper-declarative zypper-declarative.1

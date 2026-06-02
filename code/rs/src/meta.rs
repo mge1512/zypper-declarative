@@ -1,24 +1,25 @@
-// generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
+// generated from spec: zypper-declarative.spec.md
+// sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// Build-time identity. The spec SHA256 is embedded as a compile-time constant
-// so that `version` output, the source headers, and the audit trail all carry
-// the cryptographic identity of the specification this binary was produced from.
+// Embedded build identity: the tool version and the SHA256 of the
+// specification this implementation was generated from. Injected by build.rs.
 
-/// Program name (also the binary name and the crate name).
-pub const PROGRAM: &str = "zypper-declarative";
+/// Program name as it appears in `meta.generator` and version output.
+pub const PROGRAM_NAME: &str = "zypper-declarative";
 
-/// Program version. Tracks the spec META Version field (0.6.4).
-pub const VERSION: &str = "0.6.4";
+/// Semantic version of the tool (== spec Version).
+pub const VERSION: &str = env!("ZD_VERSION");
 
-/// SHA256 of the specification this binary was produced from. There are no
-/// `Includes:` directives in the host spec, so the merged hash equals the host
-/// hash.
-pub const SPEC_SHA256: &str =
-    "18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd";
+/// SHA256 of the specification this binary was generated from.
+pub const SPEC_SHA256: &str = env!("ZD_SPEC_SHA256");
 
-/// The generator string embedded in every emitted manifest's meta.generator.
-/// It carries the program name AND version so independent implementations of
-/// the same spec version emit the same string (spec INVARIANT).
+/// The `meta.generator` string: "zypper-declarative <version>".
+/// Independent implementations of the same spec version emit the same value.
 pub fn generator() -> String {
-    format!("{} {}", PROGRAM, VERSION)
+    format!("{} {}", PROGRAM_NAME, VERSION)
+}
+
+/// The `version` verb / `--version` output line.
+pub fn version_line() -> String {
+    format!("{} {} spec:{}", PROGRAM_NAME, VERSION, SPEC_SHA256)
 }

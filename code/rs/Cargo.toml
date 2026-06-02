@@ -1,26 +1,24 @@
-# generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
+# pcd-spec-sha256: 51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 [package]
 name = "zypper-declarative"
-version = "0.6.4"
+version = "0.6.6"
 edition = "2021"
 license = "GPL-2.0-or-later"
-description = "Declarative reconciling converger for SUSE systems, surfaced as a zypper subcommand"
-repository = "https://github.com/mge1512/zypper-declarative"
+description = "Declarative convergence of SUSE system state (packages, repositories, services, /etc config files) inside a snapshot transaction."
 authors = ["Matthias G. Eckermann <pcd@mailbox.org>"]
+repository = "https://github.com/mge1512/zypper-declarative"
+build = "build.rs"
 
 [[bin]]
 name = "zypper-declarative"
 path = "src/main.rs"
-
-[lib]
-name = "zypper_declarative"
-path = "src/lib.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
+libc = "0.2"
 
 [profile.release]
 strip = true

@@ -171,12 +171,22 @@ spec's examples are the shared target and the three-way diff is the check.)
   "deleted"); the Go sibling left these null in its first verdict-parse build, do
   not repeat that. No digest map,
   no algorithm handling, no per-path join.
-- `[spec]` GHOST REGULAR FILES (the one case `rpm -V` skips): enumerate
-  ghost-flagged `/etc` paths (`rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]'`
-  or scan owning packages' file lists for FILEFLAGS bit 64). For each ghost REGULAR
-  FILE with real on-disk content, EMIT type "file" with real sha256 (e.g.
-  `/etc/pam.d/common-auth-pc`); an empty ghost file is suppressed. Small pass over
-  the few ghost paths, not a walk of all `/etc`.
+- `[spec]` GHOST REGULAR FILES are a SEPARATE, REQUIRED pass, do NOT skip it. `rpm
+  -V` does not report `%ghost` files at all, so they never appear in the verdict
+  parse; they must be found by their own enumeration. Build 04 ran the `rpm -V` pass
+  but OMITTED this one and dropped all 32 content-bearing ghosts (the four
+  `common-*-pc` PAM files, `/etc/machine-id`, `/etc/ld.so.cache`, `/etc/hostname`,
+  `/etc/hosts`, `/etc/crypto-policies/*`, `/etc/nvme/*`, ...), which is why its
+  content store was 2 MiB instead of ~15 MiB. The pass: enumerate ghost-flagged
+  `/etc` paths with `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]'` over the
+  `/etc` paths (or scan installed packages' file lists for FILEFLAGS bit 64), and for
+  each ghost REGULAR FILE that has real on-disk content (exists and is non-empty)
+  EMIT type "file" with its real sha256, `package_name` set, `status` "changed", and
+  `changes` listing the ghost-content reason (e.g. `/etc/pam.d/common-auth-pc`,
+  pam-config ships it 0-byte `%ghost`, disk holds 462 real bytes). An empty ghost
+  file is suppressed. This is a small pass over the few ghost paths, not a walk of
+  all `/etc`, but it is mandatory: the changed-files result is the UNION of the `rpm
+  -V` verdict parse and this ghost pass.
 - `[spec]` GHOST SYMLINKS (the `/etc/alternatives/*` case): "has content" is NOT the
   test (every symlink has a target); the test is whether the on-disk target equals
   the target a fresh install would establish, for alternatives the auto/best
@@ -200,13 +210,19 @@ spec's examples are the shared target and the three-way diff is the check.)
 - `[spec]` `created_at` is a real RFC3339 timestamp (a properly converted
   `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`),
   informational and excluded from comparison and the hash, but correct.
-- `[spec]` Required self-checks (black-box, run as root in the test step): run
-  `describe` and assert (1) the pam pair, `common-auth` as type "link",
-  `common-auth-pc` as type "file" with a sha256; (2) a known-pristine
+- `[spec]` Required self-checks (black-box, run as root in the test step), each MUST
+  actually run and fail the build if unmet: run `describe` and assert (1a)
+  `/etc/pam.d/common-auth` present as type "link" (the type-mismatch case); (1b)
+  `/etc/pam.d/common-auth-pc` present as type "file" with a non-empty sha256 (the
+  CONTENT-BEARING GHOST, build 04 dropped this because it skipped the ghost pass, so
+  this assertion is what binds that pass); (1c) at least one other content-bearing
+  ghost is present, e.g. `/etc/machine-id` as a type-file record (guards against the
+  ghost pass being special-cased to pam only); (2) a known-pristine
   `/etc/ImageMagick-7-SUSE/*.xml` ABSENT; (3) every emitted record with a
   `package_name` that is not an unpackaged file carries `status` == "changed" and a
   non-empty `changes` list. Because `rpm -V` reports only changes, pristine files
-  never appear and the over-emission class cannot recur.
+  never appear and the over-emission class cannot recur; assertions (1b)/(1c) ensure
+  the separate ghost pass is not silently missing.
 
 ## Integration with the system (Rust-specific)
 

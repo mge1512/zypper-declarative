@@ -157,14 +157,20 @@ The tool runs as root, so `rpm -V` can read everything.
   `changes` includes "deleted"); build 12 decided emission from the flags correctly
   but left `changes` and `status` null, do not repeat that. This is the whole
   changed-files mechanism: no digest map, no algorithm handling, no per-path join.
-- `[spec]` GHOST REGULAR FILES (the one case `rpm -V` does not cover, it skips
-  `%ghost`): enumerate ghost-flagged paths under `/etc` only, with
-  `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]' <path>` or by scanning the
-  owning packages' file lists for the ghost bit (FILEFLAGS bit 64). For each ghost
-  REGULAR FILE that has real on-disk content (exists and is non-empty), EMIT type
-  "file" with its real sha256 (a fresh install ships no content; e.g.
-  `/etc/pam.d/common-auth-pc`). An empty ghost file is suppressed. Tiny pass over
-  the few ghost paths, NOT a walk of all `/etc`.
+- `[spec]` GHOST REGULAR FILES are a SEPARATE, REQUIRED pass, do NOT skip it. `rpm
+  -V` does not report `%ghost` files at all, so they never appear in the verdict
+  parse and must be found by their own enumeration. (The Rust sibling omitted this
+  pass and dropped all 32 content-bearing ghosts, the `common-*-pc` PAM files,
+  `/etc/machine-id`, `/etc/ld.so.cache`, `/etc/hostname`, `/etc/hosts`,
+  `/etc/crypto-policies/*`, ...; do not repeat that.) The pass: enumerate
+  ghost-flagged paths under `/etc` with `rpm -qf --queryformat '[%{FILENAMES}
+  %{FILEFLAGS}\n]' <path>` (or scan installed packages' file lists for the ghost bit,
+  FILEFLAGS bit 64), and for each ghost REGULAR FILE with real on-disk content
+  (exists and is non-empty) EMIT type "file" with its real sha256, `package_name`
+  set, `status` "changed", and `changes` listing the ghost-content reason (e.g.
+  `/etc/pam.d/common-auth-pc`). An empty ghost file is suppressed. Tiny pass over the
+  few ghost paths, NOT a walk of all `/etc`, but mandatory: the changed-files result
+  is the UNION of the `rpm -V` verdict parse and this ghost pass.
 - `[spec]` GHOST SYMLINKS (the `/etc/alternatives/*` case): "has content" is NOT the
   test (every symlink has a target); the test is whether the on-disk target equals
   the target a fresh install would establish. For alternatives that is the auto/best
@@ -190,14 +196,17 @@ The tool runs as root, so `rpm -V` can read everything.
   unreadable follows `on_unreadable` (error, or under warn emit with `content_ref`
   "" plus a diagnostic), never silent. The manifest references content, never inlines
   it.
-- `[spec]` Required self-checks (black-box, run as root in the test step): run
-  `describe` and assert (1) the pam pair, `common-auth` present as type "link",
-  `common-auth-pc` present as type "file" with a sha256; (2) a known-pristine file
+- `[spec]` Required self-checks (black-box, run as root in the test step), each MUST
+  actually run and fail the build if unmet: run `describe` and assert (1a)
+  `/etc/pam.d/common-auth` present as type "link"; (1b) `/etc/pam.d/common-auth-pc`
+  present as type "file" with a non-empty sha256 (the CONTENT-BEARING GHOST, this
+  binds the separate ghost pass); (1c) at least one other content-bearing ghost,
+  e.g. `/etc/machine-id`, present as a type-file record; (2) a known-pristine file
   (an `/etc/ImageMagick-7-SUSE/*.xml`) ABSENT; (3) every emitted record that has a
   `package_name` and is NOT an unpackaged file carries `status` == "changed" and a
-  non-empty `changes` list. Assertion (3) binds the field build 12 dropped; without
-  it the records are emitted but unannotated. Because `rpm -V` reports only changes,
-  pristine files never appear and the over-emission class cannot recur.
+  non-empty `changes` list (binds the field build 12 dropped). Because `rpm -V`
+  reports only changes, pristine files never appear and the over-emission class
+  cannot recur; (1b)/(1c) ensure the ghost pass is not silently missing.
 
 ## Filesystem object model (the /etc and full-scan walks)
 

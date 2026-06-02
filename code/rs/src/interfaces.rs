@@ -1,35 +1,33 @@
-// generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
+// generated from spec: zypper-declarative.spec.md
+// sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// INTERFACES: the abstract dependencies on external systems (package manager,
-// init system, transaction mechanism). Modelled as Rust traits so the production
-// implementation (driving the CLIs via std::process::Command) and test doubles
-// share a surface. Independent black-box tests do not use these — they invoke
-// the built binary — but the internal layering keeps `describe-actual-state` the
-// single live-state reader.
+// Abstract external-system interfaces (## INTERFACES): the package manager, the
+// init system, and the alternatives database are driven via a CommandRunner
+// trait so the production path execs the real tools and tests can substitute a
+// double. Independent (black-box) tests do NOT use these doubles — they invoke
+// the built binary — but the doubles let the in-tree unit tests cover the
+// parsing logic without a live system.
 
-use std::collections::HashMap;
 use std::process::Command;
 
-/// Runs an external command and returns (stdout, stderr, exit_code).
-///
-/// A non-zero exit is NOT an error at this layer: a package verifier reporting
-/// differences commonly exits non-zero, and that is the normal successful
-/// outcome. Callers decide whether a non-zero status is meaningful.
+/// Runs an external command and returns (stdout, stderr, success).
+/// Unlike a bare error, this surfaces stdout even when the command exits
+/// non-zero, because rpm -V reports differences with a non-zero exit and that
+/// is a NORMAL successful outcome to parse, not a failure.
 pub trait CommandRunner: Send + Sync {
     fn run(&self, cmd: &str, args: &[&str]) -> CommandResult;
 }
 
-/// The outcome of running an external command.
+#[derive(Debug, Clone, Default)]
 pub struct CommandResult {
     pub stdout: String,
     pub stderr: String,
-    pub code: i32,
-    /// True only if the command could not be spawned at all (a genuine
-    /// access/exec failure), which IS an unreadable-source condition.
+    pub success: bool,
+    /// True if the command could not be spawned at all (e.g. binary missing).
     pub spawn_failed: bool,
 }
 
-/// The production CommandRunner: drives the real CLIs with a fixed PATH.
+/// Production CommandRunner: execs the real tool with a sanitised PATH.
 pub struct OsCommandRunner;
 
 impl CommandRunner for OsCommandRunner {
@@ -42,42 +40,27 @@ impl CommandRunner for OsCommandRunner {
             Ok(output) => CommandResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                code: output.status.code().unwrap_or(-1),
+                success: output.status.success(),
                 spawn_failed: false,
             },
             Err(e) => CommandResult {
                 stdout: String::new(),
                 stderr: e.to_string(),
-                code: -1,
+                success: false,
                 spawn_failed: true,
             },
         }
     }
 }
 
-/// A scripted CommandRunner for tests (in-tree unit tests only; the independent
-/// black-box suite does not use it).
-#[allow(dead_code)]
+#[cfg(test)]
 pub struct FakeCommandRunner {
-    pub responses: HashMap<String, CommandResult>,
+    pub responses: std::collections::HashMap<String, CommandResult>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 impl CommandRunner for FakeCommandRunner {
     fn run(&self, cmd: &str, _args: &[&str]) -> CommandResult {
-        match self.responses.get(cmd) {
-            Some(r) => CommandResult {
-                stdout: r.stdout.clone(),
-                stderr: r.stderr.clone(),
-                code: r.code,
-                spawn_failed: r.spawn_failed,
-            },
-            None => CommandResult {
-                stdout: String::new(),
-                stderr: String::new(),
-                code: 0,
-                spawn_failed: false,
-            },
-        }
+        self.responses.get(cmd).cloned().unwrap_or_default()
     }
 }

@@ -1,0 +1,16 @@
+# Static linking (BINARY-TYPE: static) for the release binary.
+# crt-static is applied only to the explicit build target so host build
+# scripts and proc-macros (which must be dynamic) are unaffected.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+# Offline, vendored dependency sources (cargo vendor). The build sandbox has no
+# network access; all dependencies are present under vendor/.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

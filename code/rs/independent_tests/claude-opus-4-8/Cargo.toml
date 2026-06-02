@@ -1,21 +1,31 @@
-# generated from spec: zypper-declarative.spec.md sha256:18253550a5c3d3f1818f0380811cb5dbc98874828693e49fc9cd5cbc923303dd
 # tests by: claude-opus-4-8
-#
-# Independent black-box test harness for the zypper-declarative CLI binary.
-# Tests invoke the built binary at ../../zypper-declarative (BINARY-LOCATION:
-# project-root, per the cli-tool deployment template) via std::process::Command
-# and assert on stdout, stderr, and exit code. No implementation source is
-# imported; the interface under test is the CLI.
-
+# generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 [package]
-name = "zypper-declarative-independent-tests"
-version = "0.6.4"
+name = "zypper-declarative-tests"
+version = "0.6.6"
 edition = "2021"
 license = "GPL-2.0-or-later"
 publish = false
+
+# Black-box test crate. It invokes the built binary at ../../zypper-declarative
+# via std::process::Command and asserts on stdout, stderr, and exit code.
+# It does NOT import or link the implementation crate.
+
+[dependencies]
+serde_json = "1"
 
 [[test]]
 name = "cli"
 path = "tests/cli.rs"
 
-[dependencies]
+[[test]]
+name = "describe"
+path = "tests/describe.rs"
+
+[[test]]
+name = "diff_verify"
+path = "tests/diff_verify.rs"
+
+[[test]]
+name = "selfcheck"
+path = "tests/selfcheck.rs"
