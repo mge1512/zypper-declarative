@@ -1,19 +1,15 @@
-# translation-workflow.pikchr
-# generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
-#
-# Workflow of the PCD translator run that produced zypper-declarative (Go).
-
+# Translation workflow for zypper-declarative (cli-tool, Go)
+# Rendered with pikchr. Records the translator phase order actually followed.
+arrow right 200% "Tests First" "(Phase 1)" above
+box "independent_tests/" "claude-opus-4-8/" fit
+arrow right 200% "Core impl" "(Phase 2)" above
+box "internal/* + cmd/" "+ go.mod" fit
+arrow right 200% "Packaging" "(Phase 3)" above
+box "Makefile, RPM," "debian/*, LICENSE" fit
 down
-box "spec + template" "+ hints" fit
-arrow
-box "Phase 1" "Tests First" "independent_tests/" fit
-arrow
-box "Phase 2" "implementation" "cmd/ + internal/" fit
-arrow
-box "Phase 3" "packaging" "Makefile, RPM, DEB" fit
-arrow
-box "Phase 5" "docs" "README, man page" fit
-arrow
-box "Phase 6" "compile gate" "build + go test" fit
-arrow
-box "Phase 7" "TRANSLATION_REPORT.md" fit
+arrow from last box.s down 80% "Docs (Phase 5)" "+ man (Phase 4)" aligned
+box "README.md," "man page" fit
+arrow left 200% "Compile gate" "(Phase 6)" above
+box "go build ./..." "go test (32 pass)" fit
+arrow left 200% "Report" "(Phase 7)" above
+box "TRANSLATION_" "REPORT.md" fit

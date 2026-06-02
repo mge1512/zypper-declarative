@@ -1,208 +1,274 @@
-// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// Package cli is the dispatch layer: key=value argument parsing, the global
-// command contract (version/help/bare invocation and tolerated flag aliases),
-// and the five verb handlers that orchestrate the internal behaviours and map
-// their results to exit codes. The entry-point (cmd/zypper-declarative) does
-// nothing but call Run.
+// Package cli is the entry-point dispatch layer: key=value argument parsing, the
+// global contract (version/help/bare/unknown), and exit-code mapping. It calls
+// into the internal behaviour packages and is the only place exit codes are set.
 package cli
 
 import (
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/mge1512/zypper-declarative/internal/manifest"
+	"github.com/mge1512/zypper-declarative/internal/meta"
 )
 
-// Exit codes (spec ExitCode).
+// Exit codes per the spec ExitCode type and the cli-tool template.
 const (
 	ExitOK         = 0
 	ExitError      = 1
 	ExitInvocation = 2
 )
 
-// Config holds the resolved CONFIG knobs and per-invocation options. All knobs
-// are surfaced as key=value options; environment-variable control is forbidden.
-type Config struct {
-	TransactionMode       string
-	ManifestPath          string
-	ManifestFormat        string
-	OnUnreadable          string
-	Scope                 string
-	RepoLock              string
-	ContentStore          string
-	KeepList              string
-	SignatureVerification string
-	Keyring               string
-	ActivationPolicy      string
-	AppliedRoot           string
-
-	// per-invocation
-	Format    string
-	StatePath string
-	Root      string
-	Out       string
+// App holds the IO streams and parsed configuration for one invocation.
+type App struct {
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
-func defaultConfig() Config {
-	return Config{
-		TransactionMode:       "auto",
-		ManifestPath:          "/var/lib/zypper-declarative/desired.json",
-		ManifestFormat:        "json",
-		OnUnreadable:          "error",
-		Scope:                 "etc",
-		SignatureVerification: "off", // verification mechanism is host-specific; default off in this build
-		ActivationPolicy:      "reboot",
-		AppliedRoot:           "/",
-		Root:                  "/",
-	}
+// Config holds the resolved key=value options for one invocation.
+type Config struct {
+	Verb         string
+	ManifestPath string
+	StatePath    string
+	Root         string
+	Out          string
+	Format       *manifest.Format
+	OnUnreadable string
+	Scope        string
+	Mode         string
+
+	ManifestFormat string
+	RepoLock       string
+	ContentStore   string
+	KeepListPath   string
+	SigVerify      string
+	Keyring        string
+	ActivationPol  string
+	AppliedRoot    string
 }
 
 // knownOptionKeys is the set of accepted key=value option keys.
 var knownOptionKeys = map[string]bool{
-	"mode": true, "transaction-mode": true, "manifest-path": true,
-	"manifest-format": true, "format": true, "state-path": true,
-	"root": true, "out": true, "on-unreadable": true, "scope": true,
-	"repo-lock": true, "content-store": true, "keep-list": true,
-	"signature-verification": true, "keyring": true,
+	"manifest-path": true, "state-path": true, "root": true, "out": true,
+	"format": true, "on-unreadable": true, "scope": true, "mode": true,
+	"manifest-format": true, "repo-lock": true, "content-store": true,
+	"keep-list": true, "signature-verification": true, "keyring": true,
 	"activation-policy": true, "applied-root": true,
 }
 
-// usageErr is an invocation error carrying a message printed to stderr.
-type usageErr struct{ msg string }
-
-func (e usageErr) Error() string { return e.msg }
-
-// parseArgs parses key=value options (which must precede any bare-word args) and
-// the trailing bare words into a Config and an option set. A POSIX --flag style
-// option, an unknown key, an unknown value, or a missing value is an invocation
-// error (the global flag aliases are handled by the dispatcher before this).
-func parseArgs(cfg *Config, args []string) (seen map[string]bool, err error) {
-	seen = map[string]bool{}
-	for _, a := range args {
-		if !strings.Contains(a, "=") {
-			return nil, usageErr{"unexpected argument: " + a}
-		}
-		if strings.HasPrefix(a, "-") {
-			return nil, usageErr{"POSIX flag style is not supported for options: " + a}
-		}
-		eq := strings.IndexByte(a, '=')
-		key := a[:eq]
-		val := a[eq+1:]
-		if !knownOptionKeys[key] {
-			return nil, usageErr{"unknown option: " + key}
-		}
-		if err := applyOption(cfg, key, val); err != nil {
-			return nil, err
-		}
-		seen[key] = true
+// Run is the dispatcher. It returns the process exit code.
+func (a *App) Run(args []string) int {
+	if a.Stdout == nil {
+		a.Stdout = os.Stdout
 	}
-	return seen, nil
-}
+	if a.Stderr == nil {
+		a.Stderr = os.Stderr
+	}
 
-func applyOption(cfg *Config, key, val string) error {
-	switch key {
-	case "mode", "transaction-mode":
-		switch val {
-		case "auto", "external", "internal":
-			cfg.TransactionMode = val
-		default:
-			return usageErr{"unknown value for " + key + ": " + val}
-		}
-	case "manifest-path":
-		cfg.ManifestPath = val
-	case "manifest-format":
-		if val != "json" && val != "yaml" {
-			return usageErr{"unknown value for manifest-format: " + val}
-		}
-		cfg.ManifestFormat = val
-	case "format":
-		if val != "json" && val != "yaml" {
-			return usageErr{"unknown format value: " + val}
-		}
-		cfg.Format = val
-	case "state-path":
-		cfg.StatePath = val
-	case "root":
-		cfg.Root = val
-	case "out":
-		cfg.Out = val
-	case "on-unreadable":
-		if val != "error" && val != "warn" {
-			return usageErr{"unknown value for on-unreadable: " + val}
-		}
-		cfg.OnUnreadable = val
-	case "scope":
-		if val != "etc" && val != "full" {
-			return usageErr{"unknown value for scope: " + val}
-		}
-		cfg.Scope = val
-	case "repo-lock":
-		cfg.RepoLock = val
-	case "content-store":
-		cfg.ContentStore = val
-	case "keep-list":
-		cfg.KeepList = val
-	case "signature-verification":
-		if val != "on" && val != "off" {
-			return usageErr{"unknown value for signature-verification: " + val}
-		}
-		cfg.SignatureVerification = val
-	case "keyring":
-		cfg.Keyring = val
-	case "activation-policy":
-		switch val {
-		case "reboot", "soft-reboot", "none":
-			cfg.ActivationPolicy = val
-		default:
-			return usageErr{"unknown value for activation-policy: " + val}
-		}
-	case "applied-root":
-		cfg.AppliedRoot = val
+	installSignalHandlers()
+
+	// Global commands and bare invocation, before option parsing.
+	if len(args) == 0 {
+		a.printUsage(a.Stdout)
+		return ExitOK
+	}
+	switch args[0] {
+	case "version", "--version":
+		fmt.Fprintf(a.Stdout, "%s %s spec:%s\n", meta.ProgramName, meta.Version, meta.SpecSHA256)
+		return ExitOK
+	case "help", "--help", "-h":
+		a.printUsage(a.Stdout)
+		return ExitOK
+	}
+
+	verb := args[0]
+	switch verb {
+	case "apply", "diff", "verify", "status", "describe":
+		// recognised verb
 	default:
-		return usageErr{"unknown option: " + key}
+		fmt.Fprintf(a.Stderr, "[Error] invocation: unknown verb %q\n", verb)
+		a.printUsage(a.Stderr)
+		return ExitInvocation
 	}
-	return nil
+
+	cfg, err := a.parseOptions(verb, args[1:])
+	if err != nil {
+		fmt.Fprintf(a.Stderr, "[Error] invocation: %s\n", err.Error())
+		a.printUsage(a.Stderr)
+		return ExitInvocation
+	}
+
+	switch verb {
+	case "apply":
+		return a.runApply(cfg)
+	case "diff":
+		return a.runDiff(cfg)
+	case "verify":
+		return a.runVerify(cfg)
+	case "status":
+		return a.runStatus(cfg)
+	case "describe":
+		return a.runDescribe(cfg)
+	}
+	return ExitInvocation
 }
 
-// manifestFormatDefault returns the resolved manifest.Format default.
-func (c Config) manifestFormatDefault() manifest.Format {
+// parseOptions parses key=value options for a verb. Bare words after options are
+// not used by any verb here, so an unrecognised token is an invocation error.
+func (a *App) parseOptions(verb string, args []string) (*Config, error) {
+	cfg := &Config{
+		Verb:           verb,
+		Root:           "/",
+		OnUnreadable:   "error",
+		Scope:          "etc",
+		Mode:           "auto",
+		ManifestFormat: "json",
+		SigVerify:      "off", // default off for the read-only/offline paths in this build
+		AppliedRoot:    "/",
+	}
+	for _, arg := range args {
+		eq := strings.IndexByte(arg, '=')
+		if eq < 0 {
+			return nil, fmt.Errorf("unrecognised argument %q (options are key=value)", arg)
+		}
+		key := arg[:eq]
+		val := arg[eq+1:]
+		if !knownOptionKeys[key] {
+			return nil, fmt.Errorf("unknown option %q", key)
+		}
+		switch key {
+		case "manifest-path":
+			cfg.ManifestPath = val
+		case "state-path":
+			cfg.StatePath = val
+		case "root":
+			cfg.Root = val
+		case "out":
+			cfg.Out = val
+		case "format":
+			f, ferr := manifest.ParseFormat(val)
+			if ferr != nil {
+				return nil, fmt.Errorf("unknown format value %q", val)
+			}
+			cfg.Format = &f
+		case "on-unreadable":
+			if val != "error" && val != "warn" {
+				return nil, fmt.Errorf("unknown on-unreadable value %q", val)
+			}
+			cfg.OnUnreadable = val
+		case "scope":
+			if val != "etc" && val != "full" {
+				return nil, fmt.Errorf("unknown scope value %q", val)
+			}
+			if verb != "describe" && verb != "verify" {
+				return nil, fmt.Errorf("scope is accepted only on describe and verify")
+			}
+			cfg.Scope = val
+		case "mode":
+			if val != "auto" && val != "external" && val != "internal" {
+				return nil, fmt.Errorf("unknown mode value %q", val)
+			}
+			cfg.Mode = val
+		case "manifest-format":
+			f, ferr := manifest.ParseFormat(val)
+			if ferr != nil {
+				return nil, fmt.Errorf("unknown manifest-format value %q", val)
+			}
+			cfg.ManifestFormat = string(f)
+		case "repo-lock":
+			cfg.RepoLock = val
+		case "content-store":
+			cfg.ContentStore = val
+		case "keep-list":
+			cfg.KeepListPath = val
+		case "signature-verification":
+			if val != "on" && val != "off" {
+				return nil, fmt.Errorf("unknown signature-verification value %q", val)
+			}
+			cfg.SigVerify = val
+		case "keyring":
+			cfg.Keyring = val
+		case "activation-policy":
+			cfg.ActivationPol = val
+		case "applied-root":
+			cfg.AppliedRoot = val
+		}
+	}
+	return cfg, nil
+}
+
+func (c *Config) defaultFormat() manifest.Format {
 	if c.ManifestFormat == "yaml" {
 		return manifest.FormatYAML
 	}
 	return manifest.FormatJSON
 }
 
-// printUsage writes the usage text to w.
-func printUsage(w io.Writer) {
+// loadKeepList reads the keep-list allowlist (one path per line). Absent -> empty.
+func (c *Config) loadKeepList() map[string]bool {
+	out := map[string]bool{}
+	if c.KeepListPath == "" {
+		return out
+	}
+	data, err := os.ReadFile(c.KeepListPath)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.TrimSpace(line)
+		if l != "" && !strings.HasPrefix(l, "#") {
+			out[l] = true
+		}
+	}
+	return out
+}
+
+func installSignalHandlers() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigChan
+		os.Exit(ExitOK)
+	}()
+}
+
+func (a *App) printUsage(w io.Writer) {
 	fmt.Fprint(w, usageText)
 }
 
 const usageText = `usage: zypper-declarative <verb> [key=value ...]
 
 Verbs:
-  apply      converge the system to the desired manifest in a transaction
-  diff       dry run: print what apply would change (no modification)
-  verify     check actual state against a reference declaration
-  status     print the current declarative state
-  describe   read actual state and emit it as a manifest document
+  apply        Converge the system to the desired manifest in a snapshot transaction.
+  diff         Dry run: print what apply would change. No modification.
+  verify       Check the actual state against a reference declaration.
+  status       Print the current declarative state and a drift summary.
+  describe     Read the actual state and emit it as a Manifest (JSON or YAML).
 
-Global:
-  version    print program name, version, and embedded spec hash
-  help       print this usage
+Global commands:
+  version      Print program name, version, and embedded spec hash (alias --version).
+  help         Print this usage (aliases --help, -h).
 
-Key=value options (precede any bare-word argument):
-  mode=auto|external|internal       transaction binding; default auto
-  manifest-path=<path>              desired manifest (apply, diff); reference for verify
+Options (key=value; precede any bare-word argument):
+  mode=auto|external|internal       transaction binding (default auto)
+  manifest-path=<path>              desired/reference manifest
+  state-path=<path>                 captured actual state (verify, diff; offline)
   format=json|yaml                  serialisation for this invocation's manifest I/O
-  state-path=<path>                 captured actual state for verify and diff (offline)
-  root=<path>                       root to describe; default "/"
-  out=<path>                        describe output file; default stdout
+  root=<path>                       root to describe (default /)
+  out=<path>                        describe output file (default stdout)
   on-unreadable=error|warn          describe: fail (default) or omit+warn
-  scope=etc|full                    describe/verify read scope; etc default, full audits /usr,/boot
+  scope=etc|full                    describe/verify read scope (default etc)
   manifest-format, repo-lock, content-store, keep-list,
   signature-verification, keyring, activation-policy, applied-root
 
-Exit codes: 0 success, 1 logical failure, 2 invocation error.
+Exit codes: 0 success; 1 logical failure; 2 invocation error.
 `
+
+// sortedDiagnosticDomains is a stable order helper (unused placeholder removed by linter if needed).
+var _ = sort.Strings

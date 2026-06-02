@@ -1,140 +1,172 @@
-// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// config_files actual state: the changed-from-package and unpackaged /etc files
-// and symlinks. Per the decisions hints, the METHOD is verdict-parse: let rpm
-// do the comparison (rpm -V) rather than building a self-recorded baseline map.
-//
-//  1. CHANGED config files: the owning packages of /etc config files come from
-//     `rpm -qca --queryformat '%{NAME}\n'`; for each package `rpm -V` reports
-//     differences (non-zero exit is normal). Keep verify lines whose type char
-//     is `c`. Emit the on-disk type: a changed regular file is type "file" with
-//     its real sha256; an `L` flag on a package-recorded file is the
-//     type-mismatch case, emitted as type "link" with the verbatim on-disk
-//     target.
-//  2. CONTENT-BEARING GHOSTS: the one case rpm -V skips. Enumerate ghost-flagged
-//     /etc paths; emit those with real on-disk content as type "file".
-//  3. UNPACKAGED files: /etc paths no package owns, found by walking /etc and
-//     subtracting the rpm-owned path set.
-//
-// Exclusions: keep-list and /etc/etc.syncpoint. Bounded to /etc; content_ref "".
+// config_files reading: the changed-from-package and unpackaged /etc files.
+// Method (per the Go decisions hints): let rpm decide via `rpm -V` verdict-parse,
+// plus a separate ghost-file pass and an unpackaged-file pass; never build a
+// self-maintained recorded-baseline map.
 package state
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/mge1512/zypper-declarative/internal/manifest"
 )
 
-// readConfigFiles returns the config_files records, an unreadable flag, and an
-// error. A readable but genuinely-empty /etc (no changed/unpackaged files)
-// yields an empty slice with unreadable=false (the caller omits the scope).
-func (r *Reader) readConfigFiles(opts Options) ([]manifest.ManagedFileRecord, bool, error) {
-	root := opts.Root
-	etc := filepath.Join(root, "etc")
+// flagToChange maps an rpm -V flag character to a change-reason name.
+var flagToChange = map[byte]string{
+	'S': "size", 'M': "mode", '5': "md5", 'D': "device",
+	'L': "link_path", 'U': "user", 'G': "group", 'T': "time", 'P': "caps",
+}
+
+// readConfigFiles assembles the config_files scope: the UNION of the rpm -V
+// verdict parse, the ghost-content pass, and the unpackaged-file pass, all
+// bounded to /etc, minus the keep-list and /etc/etc.syncpoint.
+func readConfigFiles(opts Options) (*manifest.ScopeWrapper[manifest.ManagedFileRecord], []Diagnostic, error) {
+	etc := filepath.Join(opts.Root, "etc")
+	scope := manifest.NewScope[manifest.ManagedFileRecord](map[string]interface{}{})
+	var diags []Diagnostic
+
 	if _, err := os.Stat(etc); err != nil {
 		if os.IsNotExist(err) {
-			return nil, false, nil
+			return &scope, diags, nil // readable, genuinely empty
 		}
-		return nil, true, err
+		return nil, diags, &Diagnostic{Severity: "Error", Domain: "files", Message: "/etc unreadable: " + err.Error()}
 	}
 
-	byPath := map[string]manifest.ManagedFileRecord{}
+	excluded := func(path string) bool {
+		if path == "/etc/etc.syncpoint" {
+			return true
+		}
+		return opts.KeepList[path]
+	}
 
-	// 1. changed config files via rpm -V verdict-parse.
-	changed, unread, err := r.changedConfigFiles(root)
-	if err != nil || unread {
-		return nil, unread, err
+	emitted := map[string]bool{}
+	add := func(rec manifest.ManagedFileRecord) {
+		if excluded(rec.Name) || emitted[rec.Name] {
+			return
+		}
+		emitted[rec.Name] = true
+		scope.Elements = append(scope.Elements, rec)
+	}
+
+	// (1) CHANGED config files via rpm -V verdict parse.
+	changed, err := readChangedConfigFiles(opts)
+	if err != nil {
+		return nil, diags, err
 	}
 	for _, rec := range changed {
-		if excluded(rec.Name, opts.KeepList) {
-			continue
-		}
-		byPath[rec.Name] = rec
+		add(rec)
 	}
 
-	// 2. content-bearing ghosts under /etc.
-	ghosts, gerr := r.ghostConfigFiles(root)
-	if gerr == nil {
-		for _, rec := range ghosts {
-			if excluded(rec.Name, opts.KeepList) {
-				continue
-			}
-			byPath[rec.Name] = rec
-		}
+	// (2) GHOST content files: a separate, required pass (rpm -V omits %ghost).
+	ghosts, gdiags := readGhostFiles(opts)
+	diags = append(diags, gdiags...)
+	for _, rec := range ghosts {
+		add(rec)
 	}
 
-	// 3. unpackaged /etc files (walk and subtract the rpm-owned set).
-	unpkg, uerr := r.unpackagedConfigFiles(root, etc, opts.KeepList)
-	if uerr == nil {
-		for _, rec := range unpkg {
-			if _, present := byPath[rec.Name]; present {
-				continue
-			}
-			byPath[rec.Name] = rec
-		}
+	// (3) UNPACKAGED /etc files: walk /etc, subtract the rpm-owned set.
+	unpkg, udiags, err := readUnpackagedEtc(opts, emitted)
+	if err != nil {
+		return nil, diags, err
+	}
+	diags = append(diags, udiags...)
+	for _, rec := range unpkg {
+		add(rec)
 	}
 
-	var out []manifest.ManagedFileRecord
-	for _, rec := range byPath {
-		out = append(out, rec)
+	// Content store population for emitted regular-file records.
+	if opts.ContentStore != "" {
+		cdiags, err := populateContentStore(opts, scope.Elements)
+		if err != nil {
+			return nil, diags, err
+		}
+		diags = append(diags, cdiags...)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, false, nil
+
+	return &scope, diags, nil
 }
 
-// changedConfigFiles drives rpm -qca then rpm -V per owning package.
-func (r *Reader) changedConfigFiles(root string) ([]manifest.ManagedFileRecord, bool, error) {
-	// Owning packages of config files.
-	stdout, stderr, err := r.Runner.Run("rpm", rpmRootArgs(root, "-qca", "--queryformat", "%{NAME}\n"))
+// readChangedConfigFiles runs rpm -V on the config-owning package set and parses
+// the verdict. Non-zero rpm exit when differences exist is normal.
+func readChangedConfigFiles(opts Options) ([]manifest.ManagedFileRecord, error) {
+	// Config-file owning packages.
+	qargs := []string{"-qca", "--queryformat", "%{NAME}\n"}
+	qargs = append(qargs, dbpath(opts.Root)...)
+	stdout, stderr, err := opts.Runner.Run("rpm", qargs)
 	if err != nil && strings.TrimSpace(stdout) == "" && strings.TrimSpace(stderr) != "" {
-		return nil, true, errString(stderr)
+		return nil, &Diagnostic{Severity: "Error", Domain: "files", Message: "rpm -qca failed: " + strings.TrimSpace(stderr)}
 	}
-	if err != nil && strings.TrimSpace(stdout) == "" {
-		return nil, true, err
-	}
-	pkgs := dedupePackages(stdout)
-
-	var recs []manifest.ManagedFileRecord
-	for _, pkg := range pkgs {
-		vout, verr, verr2 := r.Runner.Run("rpm", rpmRootArgs(root, "-V", "--nodeps", "--noscript", pkg))
-		// rpm -V exits non-zero to report differences: that is NORMAL. Treat as a
-		// package error only when stdout is empty AND stderr is non-empty.
-		if strings.TrimSpace(vout) == "" && strings.TrimSpace(verr) != "" {
-			// genuine failure for this package; skip rather than abort the scope.
-			_ = verr2
+	pkgSet := map[string]bool{}
+	for _, line := range strings.Split(stdout, "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "(") || strings.HasPrefix(l, "error:") || strings.HasPrefix(l, "warning:") {
 			continue
 		}
-		recs = append(recs, parseVerifyOutput(root, vout, pkg)...)
+		pkgSet[l] = true
 	}
-	return recs, false, nil
+
+	var recs []manifest.ManagedFileRecord
+	for pkg := range pkgSet {
+		vargs := []string{"-V", "--nodeps", "--noscript"}
+		vargs = append(vargs, dbpath(opts.Root)...)
+		vargs = append(vargs, pkg)
+		vout, verr, _ := opts.Runner.Run("rpm", vargs)
+		// rpm -V exits non-zero when it reports differences: parse regardless.
+		// Treat as a package error ONLY when stdout is empty AND stderr non-empty.
+		if strings.TrimSpace(vout) == "" && strings.TrimSpace(verr) != "" {
+			continue // skip this package; not a fatal /etc read failure
+		}
+		recs = append(recs, parseVerifyOutput(opts, vout, pkg, true)...)
+	}
+	return recs, nil
 }
 
-// parseVerifyOutput parses `rpm -V` output, keeping config-file ('c') lines.
-// Each line is "<9 flag chars><space><type><space><path>" or "missing ...".
-func parseVerifyOutput(root, out, pkg string) []manifest.ManagedFileRecord {
+// parseVerifyOutput parses `rpm -V` output lines. configOnly keeps only lines
+// whose type char is 'c' (a config file).
+func parseVerifyOutput(opts Options, out, pkg string, configOnly bool) []manifest.ManagedFileRecord {
 	var recs []manifest.ManagedFileRecord
-	sc := bufio.NewScanner(strings.NewReader(out))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.TrimSpace(line) == "" {
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if line == "" {
 			continue
 		}
-		flags, typ, path, ok := parseVerifyLine(line)
-		if !ok {
+		if strings.HasPrefix(line, "missing") {
+			// A deleted file. Format: "missing     c /etc/foo"
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			path := fields[len(fields)-1]
+			typeChar := ""
+			if len(fields) >= 3 {
+				typeChar = fields[len(fields)-2]
+			}
+			if configOnly && typeChar != "c" {
+				continue
+			}
+			recs = append(recs, deletedRecord(opts, path, pkg))
 			continue
 		}
-		if typ != "c" { // config files only here
+		// Standard line: <9 flag chars><space><optional type char><space><path>
+		if len(line) < 11 {
 			continue
 		}
-		if path == syncpoint {
+		flags := line[:9]
+		rest := strings.TrimSpace(line[9:])
+		typeChar := ""
+		path := rest
+		parts := strings.Fields(rest)
+		if len(parts) >= 2 && len(parts[0]) == 1 {
+			typeChar = parts[0]
+			path = strings.Join(parts[1:], " ")
+		}
+		if configOnly && typeChar != "c" {
 			continue
 		}
-		rec := classifyChanged(root, path, flags, pkg)
+		rec := buildChangedRecord(opts, path, pkg, flags)
 		if rec != nil {
 			recs = append(recs, *rec)
 		}
@@ -142,195 +174,331 @@ func parseVerifyOutput(root, out, pkg string) []manifest.ManagedFileRecord {
 	return recs
 }
 
-// parseVerifyLine extracts (flags, typeChar, path). A "missing" line is reported
-// with flags="missing".
-func parseVerifyLine(line string) (flags, typ, path string, ok bool) {
-	trimmed := strings.TrimLeft(line, " ")
-	if strings.HasPrefix(trimmed, "missing") {
-		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "missing"))
-		// "missing   c /etc/foo" or "missing /etc/foo"
-		fields := strings.Fields(rest)
-		if len(fields) == 0 {
-			return "", "", "", false
-		}
-		if len(fields) >= 2 && len(fields[0]) == 1 {
-			return "missing", fields[0], strings.Join(fields[1:], " "), true
-		}
-		return "missing", "", strings.Join(fields, " "), true
-	}
-	// Standard line: first 9 chars are flags. Then a space, then attr/type, path.
-	if len(line) < 11 {
-		return "", "", "", false
-	}
-	flags = line[:9]
-	rest := strings.TrimLeft(line[9:], " ")
-	// rest may be "c /etc/foo" (config) or "/usr/bin/foo" (no attr marker).
-	fields := strings.SplitN(rest, " ", 2)
-	if len(fields) == 2 && len(fields[0]) == 1 && isAttrChar(fields[0][0]) {
-		return flags, fields[0], strings.TrimSpace(fields[1]), true
-	}
-	return flags, "", strings.TrimSpace(rest), true
-}
-
-func isAttrChar(c byte) bool {
-	switch c {
-	case 'c', 'd', 'g', 'l', 'r': // config, doc, ghost, license, readme
-		return true
-	}
-	return false
-}
-
-// classifyChanged builds a ManagedFileRecord for a changed config path. The `L`
-// flag means the link differs from what the package recorded: combined with an
-// on-disk symlink, this is the type-mismatch case (emit type "link"). A changed
-// regular file is type "file" with its real sha256.
-func classifyChanged(root, path, flags, pkg string) *manifest.ManagedFileRecord {
-	full := filepath.Join(root, path)
-	info, err := os.Lstat(full)
+// buildChangedRecord builds a config_files record from an rpm -V flag string,
+// emitting the on-disk type (regular file or, for an L mismatch, a link).
+func buildChangedRecord(opts Options, path, pkg, flags string) *manifest.ManagedFileRecord {
+	abs := filepath.Join(opts.Root, path)
+	info, err := os.Lstat(abs)
 	if err != nil {
-		// "missing": the file is deleted on disk. A fresh install would lay it
-		// down, so its absence is a change; but we cannot emit on-disk content.
-		// Per the model we emit a record only for present paths; skip missing.
+		// File reported changed but not stat-able now; skip (transient).
 		return nil
 	}
-	mode, user, group := fileOwnerGroupMode(info)
-	switch {
-	case info.Mode()&os.ModeSymlink != 0:
-		target, lerr := os.Readlink(full)
-		if lerr != nil {
-			return nil
-		}
+	changes := changesFromFlags(flags)
+	if info.Mode()&os.ModeSymlink != 0 {
+		// On-disk is a symlink (the type-mismatch / link case).
+		target, _ := os.Readlink(abs)
 		return &manifest.ManagedFileRecord{
-			Name: path, Type: "link", Mode: mode, User: user, Group: group,
+			Name: path, Type: "link", Mode: "0777", User: "root", Group: "root",
 			SHA256: "", Target: target, ContentRef: "", PackageName: pkg,
+			Status: "changed", Changes: ensureChanges(changes, "link_path"),
 		}
-	case info.Mode().IsRegular():
-		sum, herr := hashFile(full)
-		if herr != nil {
-			return nil
-		}
-		return &manifest.ManagedFileRecord{
-			Name: path, Type: "file", Mode: mode, User: user, Group: group,
-			SHA256: sum, Target: "", ContentRef: "", PackageName: pkg,
-		}
-	default:
-		return nil // special files are skipped
+	}
+	if info.Mode().IsDir() {
+		return nil // a directory verify line is not a config file we emit
+	}
+	if !info.Mode().IsRegular() {
+		return nil // special file
+	}
+	sum, err := hashFile(abs)
+	if err != nil {
+		return nil
+	}
+	mode, user, group := fileMeta(info)
+	return &manifest.ManagedFileRecord{
+		Name: path, Type: "file", Mode: mode, User: user, Group: group,
+		SHA256: sum, Target: "", ContentRef: "", PackageName: pkg,
+		Status: "changed", Changes: ensureChanges(changes, "md5"),
 	}
 }
 
-// ghostConfigFiles enumerates ghost-flagged /etc paths and emits those with real
-// on-disk content as type "file".
-func (r *Reader) ghostConfigFiles(root string) ([]manifest.ManagedFileRecord, error) {
-	// FILEFLAGS bit 64 (0x40) marks %ghost. Query all installed packages' file
-	// lists with their flags, keep /etc ghost paths.
-	out, _, err := r.Runner.Run("rpm", rpmRootArgs(root, "-qa", "--queryformat", "[%{FILENAMES} %{FILEFLAGS}\n]"))
-	if err != nil && strings.TrimSpace(out) == "" {
-		return nil, err
+func deletedRecord(opts Options, path, pkg string) manifest.ManagedFileRecord {
+	return manifest.ManagedFileRecord{
+		Name: path, Type: "file", Mode: "0000", User: "root", Group: "root",
+		SHA256: "", Target: "", ContentRef: "", PackageName: pkg,
+		Status: "changed", Changes: []string{"deleted"},
 	}
+}
+
+// changesFromFlags converts the 9-char flag string into a change-reason list.
+func changesFromFlags(flags string) []string {
+	var out []string
+	for i := 0; i < len(flags); i++ {
+		c := flags[i]
+		if c == '.' || c == '?' {
+			continue
+		}
+		if name, ok := flagToChange[c]; ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func ensureChanges(changes []string, fallback string) []string {
+	if len(changes) == 0 {
+		return []string{fallback}
+	}
+	return changes
+}
+
+// readGhostFiles enumerates ghost-flagged /etc paths and emits content-bearing
+// ghost regular files (rpm -V never reports %ghost). An empty ghost is suppressed.
+func readGhostFiles(opts Options) ([]manifest.ManagedFileRecord, []Diagnostic) {
 	var recs []manifest.ManagedFileRecord
-	sc := bufio.NewScanner(strings.NewReader(out))
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	var diags []Diagnostic
+	// Enumerate ghost paths under /etc: query all installed packages' file lists
+	// with their flags; FILEFLAGS bit 64 (0x40) is the GHOST marker.
+	qargs := []string{"-qa", "--queryformat", "[%{FILENAMES} %{FILEFLAGS}\n]"}
+	qargs = append(qargs, dbpath(opts.Root)...)
+	stdout, _, _ := opts.Runner.Run("rpm", qargs)
 	seen := map[string]bool{}
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) < 2 {
 			continue
 		}
 		path := fields[0]
-		if !strings.HasPrefix(path, "/etc/") || seen[path] {
+		if !strings.HasPrefix(path, "/etc/") {
 			continue
 		}
-		flags := parseUint(fields[len(fields)-1])
-		if flags&0x40 == 0 { // not a ghost
+		flagsVal := fields[len(fields)-1]
+		if !ghostBit(flagsVal) {
+			continue
+		}
+		if seen[path] {
 			continue
 		}
 		seen[path] = true
-		full := filepath.Join(root, path)
-		info, ierr := os.Lstat(full)
-		if ierr != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-			continue // empty ghost or absent: suppressed
+		abs := filepath.Join(opts.Root, path)
+		info, err := os.Lstat(abs)
+		if err != nil {
+			continue // ghost not present on disk -> nothing to capture
 		}
-		sum, herr := hashFile(full)
-		if herr != nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Ghost symlinks (alternatives) handled by their own rule; the
+			// common content-bearing ghost case is regular files.
+			rec, ok := ghostSymlinkRecord(opts, path, abs)
+			if ok {
+				recs = append(recs, rec)
+			}
 			continue
 		}
-		mode, user, group := fileOwnerGroupMode(info)
-		owner := r.ownerOf(root, path)
+		if !info.Mode().IsRegular() || info.Size() == 0 {
+			continue // empty ghost suppressed; non-regular skipped
+		}
+		sum, err := hashFile(abs)
+		if err != nil {
+			if opts.OnUnreadable == OnUnreadableError {
+				diags = append(diags, Diagnostic{Severity: "Error", Domain: "files", Message: "ghost file unreadable: " + path})
+			} else {
+				diags = append(diags, Diagnostic{Severity: "Warning", Domain: "files", Message: "ghost file content unreadable: " + path})
+			}
+			continue
+		}
+		mode, user, group := fileMeta(info)
+		pkg := ownerOf(opts, path)
 		recs = append(recs, manifest.ManagedFileRecord{
 			Name: path, Type: "file", Mode: mode, User: user, Group: group,
-			SHA256: sum, Target: "", ContentRef: "", PackageName: owner,
+			SHA256: sum, Target: "", ContentRef: "", PackageName: pkg,
+			Status: "changed", Changes: []string{"ghost_content"},
 		})
 	}
-	return recs, nil
+	return recs, diags
 }
 
-// ownerOf returns the bare owning package name for a path, or "" if unpackaged.
-func (r *Reader) ownerOf(root, path string) string {
-	out, _, _ := r.Runner.Run("rpm", rpmRootArgs(root, "-qf", "--queryformat", "%{NAME}", path))
-	o := strings.TrimSpace(out)
-	if o == "" || strings.Contains(o, "not owned") || strings.HasPrefix(o, "error") {
+// ghostSymlinkRecord judges a ghost symlink (alternatives): suppress when the
+// on-disk target equals the auto/best target; emit otherwise.
+func ghostSymlinkRecord(opts Options, path, abs string) (manifest.ManagedFileRecord, bool) {
+	target, err := os.Readlink(abs)
+	if err != nil {
+		return manifest.ManagedFileRecord{}, false
+	}
+	name := filepath.Base(path)
+	best := autoBestAlternative(opts, name)
+	if best != "" && best == target {
+		return manifest.ManagedFileRecord{}, false // pristine, suppress
+	}
+	if best == "" {
+		// Cannot determine the reproducible target: emit (its target is not
+		// known to be reproducible), per the spec's conservative rule.
+	}
+	pkg := ownerOf(opts, path)
+	return manifest.ManagedFileRecord{
+		Name: path, Type: "link", Mode: "0777", User: "root", Group: "root",
+		SHA256: "", Target: target, ContentRef: "", PackageName: pkg,
+		Status: "changed", Changes: []string{"link_path"},
+	}, true
+}
+
+// autoBestAlternative queries the alternatives DB for the auto/best target.
+func autoBestAlternative(opts Options, name string) string {
+	out, _, err := opts.Runner.Run("update-alternatives", []string{"--query", name})
+	if err != nil && strings.TrimSpace(out) == "" {
 		return ""
 	}
-	return o
-}
-
-// unpackagedConfigFiles walks /etc and emits paths the rpm-owned set does not
-// contain (so a file is never marked unpackaged because a lookup was skipped).
-func (r *Reader) unpackagedConfigFiles(root, etc string, keep map[string]bool) ([]manifest.ManagedFileRecord, error) {
-	owned := r.ownedPaths(root, "/etc/")
-	var recs []manifest.ManagedFileRecord
-	walkTree(etc, func(onDisk string, info os.FileInfo) {
-		name := modelPath(root, onDisk)
-		if owned[name] || excluded(name, keep) {
-			return
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Best:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Best:"))
 		}
-		rec := recordFor(root, onDisk, info, "")
-		if rec != nil {
-			recs = append(recs, *rec)
+		if strings.HasPrefix(line, "Value:") {
+			// fall through; Best preferred
 		}
-	})
-	return recs, nil
-}
-
-// ownedPaths returns the set of rpm-owned file paths beginning with prefix.
-func (r *Reader) ownedPaths(root, prefix string) map[string]bool {
-	owned := map[string]bool{}
-	out, _, err := r.Runner.Run("rpm", rpmRootArgs(root, "-qa", "--queryformat", "[%{FILENAMES}\n]"))
-	if err != nil && strings.TrimSpace(out) == "" {
-		return owned
 	}
-	sc := bufio.NewScanner(strings.NewReader(out))
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		p := strings.TrimSpace(sc.Text())
-		if p != "" && (prefix == "" || strings.HasPrefix(p, prefix)) {
-			owned[p] = true
+	return ""
+}
+
+// ghostBit reports whether an rpm FILEFLAGS value has the GHOST bit (0x40).
+func ghostBit(v string) bool {
+	n := atoiSafe(v)
+	return n&0x40 != 0
+}
+
+func atoiSafe(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return n
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// ownerOf returns the bare owning package name for a path ("" if unpackaged).
+func ownerOf(opts Options, path string) string {
+	args := []string{"-qf", "--queryformat", "%{NAME}\n", path}
+	args = append(dbpath(opts.Root), args...)
+	out, _, err := opts.Runner.Run("rpm", args)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.Contains(l, "not owned") || strings.HasPrefix(l, "error:") {
+			return ""
+		}
+		return l
+	}
+	return ""
+}
+
+// readUnpackagedEtc walks /etc and emits files that no package owns.
+func readUnpackagedEtc(opts Options, already map[string]bool) ([]manifest.ManagedFileRecord, []Diagnostic, error) {
+	owned := rpmOwnedSet(opts)
+	var recs []manifest.ManagedFileRecord
+	var diags []Diagnostic
+	etc := filepath.Join(opts.Root, "etc")
+
+	err := filepath.WalkDir(etc, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			if opts.OnUnreadable == OnUnreadableError {
+				return &Diagnostic{Severity: "Error", Domain: "files", Message: "/etc walk failed at " + p + ": " + err.Error()}
+			}
+			diags = append(diags, Diagnostic{Severity: "Warning", Domain: "files", Message: "skipping unreadable: " + p})
+			return nil
+		}
+		rel := "/" + strings.TrimPrefix(strings.TrimPrefix(p, opts.Root), "/")
+		if d.IsDir() {
+			return nil // traverse, emit nothing
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
+		}
+		// Classify by own type (lstat semantics via DirEntry).
+		if info.Mode()&os.ModeSymlink != 0 {
+			if owned[rel] || already[rel] {
+				return nil
+			}
+			if rel == "/etc/etc.syncpoint" || opts.KeepList[rel] {
+				return nil
+			}
+			target, _ := os.Readlink(p)
+			recs = append(recs, manifest.ManagedFileRecord{
+				Name: rel, Type: "link", Mode: "0777", User: "root", Group: "root",
+				SHA256: "", Target: target, ContentRef: "", PackageName: "",
+			})
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil // special file: skip
+		}
+		if owned[rel] || already[rel] {
+			return nil
+		}
+		if rel == "/etc/etc.syncpoint" || opts.KeepList[rel] {
+			return nil
+		}
+		sum, herr := hashFile(p)
+		if herr != nil {
+			if opts.OnUnreadable == OnUnreadableError {
+				return &Diagnostic{Severity: "Error", Domain: "files", Message: "/etc file unreadable: " + rel}
+			}
+			diags = append(diags, Diagnostic{Severity: "Warning", Domain: "files", Message: "/etc file unreadable: " + rel})
+			return nil
+		}
+		mode, user, group := fileMeta(info)
+		recs = append(recs, manifest.ManagedFileRecord{
+			Name: rel, Type: "file", Mode: mode, User: user, Group: group,
+			SHA256: sum, Target: "", ContentRef: "", PackageName: "",
+		})
+		return nil
+	})
+	if err != nil {
+		if d, ok := err.(*Diagnostic); ok {
+			return nil, diags, d
+		}
+		return nil, diags, &Diagnostic{Severity: "Error", Domain: "files", Message: err.Error()}
+	}
+	return recs, diags, nil
+}
+
+// rpmOwnedSet returns the set of /etc paths owned by some installed package.
+func rpmOwnedSet(opts Options) map[string]bool {
+	owned := map[string]bool{}
+	args := []string{"-qal"}
+	args = append(dbpath(opts.Root), args...)
+	out, _, _ := opts.Runner.Run("rpm", args)
+	for _, line := range strings.Split(out, "\n") {
+		l := strings.TrimSpace(line)
+		if strings.HasPrefix(l, "/etc/") {
+			owned[l] = true
 		}
 	}
 	return owned
 }
 
-func excluded(path string, keep map[string]bool) bool {
-	if path == syncpoint {
-		return true
-	}
-	return keep != nil && keep[path]
-}
-
-func dedupePackages(out string) []string {
-	seen := map[string]bool{}
-	var pkgs []string
-	sc := bufio.NewScanner(strings.NewReader(out))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "(") || strings.HasPrefix(line, "error:") || strings.HasPrefix(line, "warning:") {
+// populateContentStore writes emitted regular-file bytes into the content store,
+// content-addressed by sha256, and sets each record's content_ref.
+func populateContentStore(opts Options, elems []manifest.ManagedFileRecord) ([]Diagnostic, error) {
+	var diags []Diagnostic
+	for i := range elems {
+		e := &elems[i]
+		if e.Type != "file" || e.SHA256 == "" {
 			continue
 		}
-		if !seen[line] {
-			seen[line] = true
-			pkgs = append(pkgs, line)
+		blobDir := filepath.Join(opts.ContentStore, "sha256")
+		if err := os.MkdirAll(blobDir, 0o755); err != nil {
+			return diags, &Diagnostic{Severity: "Error", Domain: "files", Message: "content store unwritable: " + err.Error()}
 		}
+		blob := filepath.Join(blobDir, e.SHA256)
+		if _, err := os.Stat(blob); err == nil {
+			e.ContentRef = "sha256/" + e.SHA256 // dedup: already present
+			continue
+		}
+		abs := filepath.Join(opts.Root, e.Name)
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			if opts.OnUnreadable == OnUnreadableError {
+				return diags, &Diagnostic{Severity: "Error", Domain: "files", Message: "content unreadable: " + e.Name}
+			}
+			diags = append(diags, Diagnostic{Severity: "Warning", Domain: "files", Message: "content unreadable, content_ref left empty: " + e.Name})
+			continue
+		}
+		if err := os.WriteFile(blob, data, 0o644); err != nil {
+			return diags, &Diagnostic{Severity: "Error", Domain: "files", Message: "content store write failed: " + err.Error()}
+		}
+		e.ContentRef = "sha256/" + e.SHA256
 	}
-	sort.Strings(pkgs)
-	return pkgs
+	return diags, nil
 }

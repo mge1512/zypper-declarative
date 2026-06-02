@@ -1,8 +1,8 @@
-// generated from spec: zypper-declarative.spec.md sha256:27aee8e374eb3507189bad0b78339109d0116e6a13b55ae4df2ba9a18e769fc4
+// generated from spec: zypper-declarative.spec.md sha256:51284526723dc9238113984023bfb9a596d55b534c8ea580dfac1157cd70dd03
 //
-// Command zypper-declarative is the CLI entry point. It contains only dispatch:
-// it forwards the process arguments and standard streams to internal/cli.Run and
-// exits with the returned code. All behaviour lives in the internal packages.
+// Command zypper-declarative is the entry point. It only builds the argument
+// vector and dispatches into internal/cli; all behaviour lives in the internal
+// packages (SOURCE-PARTITIONING: one-entry-one-implementation).
 package main
 
 import (
@@ -12,5 +12,6 @@ import (
 )
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
+	app := &cli.App{Stdout: os.Stdout, Stderr: os.Stderr}
+	os.Exit(app.Run(os.Args[1:]))
 }
