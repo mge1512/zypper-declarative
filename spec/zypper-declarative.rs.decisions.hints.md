@@ -310,24 +310,3 @@ spec's examples are the shared target and the three-way diff is the check.)
   black-box assertions; the symlink and fifo cases are constructible under a
   synthetic root, cover them rather than leaving them code-review-only.
 
-## Changelog
-
-- 2026-06-02: Tracks spec v0.6.7. Added the `init` verb (onboarding: includes
-  describe, takes a snapshot, writes adopted current state as the applied record,
-  converges nothing). Fixed `diff` to compute drift against the DESIRED MANIFEST, not
-  the applied record (the SL Micro unpackaged-/etc bug); added the idempotence
-  self-check.
-- 2026-06-02: Tracks spec v0.6.6. Split ghost handling into ghost FILES (emit if
-  on-disk content) and ghost SYMLINKS (`/etc/alternatives/*`: suppress when the link
-  equals the alternatives auto/best target via `update-alternatives --query`, emit a
-  manually-set link). Added content-store population: when `content-store` is set,
-  describe writes emitted regular-file bytes content-addressed by sha256 and sets
-  `content_ref`; read-only otherwise.
-- 2026-06-01: Switched config_files from a self-built recorded-baseline map to
-  `rpm -V` verdict-parsing, the method the sister tool sitar uses (working Go and
-  Rust) and which converges; the self-built join failed repeatedly in the Go
-  sibling. rpm does the comparison; the code parses the `SM5DLUGTP` flag string
-  (type char `c`). Type-mismatch comes free from the `L` flag; content-bearing
-  `%ghost` files are a tiny separate pass. The tool runs as root, so rpm -V reads
-  everything. C++ keeps the libzypp route; Rust and Go share this CLI route; the
-  spec (result, not method) is unchanged and the three-way diff remains the check.

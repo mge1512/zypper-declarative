@@ -325,24 +325,3 @@ The tool runs as root, so `rpm -V` can read everything.
   `describe out=...yaml`, `verify state-path=...yaml`, unreadable and genuinely-empty
   repositories) are black-box assertions of exactly this kind.
 
-## Changelog
-
-- 2026-06-02: Tracks spec v0.6.7. Added the `init` verb (onboarding: includes
-  describe, takes a snapshot, writes the adopted current state as the applied record,
-  converges nothing). Fixed `diff` to compute drift against the DESIRED MANIFEST, not
-  the applied record (the SL Micro unpackaged-/etc bug); added the idempotence
-  self-check (describe-then-diff yields empty drift).
-- 2026-06-02: Tracks spec v0.6.6. Split ghost handling into ghost FILES (emit if
-  on-disk content) and ghost SYMLINKS (the `/etc/alternatives/*` case: suppress when
-  the link equals the alternatives auto/best target, emit a manually-set link),
-  querying `update-alternatives --query`. Added content-store population: when
-  `content-store` is set, describe writes emitted regular-file bytes content-addressed
-  by sha256 and sets `content_ref`; read-only otherwise.
-- 2026-06-01: Switched config_files (and changed_managed_files) from a self-built
-  recorded-baseline map to `rpm -V`/`rpm -Va` verdict-parsing, the method the sister
-  tool sitar uses and which converges; the self-built join failed repeatedly in Go.
-  rpm does the comparison; the code parses the `SM5DLUGTP` flag string (type char
-  `c` for config). Type-mismatch comes free from the `L` flag; the one case rpm -V
-  does not cover, content-bearing `%ghost` files, is a tiny separate pass over
-  ghost-flagged `/etc` paths. The tool runs as root, so rpm -V reads everything.
-  Spec unchanged (it defines the result, not the method).

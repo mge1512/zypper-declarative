@@ -356,7 +356,7 @@ fenced and excluded from structural parsing):
         "group": "root",
         "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
         "target": "",
-        "content_ref": "files/etc/nginx/nginx.conf",
+        "content_ref": "sha256/0000000000000000000000000000000000000000000000000000000000000000",
         "package_name": ""
       }
     ]
