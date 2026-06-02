@@ -243,10 +243,12 @@ spec's examples are the shared target and the three-way diff is the check.)
   non-empty `changes` list. Because `rpm -V` reports only changes, pristine files
   never appear and the over-emission class cannot recur; assertions (1b)/(1c) ensure
   the separate ghost pass is not silently missing. (4) IDEMPOTENCE: `describe
-  out=/tmp/m.json` then `diff manifest-path=/tmp/m.json` MUST produce an EMPTY drift
-  report on the unchanged machine (equivalently `init` then the same `diff`); this
-  binds the drift-reference fix (drift compares against the desired manifest, not the
-  applied record).
+  out=/tmp/m.json on-unreadable=warn` then `diff manifest-path=/tmp/m.json
+  on-unreadable=warn` MUST produce an EMPTY drift report on the unchanged machine
+  (equivalently `init` then the same `diff`); this binds the drift-reference fix
+  (drift compares against the desired manifest, not the applied record). Pass
+  `on-unreadable=warn` to BOTH so neither the describe half nor the diff half aborts
+  on a protected root-only file; the knob is exposed on `diff` as well as `describe`.
 
 ## Integration with the system (Rust-specific)
 
@@ -317,4 +319,4 @@ spec's examples are the shared target and the three-way diff is the check.)
 
 ## Spec tracking
 
-- Tracks spec zypper-declarative.spec.md v0.6.7 (hash e302a3b3...). History is in git and in the spec CHANGELOG.md, not here.
+- Tracks spec zypper-declarative.spec.md v0.6.8 (hash 1641bb44...). History is in git and in the spec CHANGELOG.md, not here.

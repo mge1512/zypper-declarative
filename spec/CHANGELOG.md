@@ -230,6 +230,21 @@ commit messages, not in the normative spec text.
   mechanism, with the decision deliberately left open. Secrets, kernel cmdline,
   and sysctl domains reserved for a later Version.
 
+## Version 0.6.8
+
+- 2026-06-02: Exposed the `on-unreadable` knob CONSISTENTLY on every verb that reads
+  live state. Previously only `describe` accepted it while `diff`, `verify`, and
+  `apply` hard-coded `on_unreadable=error` on the same kind of live read via
+  `describe-actual-state`, an inconsistency that surfaced on a real host: the
+  `describe`-then-`diff` idempotence self-check could not pass unprivileged because
+  the describe half could warn-skip a root-only file (`/etc/libaudit.conf`) but the
+  diff half forced error and aborted. Now `describe`, `diff`, `verify`, and `apply`
+  all accept `on-unreadable` (default `error`, unchanged safe default) and pass it to
+  their internal live read, so an operator or a test reading live state unprivileged
+  can pass `on-unreadable=warn`. Added the matching invariant. The default is
+  unchanged; the knob is simply available on the three verbs that previously forced
+  error.
+
 ## Version 0.6.7
 
 - 2026-06-02: Added the `init` verb and fixed `diff` drift to compare against the

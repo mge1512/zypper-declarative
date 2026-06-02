@@ -212,8 +212,8 @@ The tool runs as root, so `rpm -V` can read everything.
   non-empty `changes` list (binds the field build 12 dropped). Because `rpm -V`
   reports only changes, pristine files never appear and the over-emission class
   cannot recur; (1b)/(1c) ensure the ghost pass is not silently missing. (4)
-  IDEMPOTENCE: `describe out=/tmp/m.json` then `diff manifest-path=/tmp/m.json` MUST
-  produce an EMPTY drift report (no `files_extra`, no `files_modified`) on the
+  IDEMPOTENCE: `describe out=/tmp/m.json on-unreadable=warn` then `diff
+  manifest-path=/tmp/m.json on-unreadable=warn` MUST produce an EMPTY drift report (no `files_extra`, no `files_modified`) on the
   unchanged machine; equivalently `init out=/tmp/m.json` then the same `diff`.
   This binds the drift-reference fix: if drift compares against the applied record
   instead of the desired manifest, this assertion fails on a machine with unpackaged
@@ -331,4 +331,4 @@ The tool runs as root, so `rpm -V` can read everything.
 
 ## Spec tracking
 
-- Tracks spec zypper-declarative.spec.md v0.6.7 (hash e302a3b3...). History is in git and in the spec CHANGELOG.md, not here.
+- Tracks spec zypper-declarative.spec.md v0.6.8 (hash 1641bb44...). History is in git and in the spec CHANGELOG.md, not here.

@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.7
+Version:     0.6.8
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -472,6 +472,8 @@ INPUTS:
 ```
 manifest_path: AbsolutePath    // the desired manifest JSON (default from CONFIG)
 mode:          TransactionMode  // default "auto" from CONFIG
+on_unreadable: one_of("error" | "warn")  // default "error" from CONFIG; passed to the
+                               // internal describe-actual-state when reading live state
 ```
 
 OUTPUTS:
@@ -494,9 +496,10 @@ STEPS:
 3. Compute the intent diff via `compute-intent-diff` from desired and applied,
    scope by scope. A scope absent in desired yields no change for that scope.
 4. If the intent diff is empty, obtain the actual state via
-   `describe-actual-state` on "/" and compute drift via `compute-drift`. If drift
-   is also empty, emit "nothing to do" to stdout and exit 0 without opening a
-   transaction.
+   `describe-actual-state` on "/" with the `on_unreadable` from inputs (default
+   error) and `scope=etc`, and compute drift via `compute-drift` against the desired
+   manifest. If drift is also empty, emit "nothing to do" to stdout and exit 0
+   without opening a transaction.
 5. Acquire the transaction context via `acquire-transaction-context` for `mode`.
    On failure exit 2.
 6. Apply the repositories scope (if managed) so the package step resolves against
@@ -552,6 +555,8 @@ INPUTS:
 manifest_path: AbsolutePath
 state_path:    AbsolutePath | none  // optional captured actual state in the shared
                                     // schema; default = read live via describe-actual-state
+on_unreadable: one_of("error" | "warn")  // default "error" from CONFIG; passed to the
+                                    // internal describe-actual-state when reading live
 format:        ManifestFormat | none // optional; applies to both files via resolve-format
 ```
 
@@ -573,7 +578,10 @@ STEPS:
 3. Compute the intent diff via `compute-intent-diff`.
 4. Obtain the actual state for the drift portion: if `state_path` is given, load
    and schema-validate that dump as a Manifest (offline, no live read); otherwise
-   obtain it via `describe-actual-state` on "/". On a malformed dump exit 2.
+   obtain it via `describe-actual-state` on "/" with the `on_unreadable` from inputs
+   (default error) and `scope=etc`. On a malformed dump exit 2; under
+   `on_unreadable=error` an unreadable source exits 1 naming it; under
+   `on_unreadable=warn` the affected items are omitted with a diagnostic.
    Compute the drift report via `compute-drift` with the actual state and the
    DESIRED MANIFEST as the reference (NOT the applied record): `diff` answers
    "does the live system already match the manifest I am about to apply", so drift
@@ -620,6 +628,8 @@ manifest_path: AbsolutePath | none  // optional reference declaration; when give
                                     // used instead of the applied record
 state_path:    AbsolutePath | none  // optional captured actual state; default =
                                     // read live via describe-actual-state
+on_unreadable: one_of("error" | "warn")  // default "error" from CONFIG; passed to the
+                                    // internal describe-actual-state when reading live
 format:        ManifestFormat | none // optional; applies to both files via resolve-format
 scope:         ScanScope             // etc (default) or full; full additionally
                                      // audits the package-managed trees outside /etc
@@ -646,7 +656,8 @@ STEPS:
    `resolve-format(format, state_path)`, load it under that serialisation, and
    schema-validate it as a Manifest (offline, no live read); a YAML dump is parsed
    under the same safe profile as a desired manifest. Otherwise obtain the actual
-   state via `describe-actual-state` on "/" with `on_unreadable=error` and `scope`.
+   state via `describe-actual-state` on "/" with the `on_unreadable` from inputs
+   (default error) and `scope`.
    Under `scope=full` the actual state additionally carries the
    changed_managed_files and unmanaged_files scopes. On a malformed dump exit 2.
 3. Compute the drift report via `compute-drift` from the actual state and the
@@ -796,10 +807,23 @@ verb that needs actual state obtains it through this behaviour (or through a
 supplied dump in the same format); no other code reads live system state.
 Reads are file-and-database level (no network refresh, no daemon, no privileged
 cache), so a normal user can read what is world-readable and the result is
-deterministic. The `describe` verb passes `on_unreadable` and `scope` through from
-its options; every other caller (`apply`, `diff`, `status`, `verify` reading live
-state) passes `on_unreadable=error` and `scope=etc`, because convergence and
-declaration verification act only on the declarable scopes.
+deterministic. The `on_unreadable` knob is exposed CONSISTENTLY on every verb that
+reads live state: `describe`, `diff`, `verify`, and `apply` each accept it and pass
+it through to their internal `describe-actual-state` call, with the default `error`
+in every case (the safe default: a verb that may change the system, or report
+drift, should by default refuse on an unreadable source rather than act on a
+partial picture). The default is unchanged from before; what changes is that the
+knob is now AVAILABLE on these verbs rather than hard-coded to error, so an operator
+(or a test) reading live state unprivileged can pass `on-unreadable=warn` to skip
+protected files with a diagnostic. `scope` defaults to `etc` for the
+declaration-acting verbs (`apply`, `diff`, `verify`), because convergence and
+declaration verification act only on the declarable scopes; `describe` passes
+`scope` through from its options. (Rationale: previously only `describe` exposed
+`on_unreadable` while `diff`/`verify`/`apply` forced error on the same kind of live
+read; that was inconsistent and made the describe-then-diff idempotence check
+impossible to satisfy unprivileged, since the describe half could warn-skip a
+root-only file like `/etc/libaudit.conf` but the diff half could not, so the two
+reads saw different file sets.)
 
 INPUTS:
 ```
@@ -1617,9 +1641,9 @@ layering). Control via environment variables is forbidden.
   by `resolve-format` when neither an explicit `format=` option nor a recognised
   file extension determines it (for example stdin or stdout). The applied record
   is canonical JSON irrespective of this knob.
-- `on-unreadable` = error | warn. Default error. How `describe` (and the
-  `describe-actual-state` reader) treats a scope source it cannot read: error
-  fails the run naming the source; warn omits the affected scope, emits a
+- `on-unreadable` = error | warn. Default error. How the `describe-actual-state`
+  reader treats a scope source it cannot read: error fails the run naming the
+  source; warn omits the affected scope, emits a
   diagnostic, and continues. A source that cannot be read is never represented as
   an empty scope. Internal callers (apply, diff, status, verify) always use error.
 - `scope` = etc | full. Default etc. Selects the actual-state read scope for
@@ -1859,6 +1883,14 @@ resolver fills in the transitive set.
   only for the intent diff. Therefore an un-onboarded machine's `diff` shows no
   drift (and may show a large intent diff, the signal to run `init`), and crucially
   does not report its unpackaged `/etc` files as extra.
+- [observable] The `on_unreadable` knob is accepted by every verb that reads live
+  state, `describe`, `diff`, `verify`, and `apply`, with the default `error` in all
+  four; each passes it through to its internal `describe-actual-state`. Passing
+  `on-unreadable=warn` to any of them lets the live read skip a protected root-only
+  file (for example `/etc/libaudit.conf`) with a diagnostic instead of aborting, so
+  the `describe`-then-`diff` idempotence check is satisfiable unprivileged when both
+  are run with `warn`. The default remains `error` (a verb acts on a complete
+  picture unless told otherwise).
 - [observable] `package_name` in a config_files record is the bare package name
   (for example `openssh-server`), never the full name-version-release-arch
   identifier.

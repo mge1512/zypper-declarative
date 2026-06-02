@@ -385,13 +385,16 @@ and the code must not assume one version's API.
   pam pair on a host that packages it, `common-auth`/`common-auth-pc` with the right
   types. These bind the libzypp read: if `tag_fileinfos()` returned nothing, (1) and
   (2) fail and the build cannot pass by rationalising empty output. (5) IDEMPOTENCE:
-  `describe out=/tmp/m.json` then `diff manifest-path=/tmp/m.json` MUST produce an
-  EMPTY drift report (no `files_extra`), and `init out=/tmp/m.json` then the same
-  `diff` likewise; this binds the drift-reference fix (drift compares the desired
-  manifest, not the applied record) and is the check that the SL Micro bug would have
-  failed. (Go and Rust carry the equivalent checks; this is how the three stay
+  `describe out=/tmp/m.json on-unreadable=warn` then `diff manifest-path=/tmp/m.json
+  on-unreadable=warn` MUST produce an EMPTY drift report (no `files_extra`), and
+  `init out=/tmp/m.json` then the same `diff` likewise; this binds the drift-reference
+  fix (drift compares the desired manifest, not the applied record) and is the check
+  that the SL Micro bug would have failed. Pass `on-unreadable=warn` to BOTH the
+  describe and the diff (the knob is exposed on `diff`/`verify`/`apply` as well as
+  `describe`, default error) so neither half aborts on a protected root-only file
+  unprivileged. (Go and Rust carry the equivalent checks; this is how the three stay
   convergent.)
 
 ## Spec tracking
 
-- Tracks spec zypper-declarative.spec.md v0.6.7 (hash e302a3b3...). History is in git and in the spec CHANGELOG.md, not here.
+- Tracks spec zypper-declarative.spec.md v0.6.8 (hash 1641bb44...). History is in git and in the spec CHANGELOG.md, not here.
