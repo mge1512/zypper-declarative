@@ -1,4 +1,4 @@
-// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+// generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 //
 // describe-actual-state: the single live-state reader. Reads the four
 // declarable scopes under a root and returns a Manifest in the shared schema.

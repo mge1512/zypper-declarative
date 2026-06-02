@@ -1,4 +1,4 @@
-# generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+# generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 #
 # Build orchestration for zypper-declarative (C++17, CMake, dynamic linking
 # against the distribution's libzypp / libsnapper / jsoncpp / yaml-cpp /
@@ -10,7 +10,7 @@
 #     make build CXX=g++-15
 # On SLE 16.0 the default toolchain (GCC 15) suffices.
 
-SPEC_SHA256 := 1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+SPEC_SHA256 := aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 VERSION     := $(shell cat VERSION)
 NAME        := zypper-declarative
 LLM_NAME    := claude-opus-4-8

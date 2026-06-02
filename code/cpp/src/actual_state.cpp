@@ -1,4 +1,4 @@
-// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+// generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 #include "actual_state.hpp"
 
 #include <openssl/evp.h>
@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <system_error>
 #include <unordered_map>
@@ -297,12 +298,129 @@ bool read_services(const std::string& root, const CommandRunner& runner,
 }
 
 // ----------------------------------------------------------------------
-// Alternatives query for ghost symlinks (auto/best target)
+// Alternatives mechanism classification (v0.6.9)
+//
+// A symlink is an ALTERNATIVES symlink IF AND ONLY IF it is located under
+// /etc/alternatives/ OR it appears as a master or slave link in some
+// /var/lib/alternatives/<name> admin file. ONLY these are resolved against
+// the alternatives database. Every OTHER symlink (crypto-policies back-ends,
+// motd.d, issue.d, any package-owned symlink) is a NON-ALTERNATIVES symlink
+// and is judged by the normal target rule; update-alternatives is NEVER
+// queried for it, and the absence of an alternatives entry is NEVER an
+// on_unreadable condition for it.
 // ----------------------------------------------------------------------
+struct AltDb {
+    bool readable = false;   // /var/lib/alternatives directory could be read
+    bool present = false;    // /var/lib/alternatives directory exists at all
+    // every absolute path that is a master or slave LINK known to the
+    // alternatives system (mapped to the alternatives <name> whose admin
+    // file declares it, so we can locate auto/best later)
+    std::map<std::string, std::string> link_to_name;
+};
+
+// Parse the /var/lib/alternatives admin files under <root>. Format (one
+// alternative per file): first line "auto"|"manual"; then groups of
+// master/slave entries. Each entry begins with the LINK path line, e.g.
+//   <master-link>            (line 2)
+//   <provider-1>             (the candidate)
+//   <priority>
+//   <slave-name> <slave-link>
+//   ...
+// The robust, version-tolerant approach used here: collect every absolute
+// path token that appears in the admin file as a master or slave LINK. A
+// master link is line 2 of the file; slave links are the second token of a
+// "<name> <path>" slave-declaration line. We record all absolute-path link
+// lines so both master and slave links classify as alternatives links.
+AltDb build_alt_db(const std::string& root) {
+    AltDb db;
+    std::string dir = join_root(root, "/var/lib/alternatives");
+    std::error_code ec;
+    if (!fs::exists(dir, ec)) {
+        db.present = false;
+        db.readable = true;  // absence is not an unreadable failure
+        return db;
+    }
+    db.present = true;
+    fs::directory_iterator dit(dir, fs::directory_options::none, ec);
+    if (ec) {
+        db.readable = false;
+        return db;
+    }
+    db.readable = true;
+    for (const auto& entry : dit) {
+        std::error_code fec;
+        if (!entry.is_regular_file(fec)) continue;
+        std::string name = entry.path().filename().string();
+        std::ifstream in(entry.path());
+        if (!in) continue;
+        std::string line;
+        int lineno = 0;
+        bool master_seen = false;
+        while (std::getline(in, line)) {
+            ++lineno;
+            std::string s = strip(line);
+            if (s.empty()) continue;
+            // Line 1 is the status word (auto/manual); skip it.
+            if (lineno == 1) continue;
+            // Line 2 is the master link path.
+            if (!master_seen) {
+                if (!s.empty() && s[0] == '/') {
+                    db.link_to_name[s] = name;
+                    master_seen = true;
+                }
+                continue;
+            }
+            // Subsequent absolute-path tokens that are LINKS: a slave
+            // declaration is "<slave-name> <slave-link>"; the slave link is
+            // the second whitespace-separated token starting with '/'.
+            // Heuristic to identify a slave LINK line: a "<name> <path>"
+            // pair where the first token is NOT an absolute path (the slave
+            // name) and the second IS. Candidate-provider and priority lines
+            // (single token: a path or a number) are skipped so we record
+            // only links, not providers.
+            std::istringstream ts2(s);
+            std::string first, second, extra;
+            ts2 >> first >> second;
+            bool more = static_cast<bool>(ts2 >> extra);
+            if (!more && !first.empty() && first[0] != '/' &&
+                !second.empty() && second[0] == '/') {
+                db.link_to_name[second] = name;
+            }
+        }
+    }
+    return db;
+}
+
+// True iff `abs_path` is an alternatives-managed symlink: under
+// /etc/alternatives/ OR a known master/slave link in the alternatives DB.
+bool is_alternatives_link(const std::string& abs_path, const AltDb& db,
+                          std::string* out_name) {
+    if (abs_path.rfind("/etc/alternatives/", 0) == 0) {
+        // the alternative name is the basename of the /etc/alternatives link
+        if (out_name) *out_name = fs::path(abs_path).filename().string();
+        return true;
+    }
+    auto it = db.link_to_name.find(abs_path);
+    if (it != db.link_to_name.end()) {
+        if (out_name) *out_name = it->second;
+        return true;
+    }
+    return false;
+}
+
+// Query the alternatives database for the auto/best provider of `name`.
+// First tries reading /var/lib/alternatives/<name> directly (the candidate
+// with the highest priority for an auto alternative, or the configured value
+// for a manual one); falls back to `update-alternatives --query`.
 std::optional<std::string> alternatives_best(const std::string& name,
+                                             const std::string& root,
                                              const CommandRunner& runner) {
+    (void)root;
+    // The alternatives admin-file grammar is version-sensitive; defer to
+    // update-alternatives, which knows the grammar for the installed version.
     CommandResult r = runner.run("update-alternatives", {"--query", name});
     if (r.spawn_failed) return std::nullopt;
+    if (r.code != 0) return std::nullopt;
     // Parse "Best: <path>" or "Value: <path>" line.
     std::istringstream is(r.out);
     std::string line, best, value;
@@ -322,6 +440,7 @@ struct WalkContext {
     const RpmData* rpm;
     const CommandRunner* runner;
     const DescribeOptions* opts;
+    const AltDb* alt;
     std::vector<ManagedFileRecord>* out;
     std::vector<Diagnostic>* diags;
     bool unreadable_error = false;
@@ -369,31 +488,52 @@ bool judge_entry(const std::string& abs_path, const std::string& disk_path,
         rec.target = tgt.string();  // verbatim, not resolved
         rec.sha256 = "";
         rec.content_ref = "";
-        if (!base) return true;  // unpackaged symlink -> emit
-        if (base->mode && !S_ISLNK(base->mode)) {
-            // recorded type is not a symlink -> type mismatch -> emit
-            return true;
+
+        // v0.6.9: classify the symlink's MECHANISM before judging it. Only a
+        // true alternatives symlink is resolved against the alternatives DB;
+        // every other symlink takes the normal target-match path and
+        // update-alternatives is NEVER queried for it.
+        std::string altname;
+        bool is_alt = is_alternatives_link(abs_path, *ctx.alt, &altname);
+
+        if (!is_alt) {
+            // NON-ALTERNATIVES symlink (e.g. crypto-policies back-ends,
+            // motd.d, issue.d, any other package-owned link): judge by the
+            // normal target rule. The absence of an alternatives entry is NOT
+            // an on_unreadable condition.
+            if (!base) return true;  // unpackaged symlink -> emit
+            if (base->mode && !S_ISLNK(base->mode)) {
+                // recorded type is not a symlink -> type mismatch -> emit
+                return true;
+            }
+            // pristine iff on-disk target equals the recorded baseline target
+            return rec.target != base->link_target;
         }
-        if (base->ghost) {
-            // ghost symlink: compare against alternatives auto/best target
-            std::string altname = fs::path(abs_path).filename().string();
-            auto best = alternatives_best(altname, *ctx.runner);
-            if (!best) {
-                // cannot consult: treat under on_unreadable
-                if (ctx.opts->on_unreadable == OnUnreadable::Error) {
-                    ctx.unreadable_error = true;
-                    ctx.first_error =
-                        err("files", "cannot query alternatives for " + abs_path);
-                    return false;
-                }
-                ctx.diags->push_back(
-                    warn("files", "alternatives unreadable for " + abs_path));
+
+        // ALTERNATIVES symlink: reproducible target is the auto/best provider.
+        // on_unreadable applies ONLY when /var/lib/alternatives genuinely
+        // cannot be read (a real IO/permission failure), never for the routine
+        // "not an alternative" case (already excluded above).
+        if (ctx.alt->present && !ctx.alt->readable) {
+            if (ctx.opts->on_unreadable == OnUnreadable::Error) {
+                ctx.unreadable_error = true;
+                ctx.first_error =
+                    err("files", "cannot read the alternatives database for " +
+                                     abs_path);
                 return false;
             }
-            return rec.target != *best;  // differs from auto/best -> emit
+            ctx.diags->push_back(
+                warn("files", "alternatives database unreadable for " + abs_path));
+            return false;
         }
-        // non-ghost symlink: pristine iff target matches recorded target
-        return rec.target != base->link_target;
+        auto best = alternatives_best(altname, ctx.opts->root, *ctx.runner);
+        if (!best) {
+            // auto/best indeterminable (typically a slave alternative whose
+            // best lives in the master admin file): EMIT conservatively. This
+            // is NOT an on_unreadable condition.
+            return true;
+        }
+        return rec.target != *best;  // differs from auto/best -> emit
     }
 
     if (S_ISREG(st.st_mode)) {
@@ -710,11 +850,15 @@ Result<DescribeResult> describe_actual_state(const DescribeOptions& opts,
 
     // STEP 4: config_files (/etc walk)
     {
+        // Build the alternatives DB once so symlink mechanism can be
+        // classified before judging (v0.6.9).
+        AltDb alt = build_alt_db(opts.root);
         std::vector<ManagedFileRecord> files;
         WalkContext ctx;
         ctx.rpm = &rpm;
         ctx.runner = &runner;
         ctx.opts = &opts;
+        ctx.alt = &alt;
         ctx.out = &files;
         ctx.diags = &out.diagnostics;
         walk_etc(ctx);

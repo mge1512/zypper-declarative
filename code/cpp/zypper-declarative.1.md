@@ -1,4 +1,4 @@
-% ZYPPER-DECLARATIVE(1) zypper-declarative 0.6.8
+% ZYPPER-DECLARATIVE(1) zypper-declarative 0.6.9
 % Matthias G. Eckermann <pcd@mailbox.org>
 % June 2026
 
@@ -138,4 +138,4 @@ Install from the openSUSE Build Service:
 # COPYRIGHT
 
 Licensed under GPL-2.0-or-later. Spec SHA256:
-1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3

@@ -1,4 +1,4 @@
-# generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+# generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 cmake_minimum_required(VERSION 3.20)   # 3.28 on SLE 15 SP7, 3.31 on SLE 16; 3.20 is a safe floor
 
 # Module identity: project name "zypper-declarative" (spec title; spec META
@@ -20,7 +20,7 @@ add_compile_options(-Wall -Wextra)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZD_VERSION LIMIT_COUNT 1)
 string(STRIP "${ZD_VERSION}" ZD_VERSION)
 # The spec SHA256 is embedded once, computed before generation.
-set(ZD_SPEC_SHA256 "1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e")
+set(ZD_SPEC_SHA256 "aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3")
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/src/meta.hpp.in"
   "${CMAKE_CURRENT_BINARY_DIR}/generated/meta.hpp"

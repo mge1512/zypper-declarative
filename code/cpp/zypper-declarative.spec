@@ -1,4 +1,4 @@
-# pcd-spec-sha256: 1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+# pcd-spec-sha256: aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 #
 # RPM spec for zypper-declarative. OBS build target (build.opensuse.org).
 # C++17, built with CMake, dynamically linked against the distribution's
@@ -9,7 +9,7 @@
 # default toolchain is GCC 15 and no special selection is needed.
 
 Name:           zypper-declarative
-Version:        %(cat %{_sourcedir}/VERSION 2>/dev/null || echo 0.6.8)
+Version:        %(cat %{_sourcedir}/VERSION 2>/dev/null || echo 0.6.9)
 Release:        0
 Summary:        Declarative convergence of SUSE system state in a snapshot transaction
 License:        GPL-2.0-or-later
@@ -70,7 +70,14 @@ install -D -m 0644 %{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
 %{_mandir}/man1/%{name}.1*
 
 %changelog
+* Tue Jun 02 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.9-0
+- Generated from spec zypper-declarative.spec.md v0.6.9
+  (sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3).
+- Symlink mechanism classified before judging: only true alternatives links
+  (under /etc/alternatives/ or known in /var/lib/alternatives) consult the
+  alternatives DB; crypto-policies/motd.d/issue.d links use the normal target
+  rule (v0.6.9 bug fix).
+- init forces on_unreadable=warn for its internal live read (v0.6.9).
 * Tue Jun 02 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.8-0
-- Generated from spec zypper-declarative.spec.md v0.6.8
-  (sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e).
+- Generated from spec zypper-declarative.spec.md v0.6.8.
 - on_unreadable knob now honored on diff, verify, and apply (v0.6.8).

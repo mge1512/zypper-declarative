@@ -2,19 +2,20 @@
 
 ## Provenance and identity
 
-- **Spec-SHA256:** `1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e`
+- **Spec-SHA256:** `aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3`
   (merged — the host spec declares no `Includes:`, so the merged hash equals the
   host hash).
-- **Spec-SHA256 (host):** `1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e`
+- **Spec-SHA256 (host):** `aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3`
 - **Included-Specs:** none.
 
   | Path | SHA256 |
   |------|--------|
   | *(none)* | — |
 
-- **Decisions-Hints-SHA256:** `zypper-declarative.cpp.decisions.hints.md` `3b62126dde66e4788cf5d4a8812896ba60e718aec7aada641a795431f79b066d`
+- **Decisions-Hints-SHA256:** `zypper-declarative.cpp.decisions.hints.md` `5becc2206f60b2e9658bbc896606f3c02d6b0f10d8434c69906492838c1e1035`
 - **Milestones-Hints-SHA256:** `cli-tool.cpp.milestones.hints.md` `9acc4a6ab9fbcda39161aeb5cfd250715976598437d82eabb34a7d951e4a782e`
 - **Template-SHA256:** `cli-tool.template.md` `c8447ba8f1e63f3605b8e671e5bf58f4df44665a5ba1ff76864d28e4570042b5`
+- **Upgrade-Guidance-SHA256:** `UPGRADE-0.6.8-to-0.6.9.md` `186f8ea108f5581ef85ad1c5a74df66ee938c611e31fa492f1adda5fbd562931`
 - **Style-Hints-SHA256:** `none` (no `<scope>.cpp.style.hints.md` present in the input or preset hierarchy)
 - **LLM-Name:** `claude-opus-4-8`
 - **Mode:** `translator`
@@ -23,48 +24,78 @@
 ## Regeneration context
 
 This run is a **guided regeneration** of a pre-existing C++ translation. The
-caller stated the existing code was produced from an **older, self-contradicting
-spec version (v0.6.7)** and asked for an update to the most recent SPEC (v0.6.8)
-and HINTS. The pre-existing output in `/tmp/pcd-output/code/cpp/` embedded the
-old spec hash `e302a3b3eccc8997bc91410ab19de8a1e6a999b14375e47815c9e5c17fe7b9c5`
-and version `0.6.7`.
+caller stated the existing code was produced from an **older spec version
+(v0.6.8)** and provided `UPGRADE-0.6.8-to-0.6.9.md` as the authoritative,
+exact delta to apply. Per that guidance, the v0.6.8 implementation is correct
+*except* for the one shipped bug described in Change 1; the code was **updated in
+place**, not regenerated from scratch. The pre-existing output embedded the old
+spec hash `1641bb44…` and version `0.6.8`.
 
 Per the template's **Resume logic**, existing non-empty deliverables were
-inspected rather than blindly overwritten. The actions taken:
+inspected and edited surgically. The actions taken match the four changes in the
+upgrade document:
 
-1. **Behavioural delta (v0.6.7 → v0.6.8).** A focused source-vs-spec comparison
-   found exactly one substantive behavioural change between the versions: the
-   `on_unreadable` knob, previously hard-coded to `error` on `diff`, `verify`,
-   and `apply` and absent from `apply`'s accepted options, is in v0.6.8 a real,
-   accepted option on **every verb that reads live state** (`describe`, `diff`,
-   `verify`, `apply`), defaulting to `error`. This is pinned by the v0.6.8
-   INVARIANT (spec lines 1886–1893), the `describe-actual-state` rationale (spec
-   lines 809–826), and the C++ decisions-hints self-check #5. The old code still
-   carried the v0.6.7 behaviour. Fixed in `src/commands.cpp`:
-   - `cmd_apply`: added `on-unreadable` to the accepted option set, validated its
-     value, and routed `on_unreadable_of(inv)` into the step-4 live drift read.
-   - `cmd_diff`: routed `on_unreadable_of(inv)` into the live-read branch (was
-     hard-coded `Error`); validated the value; emit warn-diagnostics to stderr.
-   - `cmd_verify`: same fix for its live-read branch.
-   This restores the unprivileged `describe`-then-`diff` idempotence flow
-   (verified: `diff manifest-path=… on-unreadable=warn` now skips a protected
-   `/etc/libaudit.conf` and exits 0; default `error` still exits 1).
-2. **Spec hash and version re-embedding.** The old spec hash was replaced with
-   `1641bb44…` in every source/header/`CMakeLists.txt`/`meta.hpp.in`/test file,
-   and `VERSION` was bumped `0.6.7` → `0.6.8`. The binary now reports
-   `zypper-declarative 0.6.8 spec:1641bb44…`. Test fixture `generator` strings
-   (informational, never compared) were updated to `0.6.8` for consistency.
-3. **Missing required deliverables produced.** The prior output contained source
-   + CMakeLists + tests but none of the packaging/docs deliverables. This run
-   added `Makefile`, `LICENSE`, `zypper-declarative.1.md` + `zypper-declarative.1`,
-   `zypper-declarative.spec`, `debian/{control,changelog,rules,copyright}`,
-   `README.md`, `translation_report/translation-workflow.pikchr`, and this report.
+1. **Change 1 — BUG FIX: symlink mechanism classification (`src/actual_state.cpp`).**
+   The v0.6.8 build routed every *ghost* symlink through the `update-alternatives`
+   query path. On a real host this produced `error: files: cannot query
+   alternatives for /etc/motd.d/cockpit` under the default `on-unreadable=error`
+   and ~24 spurious `alternatives unreadable` warnings under `warn`
+   (crypto-policies back-ends, motd.d, issue.d links). The fix introduces a
+   mechanism classifier in front of the alternatives branch:
+   - `build_alt_db(root)` scans `<root>/var/lib/alternatives/*` once, collecting
+     every master and slave **link** path into a `link_to_name` map. Directory
+     absence is *not* an unreadable failure; a genuine read failure on the
+     directory sets `readable=false`.
+   - `is_alternatives_link(path)` returns true **iff** the path is under
+     `/etc/alternatives/` **or** appears in that map. Only these are resolved
+     against the alternatives DB.
+   - The symlink branch of `judge_entry` now: (a) for a **non-alternatives**
+     symlink, judges by the normal target rule — unpackaged → emit, recorded type
+     mismatch → emit, on-disk target ≠ recorded target → emit, else suppress
+     (pristine) — and **never** calls `update-alternatives`; (b) for an
+     **alternatives** symlink, resolves auto/best and suppresses iff the on-disk
+     target equals it, emits on a manual `--set`, and emits conservatively when
+     auto/best is indeterminable (a slave). `on_unreadable` applies to an
+     alternatives symlink **only** when `/var/lib/alternatives` genuinely cannot
+     be read.
+   Verified live on the build host (unprivileged, `on-unreadable=warn`): **zero**
+   `alternatives unreadable` / `cannot query alternatives` diagnostics; the
+   pristine crypto-policies back-end links are suppressed (absent from
+   `config_files`); under the **default error mode** describe no longer aborts on
+   `/etc/motd.d/cockpit` (it now stops only on a genuinely root-only file,
+   `/etc/libaudit.conf`, which is the correct error-mode behaviour and exactly
+   why `init` forces warn — see Change 2).
+2. **Change 2 — `init` forces `on_unreadable=warn` (`src/commands.cpp`).**
+   `cmd_init`'s step-1 `describe-actual-state` call now sets
+   `OnUnreadable::Warn` unconditionally, overriding the default `error` and any
+   command-line value, so onboarding a real machine does not abort on a protected
+   root-only file or an indeterminable source. `init` is the only verb that
+   overrides the knob; `describe`/`diff`/`verify`/`apply` keep `error` as default.
+   Verified live: `init out=… mode=external` got past the protected
+   `/etc/libaudit.conf` read without aborting and stopped only at transaction
+   acquisition (exit 2, transaction domain) — expected unprivileged.
+3. **Change 3 — `packages_divergent` empty-field wildcard (CLARIFICATION).** The
+   spec now makes normative the behaviour the C++ code already implemented (an
+   empty identity field in a reference package element is a wildcard). Verified the
+   code still matches; **no change required** (see Specification ambiguities).
+4. **Change 4 — long-running examples (HARNESS note).** The `describe scope=full`
+   example is O(installed packages) and takes minutes on this host. The black-box
+   harness imposes **no** per-test timeout (concurrent `poll()`-based drain of
+   stdout/stderr, no watchdog), so a still-running long example is never killed.
+   The full suite (including `scope=full`) was run to completion and the long test
+   passed. No code change; confirmed the harness does not fail long cases.
 
-The rest of the implementation (`actual_state.cpp`, `manifest.cpp`, `diff.cpp`,
-`transaction.cpp`, `cli.cpp`, `types.hpp`, etc.) was already aligned with the
-v0.6.8 TYPES, BEHAVIORs, and INVARIANTS — including the v0.6.5/0.6.6 ghost,
-type-mismatch, and `/etc/alternatives` auto/best reproducibility rules — and was
-not behaviourally modified beyond the spec-hash re-embedding.
+Then the spec hash and version were re-embedded everywhere: `1641bb44…` →
+`aafbb315…` in every source/header/`CMakeLists.txt`/`meta.hpp.in`/test/packaging
+file, and `VERSION` was bumped `0.6.8` → `0.6.9`. The binary now reports
+`zypper-declarative 0.6.9 spec:aafbb315…`. New RPM/DEB changelog entries were
+added for 0.6.9; the man-page version line was bumped. Test fixture `generator`
+strings (informational, never compared) were updated to `0.6.9`.
+
+No other behaviour was modified. The rest of the implementation
+(`manifest.cpp`, `diff.cpp`, `transaction.cpp`, `cli.cpp`, `types.hpp`, the
+repositories/services/file-baseline readers, the content store, etc.) was already
+aligned with the spec and was untouched beyond the hash re-embedding.
 
 ## Language and toolchain resolution
 
@@ -122,14 +153,16 @@ no separate test-author directory.
 
 ## Tests-First-Compliance
 
-`no` — this is a guided **regeneration**. The translator test suite at
-`independent_tests/claude-opus-4-8/` pre-existed from the prior run; it was not
-authored fresh before the implementation in this run (the implementation also
-pre-existed). The suite was retained, its spec-hash/version updated, reviewed for
-v0.6.8 alignment (it already asserts the v0.6.8 `on-unreadable` semantics it
-depends on), and re-run. Per the prompt, examples whose tests pass are therefore
-recorded at **Medium** confidence rather than High, because fresh tests-first
-ordering was not re-established in this regeneration. The structural guard (a
+`no` — this is a guided **regeneration / in-place upgrade**. The translator test
+suite at `independent_tests/claude-opus-4-8/` pre-existed from the prior run; the
+pre-existing tests were not authored fresh before the implementation in this run
+(the implementation also pre-existed). The pre-existing suite was retained, its
+spec-hash/version updated, reviewed for v0.6.9 alignment, and re-run, and **three
+new v0.6.9 tests** were added for the Change 1 symlink classification (these new
+tests *were* written before/alongside the Change 1 code edit and exercise the new
+behaviour). Per the prompt, examples whose pre-existing tests pass are recorded at
+**Medium** confidence rather than High, because fresh tests-first ordering was not
+re-established for the bulk of the suite in this upgrade. The structural guard (a
 non-empty `independent_tests/<llm-name>/` before any implementation source is
 written) is satisfied: the directory existed and contained the test files
 throughout.
@@ -278,10 +311,12 @@ Executed with `g++-15` on the build host.
   build time via pkg-config / find_library). Discovery succeeded: see versions
   above.
 - **Step 2 — compilation:** `make build CXX=g++-15` → **pass** (clean build,
-  `-Wall -Wextra`). `ldd` confirms dynamic linking of `libzypp.so.1735`,
-  `libsnapper.so.5`, `libjsoncpp.so.19`, `libyaml-cpp.so.0.6`, `libcrypto.so.3`.
+  `-Wall -Wextra`, no warnings). `ldd` confirms dynamic linking of
+  `libzypp.so.1735`, `libsnapper.so.5`, `libjsoncpp.so.19`, `libyaml-cpp.so.0.6`,
+  `libcrypto.so.3`.
 - **Step 3 — translator test run:** `make test CXX=g++-15` →
-  **36 tests run, 0 failures.**
+  **39 tests run, 0 failures** (the `scope=full` case runs for several minutes and
+  was allowed to complete; no timeout killed it, per Change 4).
 - **Step 4 — test-author run:** N/A (single-LLM).
 - **M0/M0.1 acceptance gates** re-verified: bare-word `version`/`help`,
   `--version` alias, `format=bad_value → exit 2`, bare invocation `→ exit 0` with
@@ -289,7 +324,7 @@ Executed with `g++-15` on the build host.
 
 ## Test results — translator suite (independent_tests/claude-opus-4-8)
 
-All 36 black-box tests pass:
+All 39 black-box tests pass:
 
 ```
 test_bare_invocation_shows_help                 ok
@@ -328,6 +363,9 @@ test_apply_manifest_unreadable                  ok
 test_apply_manifest_invalid                     ok
 test_apply_rejects_full_describe_dump           ok
 test_apply_transaction_unavailable_external     ok
+test_nonalt_symlink_no_alternatives_query_default_error ok
+test_nonalt_symlink_emitted_verbatim            ok
+test_alternatives_dir_symlink_classified_as_alt ok
 ```
 
 ## Test results — test-author suite
@@ -338,22 +376,24 @@ Not present (single-LLM run).
 
 | Test | Result before | Action | Rationale |
 |------|---------------|--------|-----------|
-| *(all 36)* | passed | none | After the v0.6.8 `on_unreadable` fix and spec-hash/version re-embed, every test passed unmodified. No test assertion was changed; only fixture `generator` strings were updated `0.6.7`→`0.6.8` (informational, never compared by the implementation). |
+| *(all 36 pre-existing)* | passed | none | After the v0.6.9 symlink-classification and `init`-warn fixes plus the spec-hash/version re-embed, every pre-existing test passed unmodified. No assertion changed; only fixture `generator` strings were updated `0.6.8`→`0.6.9` (informational, never compared). |
+| test_nonalt_symlink_no_alternatives_query_default_error | n/a (new) | added | New test for Change 1: a non-alternatives symlink (crypto-policies-style, into `/usr/share`) under a synthetic root must not produce any `alternatives` diagnostic. |
+| test_nonalt_symlink_emitted_verbatim | n/a (new) | added | New test for Change 1: the unpackaged non-alternatives symlink is emitted as type `link` with its verbatim target, not routed through the alternatives path. |
+| test_alternatives_dir_symlink_classified_as_alt | n/a (new) | added | New test for Change 1: a symlink under `/etc/alternatives/` IS classified as an alternatives link and (auto/best indeterminable on the synthetic root) emitted conservatively. |
 
 ## Specification ambiguities and deviations
 
-- **`compute-drift` `packages_divergent` (spec step 4).** The literal v0.6.8
-  wording is a symmetric identity set-difference ("add any package present in one
-  but not the other"). The implementation compares directionally and treats an
-  empty identity field in the reference (e.g. desired `{name: nginx, version: ""}`)
-  as a wildcard match against the resolved actual record. This is the
-  conservative interpretation that keeps the `verify_against_external_state_dump`,
-  idempotence, and `lock_is_fully_resolved_packages_scope` EXAMPLES consistent: a
-  desired package with empty version must match its resolved installed record
-  without spurious drift, and a strictly literal symmetric comparison on identity
-  fields would manufacture false drift for that universal "newest from repo" case.
-  Recorded here as a spec terseness vs. EXAMPLE-intent tension; the code follows
-  the EXAMPLES. Inherited unchanged from the prior v0.6.7 translation.
+- **`compute-drift` `packages_divergent` (spec step 4) — now NORMATIVE in v0.6.9.**
+   The v0.6.9 spec (Change 3) makes explicit what was previously an undocumented
+   judgment call inherited from v0.6.7: an **empty identity field in a reference
+   package element is a WILDCARD** matching any actual value, so desired
+   `{name: nginx, version: ""}` matches the resolved actual
+   `{name: nginx, version: "1.27.4", …}` and is not divergent; only non-empty
+   reference fields must match, and only the reference side wildcards. The C++ code
+   already implemented exactly this (directional comparison, reference-side
+   wildcard). Verified the code still matches the now-normative wording; **no
+   change required**. This is no longer a spec ambiguity — recorded here for the
+   audit trail of the v0.6.8→v0.6.9 upgrade.
 - **NETWORK-CALLS deviation (from the spec's own DEPLOYMENT).** The tool makes no
   direct network I/O; package retrieval is delegated to libzypp against pinned,
   signed repositories. The supply-chain intent of the constraint is honored;
@@ -381,7 +421,12 @@ nonetheless used as additional gates and all pass (see Compile gate).
 ## Public API Surface
 
 The exported (header-declared) symbols of the implementation modules. Stable
-across translations of spec v0.6.8.
+across translations of spec v0.6.9. The upgrade from v0.6.8 added **no** new
+exported symbol and removed/renamed none: the symlink-classification helpers
+(`build_alt_db`, `is_alternatives_link`, `AltDb`) and the unchanged
+`alternatives_best` signature change are file-local (anonymous-namespace) symbols
+in `actual_state.cpp`, not part of the public header surface. The surface below is
+identical to the v0.6.8 surface.
 
 ### module: types (`src/types.hpp`)
 - `template <class T> struct ScopeWrapper { std::map<std::string,std::string> attributes; std::vector<T> elements; }`
@@ -493,7 +538,7 @@ Examples with no unprivileged black-box test are **Low** (code-review only).
 | drift_ignores_unmanaged_packaged_file | Medium | exercised via verify drift fixtures | direct package_name-non-empty fixture code-reviewed |
 | describe_actual_state_omits_pristine | Medium | `test_describe_emits_json_manifest` + libzypp baseline | exact pristine suppression on a known path code-reviewed |
 | describe_traverses_etc_subdirectories | Medium | covered by live describe (walks /etc) | — |
-| describe_records_symlink_verbatim | Low | code review | needs a constructed symlink fixture |
+| describe_records_symlink_verbatim | Medium | `test_nonalt_symlink_emitted_verbatim` (synthetic root, verbatim target preserved) | — |
 | describe_skips_special_file | Low | code review | needs a constructed fifo/socket |
 | drift_type_transition_is_modified | Medium | `test_verify_type_transition_drift` | — |
 | describe_config_files_bounded_to_etc | Medium | live describe; scope=etc never scans /usr | — |
@@ -502,8 +547,10 @@ Examples with no unprivileged black-box test are **Low** (code-review only).
 | describe_pristine_distro_symlink_suppressed | Low | code review | needs the specific distro link |
 | describe_type_mismatch_emitted | Low | code review | needs the pam fixture |
 | describe_ghost_with_content_emitted | Low | code review | needs the pam-config ghost fixture |
-| describe_default_alternative_symlink_suppressed | Low | code review | needs /etc/alternatives + alt DB |
+| describe_default_alternative_symlink_suppressed | Low | code review | needs /etc/alternatives + populated alt DB; classification path covered by `test_alternatives_dir_symlink_classified_as_alt` |
 | describe_manual_alternative_symlink_emitted | Low | code review | needs update-alternatives --set |
+| describe_nonalternatives_symlink_not_routed_through_alt_db | Medium | `test_nonalt_symlink_no_alternatives_query_default_error` + `test_nonalt_symlink_emitted_verbatim` (v0.6.9 Change 1) | live crypto-policies/motd suppression vs emission verified manually on host |
+| init_forces_on_unreadable_warn | Medium | live host check (`init out=… mode=external` did not abort on `/etc/libaudit.conf`; stopped at txn) | full onboarding success path needs root |
 | describe_populates_content_store | Medium | `test_describe_populates_content_store` | — |
 | describe_without_content_store_is_readonly | Medium | `test_describe_without_content_store_is_readonly` | — |
 | describe_empty_ghost_suppressed | Low | code review | needs an empty ghost fixture |
@@ -541,10 +588,18 @@ Examples with no unprivileged black-box test are **Low** (code-review only).
 
 ## Files produced / updated this run
 
-- Updated (behaviour + spec-hash + version): `src/commands.cpp` (on_unreadable fix),
-  all `src/*.{hpp,cpp}`, `src/meta.hpp.in`, `CMakeLists.txt`, `VERSION`,
-  `independent_tests/claude-opus-4-8/{zypper-declarative_test.cpp,harness.hpp}`.
-- Newly produced: `Makefile`, `LICENSE`, `README.md`, `zypper-declarative.1.md`,
-  `zypper-declarative.1`, `zypper-declarative.spec`,
-  `debian/{control,changelog,rules,copyright}`,
-  `translation_report/translation-workflow.pikchr`, `TRANSLATION_REPORT.md`.
+- **Updated (v0.6.9 behaviour + spec-hash + version):**
+  - `src/actual_state.cpp` — Change 1: `AltDb`/`build_alt_db`/`is_alternatives_link`
+    mechanism classifier; rewritten symlink branch of `judge_entry`;
+    `alternatives_best` now also takes `root` and gated on non-zero exit.
+  - `src/commands.cpp` — Change 2: `cmd_init` forces `OnUnreadable::Warn`.
+  - Spec-hash re-embed across all `src/*.{hpp,cpp}`, `src/meta.hpp.in`,
+    `CMakeLists.txt`, `Makefile`, the man page, RPM/DEB packaging, README, and the
+    pikchr diagram; `VERSION` bumped `0.6.8`→`0.6.9`.
+  - `independent_tests/claude-opus-4-8/{zypper-declarative_test.cpp,harness.hpp}`
+    — spec-hash re-embed, fixture `generator` strings → `0.6.9`, and three new
+    v0.6.9 black-box tests for the symlink classification.
+  - `debian/changelog`, `zypper-declarative.spec` — new 0.6.9 changelog entries.
+- **Unchanged in behaviour** (hash re-embed only): `manifest.cpp`, `diff.cpp`,
+  `transaction.cpp`, `cli.cpp`, `main.cpp`, `command_runner.cpp`, and the headers.
+- **This report** rewritten last, after the compile gate and live verification.

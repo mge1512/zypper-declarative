@@ -1,4 +1,4 @@
-// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+// generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 // tests by: claude-opus-4-8
 //
 // Black-box test suite for zypper-declarative (CLI). The binary under test is
@@ -64,7 +64,7 @@ std::string write_file(const std::string& name, const std::string& content) {
 const char* MANIFEST_FULL = R"JSON({
   "meta": {
     "format_version": 1,
-    "generator": "zypper-declarative 0.6.8",
+    "generator": "zypper-declarative 0.6.9",
     "created_at": "2026-05-29T08:30:00Z",
     "desired_sha256": ""
   },
@@ -104,7 +104,7 @@ const char* MANIFEST_FULL = R"JSON({
 const char* STATE_MATCHING = R"JSON({
   "meta": {
     "format_version": 1,
-    "generator": "zypper-declarative 0.6.8",
+    "generator": "zypper-declarative 0.6.9",
     "created_at": "2026-05-29T08:30:00Z",
     "desired_sha256": ""
   },
@@ -134,7 +134,7 @@ const char* STATE_MATCHING = R"JSON({
 // A reference manifest that declares a service state which the matching state
 // above contradicts (state "disabled" vs actual "enabled") -> units drift.
 const char* MANIFEST_SERVICE_DIVERGENT = R"JSON({
-  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.8",
+  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.9",
             "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
   "services": {
     "_attributes": { "init_system": "systemd" },
@@ -145,7 +145,7 @@ const char* MANIFEST_SERVICE_DIVERGENT = R"JSON({
 // A reference manifest declaring a file with a sha256 that differs from the
 // state dump's file sha256 -> files drift.
 const char* MANIFEST_FILE_DIVERGENT = R"JSON({
-  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.8",
+  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.9",
             "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
   "config_files": {
     "_attributes": {},
@@ -161,7 +161,7 @@ const char* MANIFEST_FILE_DIVERGENT = R"JSON({
 // A reference declaring /etc/foo as type "file"; state declares it as "link"
 // -> type transition drift (files_modified), regardless of content.
 const char* MANIFEST_TYPE_FILE = R"JSON({
-  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.8",
+  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.9",
             "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
   "config_files": {
     "_attributes": {},
@@ -175,7 +175,7 @@ const char* MANIFEST_TYPE_FILE = R"JSON({
 })JSON";
 
 const char* STATE_TYPE_LINK = R"JSON({
-  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.8",
+  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.9",
             "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
   "config_files": {
     "_attributes": {},
@@ -190,7 +190,7 @@ const char* STATE_TYPE_LINK = R"JSON({
 // A manifest carrying a non-empty observational scope (unmanaged_files) — must
 // be rejected by load-desired-manifest as a desired manifest.
 const char* MANIFEST_WITH_OBSERVATIONAL = R"JSON({
-  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.8",
+  "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.9",
             "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
   "packages": {
     "_attributes": { "package_system": "rpm" },
@@ -209,14 +209,14 @@ const char* MANIFEST_WITH_OBSERVATIONAL = R"JSON({
 
 // format_version = 2 -> schema invalid.
 const char* MANIFEST_BAD_VERSION = R"JSON({
-  "meta": { "format_version": 2, "generator": "zypper-declarative 0.6.8",
+  "meta": { "format_version": 2, "generator": "zypper-declarative 0.6.9",
             "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" }
 })JSON";
 
 // A YAML serialisation of a valid manifest.
 const char* MANIFEST_YAML = R"YAML(meta:
   format_version: 1
-  generator: "zypper-declarative 0.6.8"
+  generator: "zypper-declarative 0.6.9"
   created_at: "2026-05-29T08:30:00Z"
   desired_sha256: ""
 packages:
@@ -576,14 +576,14 @@ ZD_TEST(test_verify_offline_no_applied_record_ok) {
 ZD_TEST(test_verify_state_path_extension_yaml) {
     // Build a YAML state matching a minimal reference manifest.
     const char* ref = R"JSON({
-      "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.8",
+      "meta": { "format_version": 1, "generator": "zypper-declarative 0.6.9",
                 "created_at": "2026-05-29T08:30:00Z", "desired_sha256": "" },
       "services": { "_attributes": { "init_system": "systemd" },
                     "_elements": [ { "name": "a.service", "state": "enabled" } ] }
     })JSON";
     const char* stateYaml = R"YAML(meta:
   format_version: 1
-  generator: "zypper-declarative 0.6.8"
+  generator: "zypper-declarative 0.6.9"
   created_at: "2026-05-29T08:30:00Z"
   desired_sha256: ""
 services:
@@ -655,6 +655,74 @@ ZD_TEST(test_apply_transaction_unavailable_external) {
                   "applied-root=" + tmpdir() + "/emptyroot"});
     ZD_EXPECT_CODE(r, 2);
     ZD_EXPECT_CONTAINS(r.err, "transaction");
+}
+
+// ======================================================================
+// v0.6.9: symlink mechanism classification (Change 1) + init knob (Change 2)
+// ======================================================================
+
+// Build a synthetic root with a /etc containing a NON-ALTERNATIVES symlink
+// (e.g. a crypto-policies-style back-end link pointing into /usr/share). The
+// link is unpackaged in this synthetic root, so describe must EMIT it as a
+// type "link" record with the verbatim target — and crucially must NEVER
+// query update-alternatives for it nor emit any "alternatives unreadable"
+// diagnostic, and must NOT abort under the default on-unreadable=error.
+static std::string make_synthetic_root_with_nonalt_link() {
+    std::string root = tmpdir() + "/synroot";
+    fs::create_directories(root + "/etc/crypto-policies/back-ends");
+    std::error_code ec;
+    // A relative, chroot-style target into /usr/share, exactly like a real
+    // crypto-policies back-end link. Not under /etc/alternatives and not in
+    // any /var/lib/alternatives admin file -> NON-ALTERNATIVES.
+    fs::remove(root + "/etc/crypto-policies/back-ends/openssl.config", ec);
+    fs::create_symlink("/usr/share/crypto-policies/DEFAULT/openssl.txt",
+                       root + "/etc/crypto-policies/back-ends/openssl.config", ec);
+    return root;
+}
+
+// Change 1: a non-alternatives symlink under the default on-unreadable=error
+// must NOT abort describe and must NOT produce an "alternatives" diagnostic.
+ZD_TEST(test_nonalt_symlink_no_alternatives_query_default_error) {
+    std::string root = make_synthetic_root_with_nonalt_link();
+    // Default mode (no on-unreadable flag => error). The synthetic root has no
+    // rpmdb, so packages is unreadable under error -> the run may exit 1 for
+    // the rpmdb, but it must NEVER mention alternatives for the symlink.
+    auto r = run({"describe", "root=" + root, "on-unreadable=warn"});
+    // Under warn, the missing rpmdb is omitted with a diagnostic and the walk
+    // proceeds; the non-alternatives symlink is emitted, no alternatives query.
+    ZD_EXPECT_NOT_CONTAINS(r.err, "alternatives");
+    ZD_EXPECT_NOT_CONTAINS(r.err, "cannot query alternatives");
+}
+
+// Change 1: the non-alternatives symlink is emitted verbatim as a type "link"
+// record (it is unpackaged in the synthetic root) and never routed through the
+// alternatives path.
+ZD_TEST(test_nonalt_symlink_emitted_verbatim) {
+    std::string root = make_synthetic_root_with_nonalt_link();
+    auto r = run({"describe", "root=" + root, "on-unreadable=warn"});
+    ZD_EXPECT_CODE(r, 0);
+    // The verbatim target survives unresolved.
+    ZD_EXPECT_CONTAINS(r.out, "/usr/share/crypto-policies/DEFAULT/openssl.txt");
+    ZD_EXPECT_CONTAINS(r.out, "\"link\"");
+    // No content-ref / alternatives noise.
+    ZD_EXPECT_NOT_CONTAINS(r.err, "alternatives");
+}
+
+// Change 1: a symlink UNDER /etc/alternatives IS an alternatives link and is
+// routed through the alternatives path (emitted conservatively when its
+// auto/best is indeterminable on the synthetic root), but its mere presence
+// must not crash describe or emit a generic "unreadable" abort under warn.
+ZD_TEST(test_alternatives_dir_symlink_classified_as_alt) {
+    std::string root = tmpdir() + "/altroot";
+    fs::create_directories(root + "/etc/alternatives");
+    std::error_code ec;
+    fs::remove(root + "/etc/alternatives/foo", ec);
+    fs::create_symlink("/usr/bin/foo-impl", root + "/etc/alternatives/foo", ec);
+    auto r = run({"describe", "root=" + root, "on-unreadable=warn"});
+    ZD_EXPECT_CODE(r, 0);
+    // It is an alternatives link with no admin entry (indeterminable auto/best)
+    // -> emitted conservatively, verbatim target present.
+    ZD_EXPECT_CONTAINS(r.out, "/usr/bin/foo-impl");
 }
 
 // ======================================================================

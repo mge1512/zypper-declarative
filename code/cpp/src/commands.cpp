@@ -1,4 +1,4 @@
-// generated from spec: zypper-declarative.spec.md sha256:1641bb4413b82fecb081125067107bd5a4e30a8393edc778ead646207d68da5e
+// generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 #include "commands.hpp"
 
 #include <ctime>
@@ -457,9 +457,13 @@ int cmd_init(const Invocation& inv, const CommandRunner& runner) {
     std::optional<ManifestFormat> efmt;
     if (!explicit_format(inv, efmt)) { usage_stderr(); return 2; }
 
-    // STEP 1: describe current state on "/"
+    // STEP 1: describe current state on "/".
+    // init FORCES on_unreadable=warn for this read (Change 2, v0.6.9):
+    // onboarding a real machine must not abort on a protected root-only file
+    // (e.g. /etc/libaudit.conf) or an indeterminable source. init is the ONLY
+    // verb that overrides the knob; describe/diff/verify/apply keep error.
     DescribeOptions o;
-    o.root = "/"; o.on_unreadable = OnUnreadable::Error; o.scope = ScanScope::Etc;
+    o.root = "/"; o.on_unreadable = OnUnreadable::Warn; o.scope = ScanScope::Etc;
     o.content_store = opt(inv, "content-store");
     o.keep_list = load_keep_list(inv);
     auto res = describe_actual_state(o, runner);
