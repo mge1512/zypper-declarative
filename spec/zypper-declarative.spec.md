@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.8
+Version:     0.6.9
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -416,11 +416,16 @@ PRECONDITIONS:
 - The transaction mechanism selected by `mode` is available.
 
 STEPS:
-1. Obtain the current state via `describe-actual-state` on "/" (with the
-   `on_unreadable` default of error). This is the same read `describe` performs;
-   if `content_store` is set, capture file content into it and set each emitted
-   regular-file record's `content_ref` exactly as `describe` does. On a state
-   collection failure exit 1.
+1. Obtain the current state via `describe-actual-state` on "/". `init` FORCES
+   `on_unreadable=warn` for this read (it does not use the default `error` and
+   ignores any `on-unreadable=error` passed in): onboarding must succeed on a real
+   machine, so a protected root-only file or an indeterminable source is skipped
+   with a diagnostic rather than aborting the adoption. This is the one verb that
+   overrides the knob; `describe`/`diff`/`verify`/`apply` keep `error` as their
+   default. This is the same read `describe` performs; if `content_store` is set,
+   capture file content into it and set each emitted regular-file record's
+   `content_ref` exactly as `describe` does. Emit each skipped source as a warning to
+   stderr. On a hard state-collection failure (not a per-source skip) exit 1.
 2. Acquire the transaction context via `acquire-transaction-context` for `mode`.
    On failure exit 2.
 3. Write the applied record via `write-applied-record` into the context's
@@ -979,40 +984,57 @@ STEPS:
        fresh install reproduces "the empty/absent ghost" equally well, so nothing
        need be carried. (An empty-ghost-matching-empty is the one ghost-file case
        that is suppressed; any ghost file with content is emitted.)
-   - GHOST SYMLINKS follow the SAME reproducibility criterion, but the thing a fresh
-     install reproduces is the link TARGET, not file content, so "has content" is
-     NOT the test (every symlink has a target). The test is whether a fresh install,
-     including the package scriptlets that establish the link, would reproduce the
-     CURRENT on-disk target:
-     - the canonical case is `/etc/alternatives/*`, the symlinks the alternatives
-       system maintains. The package marks them `%ghost` and does not record a
-       target; the target is chosen at install time by the alternatives machinery as
-       the highest-priority (auto/best) installed provider. So the expected,
-       reproducible target is the alternatives system's AUTO/BEST choice for that
-       name.
-     - a ghost symlink whose on-disk target EQUALS the auto/best target is PRISTINE
-       and is SUPPRESSED: a fresh install plus scriptlets would recreate exactly
-       that link, so it carries no declarable intent. This is why the bulk of
-       `/etc/alternatives/*` on a default system does not appear.
-     - a ghost symlink whose on-disk target DIFFERS from the auto/best target is
-       EMITTED as a type "link" record with its verbatim on-disk target: the admin
-       has manually selected a non-default alternative (for example
-       `update-alternatives --set`), which a fresh install would NOT reproduce, so
-       it is genuine declarable intent and must be captured.
-     - the auto/best target is determined from the alternatives database (for
-       example `update-alternatives --query <name>`, or by reading
-       `/var/lib/alternatives/<name>`), comparing the live link to the auto choice.
-       An implementation that cannot consult the alternatives database for a given
-       ghost symlink treats it under `on_unreadable` (it must NOT default to either
-       blanket-emit or blanket-suppress, both of which break reproducibility). A
-       ghost symlink outside the alternatives system is judged the same way against
-       whatever target a fresh install would establish; where no such expected
-       target can be determined it is emitted (its on-disk target is not known to be
-       reproducible).
+   - SYMLINKS are classified by MECHANISM BEFORE being judged, and only symlinks
+     that are actually part of the alternatives system are ever resolved against the
+     alternatives database. A symlink is an ALTERNATIVES symlink if and only if it is
+     located under `/etc/alternatives/` OR it appears as a master or slave in some
+     `/var/lib/alternatives/<name>` admin file. Any other symlink (for example the
+     `/etc/crypto-policies/back-ends/*.config` links the crypto-policies package
+     points into `/usr/share/crypto-policies/<policy>/...`, or `/etc/motd.d/*` and
+     `/etc/issue.d/*` package symlinks) is a NON-ALTERNATIVES symlink and is NEVER
+     queried against `update-alternatives`. Misclassifying an ordinary package
+     symlink as an alternative (and then reporting its absent alternatives entry as
+     unreadable) is a bug: crypto-policies back-ends and motd.d/issue.d links are not
+     alternatives.
+     - NON-ALTERNATIVES symlink: judged by the NORMAL symlink rule, pristine iff its
+       on-disk target equals the target a fresh install of its owning package would
+       establish (its recorded link target, or for a package-managed indirection like
+       crypto-policies the target the default policy yields). Pristine -> SUPPRESS;
+       differing -> EMIT as a type "link" record with its verbatim target. The bulk
+       of crypto-policies back-end links on a default-policy system point where the
+       package set them and are therefore SUPPRESSED. A non-alternatives symlink is
+       NOT routed through the alternatives DB and NOT treated as `on_unreadable`
+       merely because it has no alternatives entry; if its expected target genuinely
+       cannot be determined it is EMITTED (its on-disk target is not known to be
+       reproducible), never errored.
+     - ALTERNATIVES symlink: the reproducible target is the alternatives system's
+       AUTO/BEST choice for that name, determined from the alternatives database
+       (`update-alternatives --query <name>`, or reading `/var/lib/alternatives/<name>`).
+       The package marks these `%ghost` and records no target; the target is chosen
+       at install time by the alternatives machinery.
+       - on-disk target EQUALS the auto/best target -> PRISTINE -> SUPPRESS (a fresh
+         install plus scriptlets recreates exactly that link; this is why the bulk of
+         `/etc/alternatives/*` on a default system does not appear).
+       - on-disk target DIFFERS from the auto/best target -> EMITTED as a type "link"
+         record with its verbatim target (the admin has manually selected a
+         non-default alternative, for example `update-alternatives --set`, which a
+         fresh install would not reproduce, genuine declarable intent).
+       - SLAVE alternatives (an alternatives name with no own admin file, whose
+         auto/best lives in its master's admin file, for example the `.gz` man-page
+         links) whose auto/best cannot be determined by the implementation are
+         EMITTED conservatively (indeterminable target is not known to be
+         reproducible). Resolving slaves via the master admin file to suppress the
+         default ones is a permitted refinement, not required.
+       - `on_unreadable` applies to an ALTERNATIVES symlink ONLY when the alternatives
+         database genuinely cannot be read (a real IO/permission failure on
+         `/var/lib/alternatives`), which is rare; it must NOT be used for the routine
+         case of a symlink that simply is not an alternative, nor to blanket-emit or
+         blanket-suppress.
      A ghost is treated as "no recorded content baseline", so it can never be
      pristine-by-digest against a shipped baseline; a ghost regular file's emission
-     turns on whether it has content to reproduce, and a ghost symlink's emission
-     turns on whether its target matches the reproducible (auto/best) target.
+     turns on whether it has content to reproduce, and a symlink's emission turns on
+     whether its target matches the reproducible target (the auto/best target for an
+     alternatives symlink, the package-established target for any other symlink).
      If any compared attribute differs, or the path is a type mismatch, or a ghost
      file with content, or a ghost symlink whose target is not the reproducible one,
      the entry is changed-from-package and is emitted, with a `changes` interpretation
@@ -1355,7 +1377,16 @@ STEPS:
    actual.services._elements reports a different state for u.name, add u.
 4. packages_divergent: compare reference.packages._elements (identity fields)
    against actual.packages._elements; add any package present in one but not the
-   other.
+   other. An EMPTY identity field in a REFERENCE element is a WILDCARD that matches
+   any value in the corresponding actual field: a desired package recorded as
+   `{name: nginx, version: ""}` (the common "install the newest the repo provides"
+   case) matches the resolved actual record `{name: nginx, version: "1.27.4", ...}`
+   and is NOT divergent. Only fields the reference specifies non-empty must match;
+   empty reference fields are unconstrained. This prevents a desired package with an
+   unspecified version/release/arch from manufacturing false drift against its fully
+   resolved installed record. (An empty field in the ACTUAL record is not a wildcard;
+   only the reference side wildcards, because the reference expresses intent and the
+   actual expresses a concrete resolved state.)
 5. Integrity categories (full scan): if actual.changed_managed_files is present,
    add each of its element names to managed_files_modified; if
    actual.unmanaged_files is present, add each of its element names to
@@ -1891,6 +1922,19 @@ resolver fills in the transitive set.
   the `describe`-then-`diff` idempotence check is satisfiable unprivileged when both
   are run with `warn`. The default remains `error` (a verb acts on a complete
   picture unless told otherwise).
+- [observable] `init` forces `on_unreadable=warn` for its live read (overriding the
+  default and any `on-unreadable=error` passed in), so onboarding a real machine
+  never aborts on a protected or indeterminable source; such sources are skipped
+  with a warning. `init` is the only verb that overrides the knob.
+- [observable] Only symlinks that are part of the alternatives system (located under
+  `/etc/alternatives/`, or listed as master or slave in a `/var/lib/alternatives/`
+  admin file) are resolved against the alternatives database. Every other symlink,
+  including `/etc/crypto-policies/back-ends/*.config`, `/etc/motd.d/*`, and
+  `/etc/issue.d/*` package symlinks, is judged by the normal symlink target rule and
+  is never queried against `update-alternatives`; the absence of an alternatives
+  entry for such a symlink is not an `on_unreadable` condition. On a default-policy
+  system the crypto-policies back-end links point where their package set them and
+  are suppressed as pristine.
 - [observable] `package_name` in a config_files record is the bare package name
   (for example `openssh-server`), never the full name-version-release-arch
   identifier.
@@ -1913,6 +1957,19 @@ resolver fills in the transitive set.
 ---
 
 ## EXAMPLES
+
+These examples are normative behaviour cases and double as black-box tests. A note
+on runtime: the examples that drive a real `describe` or full scan are O(installed
+packages), because they parse the package verdicts and walk `/etc` (and, under
+scope=full, the package file inventory). On a minimal system these complete in
+seconds; on a production system with thousands of packages a single such example
+(notably any scope=full describe, and the `describe`-then-`diff` idempotence case)
+can take minutes. A test harness MUST therefore allow a generous per-example timeout
+(or run the long cases in the background and wait), and MUST NOT treat a
+still-running long example as a failure or kill it prematurely; a killed process is
+not a test failure. The fast contract/validation examples (argument handling,
+offline two-file comparisons, unreadable/invalid inputs) are not affected and remain
+quick.
 
 ### EXAMPLE: apply_no_op_when_converged
 GIVEN:
@@ -2373,6 +2430,41 @@ THEN:
   it is emitted because a fresh install would point the link at the auto/best
     provider /usr/bin/gawk, not /usr/bin/mawk, so the manual selection is declarable
     intent that would not be reproduced
+
+### EXAMPLE: describe_crypto_policies_symlinks_not_alternatives
+GIVEN:
+  /etc/crypto-policies/back-ends/openssl.config is a symlink the crypto-policies
+    package points into /usr/share/crypto-policies/DEFAULT/openssl.txt on a system
+    using the default policy
+  it is NOT an update-alternatives entry (not under /etc/alternatives, not in any
+    /var/lib/alternatives admin file)
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  the link is judged by the normal symlink target rule, NOT queried against
+    update-alternatives
+  it is SUPPRESSED (its target is what a default-policy install establishes, so it
+    is pristine and carries no declarable intent)
+  no "alternatives unreadable" diagnostic is emitted for it (it was never an
+    alternatives query), and under the default on-unreadable=error describe does NOT
+    abort on it
+  exit_code = 0
+
+### EXAMPLE: init_forces_warn_on_protected_source
+GIVEN:
+  a fresh machine with a root-only file (e.g. /etc/libaudit.conf) and an
+    indeterminable alternatives slave
+  invocation: zypper declarative init out=/var/lib/zypper-declarative/manifest.json
+WHEN:
+  init runs
+THEN:
+  init reads the live system with on_unreadable forced to warn (even though the
+    default is error and the operator passed no on-unreadable), so the protected
+    file is skipped with a warning and onboarding is not aborted
+  a snapshot is taken, the applied record is written, nothing is converged, and the
+    manifest is emitted
+  exit_code = 0
 
 ### EXAMPLE: describe_populates_content_store
 GIVEN:

@@ -230,6 +230,37 @@ commit messages, not in the normative spec text.
   mechanism, with the decision deliberately left open. Secrets, kernel cmdline,
   and sysctl domains reserved for a later Version.
 
+## Version 0.6.9
+
+- 2026-06-02: Fixed symlink classification (a real bug that shipped in the v0.6.8
+  C++ build) and made `init` force `on-unreadable=warn`. (1) SYMLINK CLASSIFICATION:
+  only symlinks that are actually in the alternatives system (under
+  `/etc/alternatives/`, or listed as master or slave in a `/var/lib/alternatives/`
+  admin file) are resolved against the alternatives database. Every other symlink,
+  including `/etc/crypto-policies/back-ends/*.config` (crypto-policies links into
+  `/usr/share/crypto-policies/<policy>/`), `/etc/motd.d/*`, and `/etc/issue.d/*`, is
+  judged by the normal symlink target rule and is NEVER queried against
+  update-alternatives; its lack of an alternatives entry is not an on_unreadable
+  condition. The v0.6.8 build queried update-alternatives for these non-alternatives
+  symlinks, producing 24 spurious "alternatives unreadable" warnings and aborting
+  describe under the default error mode on /etc/motd.d/cockpit. On a default-policy
+  system the crypto-policies back-end links point where the package set them and are
+  now suppressed as pristine. Slave alternatives whose auto/best is indeterminable
+  are emitted conservatively (resolving them via the master admin file is a permitted
+  refinement, not required). (2) `init` now FORCES on_unreadable=warn for its live
+  read (overriding the default and any error passed in), so onboarding a real machine
+  never aborts on a protected root-only file or an indeterminable source; init is the
+  only verb that overrides the knob. Added matching invariants and worked examples
+  (crypto-policies suppression, init-forces-warn).
+- 2026-06-02: Two further v0.6.9 clarifications (spec hash now
+  aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3). (a)
+  `compute-drift` packages_divergent: an empty identity field in a reference package
+  element is a wildcard matching any actual value, so an empty-version "newest from
+  repo" desired package does not manufacture false drift (the code already did this;
+  now normative). (b) EXAMPLES note: examples driving a real describe or full scan are
+  O(installed packages) and can take minutes on large systems; a harness must allow a
+  generous timeout and must not kill a still-running long example.
+
 ## Version 0.6.8
 
 - 2026-06-02: Exposed the `on-unreadable` knob CONSISTENTLY on every verb that reads

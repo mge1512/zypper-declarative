@@ -149,6 +149,13 @@ the crate name and embedded spec hash by hand.
   as `files_extra`, while the desired manifest already contains those paths so drift
   is empty. The applied record is the reference only for the intent diff and apply's
   post-converge check.
+
+- `[spec]` `compute-drift` packages_divergent: an EMPTY identity field in a REFERENCE
+  package element is a WILDCARD matching any actual value (desired `{name: nginx,
+  version: ""}` matches resolved actual, NOT divergent); only non-empty reference
+  fields must match. Required so an empty-version "newest from repo" desired package
+  does not manufacture false drift. Wildcard on the reference side only. Do NOT
+  implement it as a strict symmetric set-difference.
 - `[spec]` `init` verb (onboarding): one command adopting current state as the
   managed baseline. INCLUDES the describe read (same actual-state path, with
   content-store population if `content-store=` is set), acquires the transaction
@@ -156,7 +163,10 @@ the crate name and embedded spec hash by hand.
   the snapshot (`meta.desired_sha256` = hash of that state), CONVERGES NOTHING, also
   writes the adopted manifest to `out`, then seals. After init, `diff` against the
   adopted manifest is empty and `verify` matches. A never-onboarded machine showing a
-  large intent diff is the run-init signal, not a bug.
+  large intent diff is the run-init signal, not a bug. `init` FORCES `on_unreadable=warn`
+  for its live read (overriding the default error and any `on-unreadable=error` passed
+  in) so onboarding never aborts on a protected or indeterminable source; it is the ONLY
+  verb that overrides the knob.
 
 ## config_files: let rpm decide (verdict-parse, NOT a self-built baseline)
 
@@ -202,14 +212,24 @@ spec's examples are the shared target and the three-way diff is the check.)
   file is suppressed. This is a small pass over the few ghost paths, not a walk of
   all `/etc`, but it is mandatory: the changed-files result is the UNION of the `rpm
   -V` verdict parse and this ghost pass.
-- `[spec]` GHOST SYMLINKS (the `/etc/alternatives/*` case): "has content" is NOT the
-  test (every symlink has a target); the test is whether the on-disk target equals
-  the target a fresh install would establish, for alternatives the auto/best
-  provider. Query `update-alternatives --query <name>` (or read
-  `/var/lib/alternatives/<name>`): target EQUALS auto/best -> SUPPRESS (drops most of
-  `/etc/alternatives/*`); DIFFERS (a manual `--set`) -> EMIT as type "link" with the
-  verbatim target. If the alternatives DB cannot be consulted, treat under
-  `on_unreadable`, do NOT blanket-emit or blanket-suppress.
+- `[spec]` SYMLINKS: "has content" is NOT the test (every symlink has a target).
+  CLASSIFY THE MECHANISM FIRST: a symlink is an ALTERNATIVES symlink IFF it is under
+  `/etc/alternatives/` OR appears as master or slave in a `/var/lib/alternatives/<name>`
+  admin file; ONLY those are resolved against the alternatives DB. Any OTHER symlink
+  (`/etc/crypto-policies/back-ends/*.config` into `/usr/share/crypto-policies/<policy>/`,
+  `/etc/motd.d/*`, `/etc/issue.d/*`, any package symlink) is NON-ALTERNATIVES: judge by
+  the normal target rule (target == fresh-install target -> SUPPRESS, else EMIT type
+  "link" with verbatim target), and NEVER call `update-alternatives` for it; a missing
+  alternatives entry is NOT `on_unreadable`. (Real bug shipped in the C++ v0.6.8 build:
+  it queried alternatives for crypto-policies/motd/issue symlinks, 24 spurious
+  "alternatives unreadable" warnings, and aborted describe under default error mode; on
+  a default-policy system those links are pristine and must be SUPPRESSED.) For an
+  ALTERNATIVES symlink: query `update-alternatives --query <name>` (or read
+  `/var/lib/alternatives/<name>`): EQUALS auto/best -> SUPPRESS (drops most of
+  `/etc/alternatives/*`); DIFFERS (manual `--set`) -> EMIT type "link" with verbatim
+  target. A SLAVE whose auto/best is indeterminable -> EMIT conservatively. Treat under
+  `on_unreadable` ONLY when `/var/lib/alternatives` genuinely cannot be read, never for
+  "not an alternative".
 - `[spec]` UNPACKAGED files: an `/etc` path no package owns is emitted; find these
   by walking `/etc` and subtracting the rpm-owned path set. Do not mark a file
   unpackaged because a lookup was skipped.
@@ -319,4 +339,4 @@ spec's examples are the shared target and the three-way diff is the check.)
 
 ## Spec tracking
 
-- Tracks spec zypper-declarative.spec.md v0.6.8 (hash 1641bb44...). History is in git and in the spec CHANGELOG.md, not here.
+- Tracks spec zypper-declarative.spec.md v0.6.9 (hash aafbb315...). History is in git and in the spec CHANGELOG.md, not here.

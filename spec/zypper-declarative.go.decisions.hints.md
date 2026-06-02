@@ -172,16 +172,25 @@ The tool runs as root, so `rpm -V` can read everything.
   `/etc/pam.d/common-auth-pc`). An empty ghost file is suppressed. Tiny pass over the
   few ghost paths, NOT a walk of all `/etc`, but mandatory: the changed-files result
   is the UNION of the `rpm -V` verdict parse and this ghost pass.
-- `[spec]` GHOST SYMLINKS (the `/etc/alternatives/*` case): "has content" is NOT the
-  test (every symlink has a target); the test is whether the on-disk target equals
-  the target a fresh install would establish. For alternatives that is the auto/best
-  provider, query it with `update-alternatives --query <name>` (or read
-  `/var/lib/alternatives/<name>`), which reports both the current link and the
-  auto/best choice. If the on-disk target EQUALS the auto/best target -> SUPPRESS
-  (pristine; this drops the bulk of `/etc/alternatives/*`); if it DIFFERS (a manual
-  `update-alternatives --set`) -> EMIT as type "link" with the verbatim target. If
-  the alternatives DB cannot be consulted for a given ghost symlink, treat it under
-  `on_unreadable`, do NOT blanket-emit or blanket-suppress.
+- `[spec]` SYMLINKS: "has content" is NOT the test (every symlink has a target).
+  CLASSIFY THE MECHANISM FIRST: a symlink is an ALTERNATIVES symlink IFF it is under
+  `/etc/alternatives/` OR appears as master or slave in a `/var/lib/alternatives/<name>`
+  admin file; ONLY those are resolved against the alternatives DB. Any OTHER symlink
+  (`/etc/crypto-policies/back-ends/*.config` into `/usr/share/crypto-policies/<policy>/`,
+  `/etc/motd.d/*`, `/etc/issue.d/*`, any package symlink) is NON-ALTERNATIVES: judge it
+  by the normal target rule (on-disk target == the fresh-install target -> SUPPRESS,
+  else EMIT type "link" with verbatim target), and NEVER call `update-alternatives` for
+  it; a missing alternatives entry for it is NOT `on_unreadable`. (Real bug shipped in
+  the C++ v0.6.8 build: it queried alternatives for crypto-policies/motd/issue symlinks,
+  giving 24 spurious "alternatives unreadable" warnings and aborting describe under the
+  default error mode; on a default-policy system those links are pristine and must be
+  SUPPRESSED.) For an ALTERNATIVES symlink: the reproducible target is the auto/best
+  provider, query `update-alternatives --query <name>` (or read
+  `/var/lib/alternatives/<name>`). EQUALS auto/best -> SUPPRESS (drops the bulk of
+  `/etc/alternatives/*`); DIFFERS (manual `--set`) -> EMIT type "link" with verbatim
+  target. A SLAVE whose auto/best is indeterminable -> EMIT conservatively. Treat under
+  `on_unreadable` ONLY when `/var/lib/alternatives` genuinely cannot be read, never for
+  "not an alternative".
 - `[spec]` UNPACKAGED files: a path under `/etc` that no package owns is emitted as
   unpackaged. Find these by walking `/etc` and subtracting the rpm-owned path set
   (the file lists of installed packages); do not mark a file unpackaged just because
@@ -239,6 +248,12 @@ The tool runs as root, so `rpm -V` can read everything.
   record reported all of it as `files_extra`; the desired manifest already contains
   those paths, so drift is empty. The applied record is the reference only for the
   intent diff and for apply's post-converge check.
+- `[spec]` `compute-drift` packages_divergent: an EMPTY identity field in a REFERENCE
+  package element is a WILDCARD matching any actual value (desired `{name: nginx,
+  version: ""}` matches resolved actual `{name: nginx, version: "1.27.4"}`, NOT
+  divergent); only non-empty reference fields must match. Required so an empty-version
+  "newest from repo" desired package does not manufacture false drift. Wildcard on the
+  reference side only. Do NOT implement it as a strict symmetric set-difference.
 - `[spec]` `init` verb (onboarding): one command that adopts the current state as
   the managed baseline. It INCLUDES the describe read (call the same actual-state
   path describe uses, with content-store population if `content-store=` is set),
@@ -249,7 +264,10 @@ The tool runs as root, so `rpm -V` can read everything.
   then seals. After init, `diff` against the adopted manifest is empty (intent and
   drift) and `verify` matches. A never-onboarded machine (no applied record) is
   expected to show a large intent diff from `diff`, that is the signal to run init,
-  not a bug.
+  not a bug. `init` FORCES `on_unreadable=warn` for its live read (overriding the
+  default error and any `on-unreadable=error` passed in) so onboarding never aborts
+  on a protected or indeterminable source; it is the ONLY verb that overrides the
+  knob.
 
 ## Full-scan integrity (scope=full)
 
@@ -331,4 +349,4 @@ The tool runs as root, so `rpm -V` can read everything.
 
 ## Spec tracking
 
-- Tracks spec zypper-declarative.spec.md v0.6.8 (hash 1641bb44...). History is in git and in the spec CHANGELOG.md, not here.
+- Tracks spec zypper-declarative.spec.md v0.6.9 (hash aafbb315...). History is in git and in the spec CHANGELOG.md, not here.

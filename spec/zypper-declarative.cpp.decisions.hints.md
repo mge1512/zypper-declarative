@@ -75,15 +75,34 @@ and the code must not assume one version's API.
   - ghost (FILEFLAGS ghost bit) REGULAR FILE with on-disk content -> EMIT (a fresh
     install ships no content; e.g. `/etc/pam.d/common-auth-pc`);
   - ghost regular file on-disk empty AND recorded baseline empty -> SUPPRESS;
-  - ghost SYMLINK: "has content" is NOT the test (every symlink has a target). Build
+  - SYMLINK: "has content" is NOT the test (every symlink has a target). Build
     02 emitted all ~287 `/etc/alternatives/*` by treating a ghost symlink's target as
-    "content"; do NOT do that. The test is whether the on-disk target equals the
-    target a fresh install would establish. For alternatives that is the auto/best
-    provider; libzypp does not know it, so query the alternatives database directly
-    (`update-alternatives --query <name>` via OSCommandRunner, or read
-    `/var/lib/alternatives/<name>`). Target EQUALS auto/best -> SUPPRESS; DIFFERS (a
-    manual `--set`) -> EMIT as type "link" with the verbatim target. If the
-    alternatives DB cannot be consulted, treat under `on_unreadable`.
+    "content"; do NOT do that. CLASSIFY THE SYMLINK'S MECHANISM BEFORE JUDGING: a
+    symlink is an ALTERNATIVES symlink IFF it is under `/etc/alternatives/` OR appears
+    as a master or slave in a `/var/lib/alternatives/<name>` admin file. ONLY those
+    are resolved against the alternatives DB. Any OTHER symlink
+    (`/etc/crypto-policies/back-ends/*.config` which point into
+    `/usr/share/crypto-policies/<policy>/...`, `/etc/motd.d/*`, `/etc/issue.d/*`, any
+    package-owned symlink) is a NON-ALTERNATIVES symlink: judge it by the normal
+    target rule (on-disk target == the target a fresh install of its owning package
+    establishes -> SUPPRESS, else EMIT as type "link" with the verbatim target), and
+    NEVER call `update-alternatives` for it. A non-alternatives symlink with no
+    alternatives entry is NOT an `on_unreadable` condition. THIS IS A REAL BUG THAT
+    SHIPPED: the v0.6.8 build queried `update-alternatives` for crypto-policies
+    back-ends and motd.d/issue.d links, producing 24 spurious "alternatives
+    unreadable" warnings and aborting describe under the default error mode on
+    `/etc/motd.d/cockpit`. On a default-policy system the crypto-policies back-end
+    links point where the package set them, so once classified correctly they are
+    SUPPRESSED (pristine) and emit no diagnostic. For an ALTERNATIVES symlink: the
+    reproducible target is the auto/best provider; libzypp does not know it, so query
+    the alternatives DB (`update-alternatives --query <name>` via OSCommandRunner, or
+    read `/var/lib/alternatives/<name>`). Target EQUALS auto/best -> SUPPRESS; DIFFERS
+    (a manual `--set`) -> EMIT as type "link" with the verbatim target. A SLAVE
+    alternative whose auto/best is indeterminable -> EMIT conservatively (resolving it
+    via the master admin file to suppress defaults is a permitted refinement, not
+    required). `on_unreadable` applies to an alternatives symlink ONLY when
+    `/var/lib/alternatives` genuinely cannot be read (rare), never for "this is not an
+    alternative".
   - on-disk type differs from the recorded type (recorded a regular file, disk has a
     symlink) -> EMIT as the on-disk type (e.g. `/etc/pam.d/common-auth`);
   - otherwise non-ghost: pristine iff digest+mode+owner+group (file) or recorded
@@ -291,6 +310,15 @@ and the code must not assume one version's API.
   files as `files_extra`, while the desired manifest already contains those paths so
   drift is empty. The applied record is the reference only for the intent diff and
   apply's post-converge check.
+- `[spec]` `compute-drift` packages_divergent: an EMPTY identity field in a REFERENCE
+  package element is a WILDCARD matching any actual value. A desired
+  `{name: nginx, version: ""}` matches the resolved actual `{name: nginx, version:
+  "1.27.4"}` and is NOT divergent; only non-empty reference fields must match. This
+  is required so the "newest from repo" case (empty desired version) does not
+  manufacture false drift against the fully-resolved installed record. Wildcard only
+  on the reference side, not the actual side. (Do not implement packages_divergent as
+  a strict symmetric identity set-difference; that would false-flag every
+  empty-version desired package.)
 - `[spec]` `init` verb (onboarding): one command adopting current state as the
   managed baseline. INCLUDES the describe read (the same libzypp + filesystem
   actual-state path describe uses, with content-store population if `content-store=`
@@ -301,7 +329,11 @@ and the code must not assume one version's API.
   manifest to `out`, then seals. After init, `diff` against the adopted manifest is
   empty and `verify` matches. A never-onboarded machine showing a large intent diff
   is the run-init signal, not a bug. (init reuses describe + acquire-transaction +
-  write-applied-record; it is apply minus the convergence steps.)
+  write-applied-record; it is apply minus the convergence steps.) `init` FORCES
+  `on_unreadable=warn` for its live read, overriding the default error and any
+  `on-unreadable=error` passed in: onboarding a real machine must not abort on a
+  protected root-only file or an indeterminable source. `init` is the ONLY verb that
+  overrides the knob; describe/diff/verify/apply keep error as default.
 - `[spec]` config_files is bounded to `/etc` (never read/hash/verify outside it,
   never a whole-system verification). Difference-reporting (a verifier returning
   non-zero because it found changes) is the normal result, not an unreadable source.
@@ -397,4 +429,4 @@ and the code must not assume one version's API.
 
 ## Spec tracking
 
-- Tracks spec zypper-declarative.spec.md v0.6.8 (hash 1641bb44...). History is in git and in the spec CHANGELOG.md, not here.
+- Tracks spec zypper-declarative.spec.md v0.6.9 (hash aafbb315...). History is in git and in the spec CHANGELOG.md, not here.
