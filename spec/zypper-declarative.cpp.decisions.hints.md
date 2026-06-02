@@ -68,20 +68,30 @@ and the code must not assume one version's API.
 - Do NOT link librpm or add `rpm-devel` (libzypp's `tag_fileinfos()`/`FileInfo` is
   confirmed to expose the flags/digest/linkto; there is no remaining reason to touch
   librpm). Do NOT exec `zypper`/`rpm`.
-- `[changed-0.6.5]` Reproducibility rule via the `FileInfo` flags (emit a path
-  exactly when a fresh install would not reproduce its on-disk state), each path
-  judged INDEPENDENTLY against its own owning package, never collapsing a symlink
-  with its target:
-  - ghost (FILEFLAGS ghost bit) AND on-disk has content -> EMIT (a fresh install
-    ships no content; e.g. `/etc/pam.d/common-auth-pc`);
-  - ghost AND on-disk empty AND recorded baseline empty -> SUPPRESS;
+- `[changed-0.6.5]` `[changed-0.6.6]` Reproducibility rule via the `FileInfo` flags
+  (emit a path exactly when a fresh install would not reproduce its on-disk state),
+  each path judged INDEPENDENTLY against its own owning package, never collapsing a
+  symlink with its target:
+  - ghost (FILEFLAGS ghost bit) REGULAR FILE with on-disk content -> EMIT (a fresh
+    install ships no content; e.g. `/etc/pam.d/common-auth-pc`);
+  - ghost regular file on-disk empty AND recorded baseline empty -> SUPPRESS;
+  - ghost SYMLINK: "has content" is NOT the test (every symlink has a target). Build
+    02 emitted all ~287 `/etc/alternatives/*` by treating a ghost symlink's target as
+    "content"; do NOT do that. The test is whether the on-disk target equals the
+    target a fresh install would establish. For alternatives that is the auto/best
+    provider; libzypp does not know it, so query the alternatives database directly
+    (`update-alternatives --query <name>` via OSCommandRunner, or read
+    `/var/lib/alternatives/<name>`). Target EQUALS auto/best -> SUPPRESS; DIFFERS (a
+    manual `--set`) -> EMIT as type "link" with the verbatim target. If the
+    alternatives DB cannot be consulted, treat under `on_unreadable`.
   - on-disk type differs from the recorded type (recorded a regular file, disk has a
     symlink) -> EMIT as the on-disk type (e.g. `/etc/pam.d/common-auth`);
   - otherwise non-ghost: pristine iff digest+mode+owner+group (file) or recorded
     linkto (symlink) match -> SUPPRESS, else EMIT.
-  The first C++ build suppressed BOTH pam paths (no ghost/type-mismatch handling);
-  under v0.6.5 it must EMIT both (the type-mismatch symlink and the content-bearing
-  ghost), judged independently.
+  Build 01 suppressed BOTH pam paths (no ghost/type-mismatch handling) and build 02
+  over-emitted alternatives (ghost-symlink-as-content); under v0.6.6 emit the
+  type-mismatch symlink and the content-bearing ghost FILE, suppress default
+  alternatives, emit manually-set ones, all judged independently.
 - `[changed-0.6.4]` Pristine refinements (the C++ build was mostly correct; these
   converge it with Go/Rust): a symlink is pristine iff its TARGET matches the
   recorded target (do NOT compare a symlink's mode; the first build over-emitted
@@ -259,6 +269,14 @@ and the code must not assume one version's API.
   non-zero because it found changes) is the normal result, not an unreadable source.
   (For C++ the baseline comes from libzypp `tag_fileinfos()`, not a verifier exec;
   the rule still holds at the model level.)
+- `[spec]` CONTENT STORE: by default describe is read-only and every `content_ref`
+  is "". When the `content-store` option gives a base path, for each EMITTED
+  regular-file record write its bytes to `<content-store>/sha256/<digest>`
+  (idempotent: skip if the blob exists, dedup by content) and set `content_ref` to
+  `sha256/<digest>` (same digest as the record's `sha256`, computed via libcrypto).
+  Symlinks/dirs keep `content_ref` "". A regular file emitted but unreadable follows
+  `on_unreadable` (error, or under warn emit with `content_ref` "" plus a
+  diagnostic), never silent. The manifest references content, never inlines it.
 
 ### Transaction binding
 
@@ -308,6 +326,13 @@ and the code must not assume one version's API.
 
 ## Changelog
 
+- 2026-06-02: Tracks spec v0.6.6. Split the ghost rule: a ghost SYMLINK is no longer
+  emitted just because it "has a target" (build 02 over-emitted ~287
+  `/etc/alternatives/*` that way); it is suppressed when its target equals the
+  alternatives auto/best provider (query `update-alternatives --query`, libzypp does
+  not expose it) and emitted only when manually set. Added content-store population:
+  when `content-store` is set, describe writes emitted regular-file bytes
+  content-addressed by sha256 (libcrypto) and sets `content_ref`; read-only otherwise.
 - 2026-06-02: Fixed the build-01 failure (hints only, no spec change): the libzypp
   rpmdb reads (package enumeration, `tag_fileinfos()` ownership) were deferred to
   on-target and the empty output rationalised as correct, giving an absent

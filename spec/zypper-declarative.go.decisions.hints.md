@@ -157,20 +157,39 @@ The tool runs as root, so `rpm -V` can read everything.
   `changes` includes "deleted"); build 12 decided emission from the flags correctly
   but left `changes` and `status` null, do not repeat that. This is the whole
   changed-files mechanism: no digest map, no algorithm handling, no per-path join.
-- `[spec]` CONTENT-BEARING GHOSTS (the one case `rpm -V` does not cover, it skips
-  `%ghost` files): enumerate ghost-flagged paths under `/etc` only, with
+- `[spec]` GHOST REGULAR FILES (the one case `rpm -V` does not cover, it skips
+  `%ghost`): enumerate ghost-flagged paths under `/etc` only, with
   `rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]' <path>` or by scanning the
   owning packages' file lists for the ghost bit (FILEFLAGS bit 64). For each ghost
-  path that has real on-disk content (exists and is non-empty), EMIT type "file"
-  with its real sha256 (a fresh install ships no content, so it must be captured;
-  e.g. `/etc/pam.d/common-auth-pc`). A ghost that is empty on disk is suppressed.
-  This is a tiny pass over the few ghost paths, NOT a walk of all `/etc`.
+  REGULAR FILE that has real on-disk content (exists and is non-empty), EMIT type
+  "file" with its real sha256 (a fresh install ships no content; e.g.
+  `/etc/pam.d/common-auth-pc`). An empty ghost file is suppressed. Tiny pass over
+  the few ghost paths, NOT a walk of all `/etc`.
+- `[spec]` GHOST SYMLINKS (the `/etc/alternatives/*` case): "has content" is NOT the
+  test (every symlink has a target); the test is whether the on-disk target equals
+  the target a fresh install would establish. For alternatives that is the auto/best
+  provider, query it with `update-alternatives --query <name>` (or read
+  `/var/lib/alternatives/<name>`), which reports both the current link and the
+  auto/best choice. If the on-disk target EQUALS the auto/best target -> SUPPRESS
+  (pristine; this drops the bulk of `/etc/alternatives/*`); if it DIFFERS (a manual
+  `update-alternatives --set`) -> EMIT as type "link" with the verbatim target. If
+  the alternatives DB cannot be consulted for a given ghost symlink, treat it under
+  `on_unreadable`, do NOT blanket-emit or blanket-suppress.
 - `[spec]` UNPACKAGED files: a path under `/etc` that no package owns is emitted as
   unpackaged. Find these by walking `/etc` and subtracting the rpm-owned path set
   (the file lists of installed packages); do not mark a file unpackaged just because
   a lookup was skipped.
 - `[spec]` Exclusions: drop the keep-list and `/etc/etc.syncpoint`. Stay bounded to
-  `/etc`. `content_ref` is empty in actual state.
+  `/etc`.
+- `[spec]` CONTENT STORE: by default describe is read-only and every `content_ref`
+  is "". When the `content-store` option gives a base path, for each EMITTED
+  regular-file record write its bytes to `<content-store>/sha256/<digest>`
+  (idempotent: skip if that digest blob already exists, dedup by content) and set the
+  record's `content_ref` to `sha256/<digest>` (the same digest as the record's
+  `sha256`). Symlinks/dirs keep `content_ref` "". A regular file emitted but
+  unreadable follows `on_unreadable` (error, or under warn emit with `content_ref`
+  "" plus a diagnostic), never silent. The manifest references content, never inlines
+  it.
 - `[spec]` Required self-checks (black-box, run as root in the test step): run
   `describe` and assert (1) the pam pair, `common-auth` present as type "link",
   `common-auth-pc` present as type "file" with a sha256; (2) a known-pristine file
@@ -264,6 +283,12 @@ The tool runs as root, so `rpm -V` can read everything.
 
 ## Changelog
 
+- 2026-06-02: Tracks spec v0.6.6. Split ghost handling into ghost FILES (emit if
+  on-disk content) and ghost SYMLINKS (the `/etc/alternatives/*` case: suppress when
+  the link equals the alternatives auto/best target, emit a manually-set link),
+  querying `update-alternatives --query`. Added content-store population: when
+  `content-store` is set, describe writes emitted regular-file bytes content-addressed
+  by sha256 and sets `content_ref`; read-only otherwise.
 - 2026-06-01: Switched config_files (and changed_managed_files) from a self-built
   recorded-baseline map to `rpm -V`/`rpm -Va` verdict-parsing, the method the sister
   tool sitar uses and which converges; the self-built join failed repeatedly in Go.

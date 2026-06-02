@@ -229,3 +229,21 @@ commit messages, not in the normative spec text.
   binding abstracted between an external mechanism and the zypper-internal
   mechanism, with the decision deliberately left open. Secrets, kernel cmdline,
   and sysctl domains reserved for a later Version.
+
+## Version 0.6.6
+
+- 2026-06-02: Two additions to the config_files emission rule, both consistent with
+  the reproducibility criterion. (1) GHOST SYMLINKS (the `/etc/alternatives/*` case):
+  a `%ghost` symlink is judged by whether a fresh install would reproduce its TARGET,
+  not by whether it "has content" (every symlink has a target). For alternatives, the
+  reproducible target is the alternatives system's auto/best provider; a link pointing
+  there is pristine and suppressed, a manually-set link (update-alternatives --set) is
+  emitted as declarable intent. This resolved a real Go-vs-C++ divergence where C++
+  emitted all ~287 default alternatives. (2) CONTENT-STORE POPULATION: when the
+  `content-store` option is set, describe writes the bytes of every emitted
+  regular-file record into the store content-addressed by SHA256
+  (`<content-store>/sha256/<digest>`, deduplicated) and sets `content_ref` to
+  `sha256/<digest>`; with no content store, describe stays read-only and `content_ref`
+  is "". The manifest references content, it does not inline it; this is the first
+  step toward an applicable manifest. Unreadable file content follows `on_unreadable`,
+  never silent. Added invariants and examples for both.

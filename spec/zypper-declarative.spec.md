@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.5
+Version:     0.6.6
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -130,8 +130,10 @@ ManagedFileRecord := {
   sha256:       string,    // for type=file: a Sha256 content digest; "" otherwise
   target:       string,    // for type=link: the verbatim symlink target (not
                            // resolved, not normalised); "" otherwise
-  content_ref:  string,    // for a DESIRED type=file: how content is supplied at
-                           // apply time; "" in describe output and for non-file types
+  content_ref:  string,    // for a type=file record: a reference to the file's
+                           // content in the content store, of the form
+                           // "sha256/<digest>". Empty when no content store is in
+                           // use (no `content-store`), and "" for non-file types.
   package_name: string     // owning package; "" if unpackaged. Machinery field.
                            // Drives the files_extra rule: only unpackaged,
                            // undeclared /etc files count as extra.
@@ -362,9 +364,15 @@ fenced and excluded from structural parsing):
 }
 ```
 
-`describe` produces the same shape as the actual state: `content_ref` empty,
-`package_name` populated from rpm, every `packages` record fully resolved. The
-applied record is this shape with `meta.desired_sha256` set.
+`describe` produces the same shape as the actual state, with `package_name`
+populated from rpm and every `packages` record fully resolved. `content_ref` is
+empty UNLESS a content store is in use: when `content-store` is set, describe also
+writes the bytes of every emitted regular-file record (changed-from-package and
+unpackaged alike) into the content store, content-addressed by SHA256, and sets
+that record's `content_ref` to `sha256/<digest>` (see the content-store rule in the
+config_files behaviour). With no `content-store`, describe is read-only and
+`content_ref` is "". The applied record is this shape with `meta.desired_sha256`
+set.
 
 Note: Multiple BEHAVIOR and BEHAVIOR/INTERNAL sections are permitted. The five
 BEHAVIOR sections are the CLI verbs (`apply`, `diff`, `verify`, `status`,
@@ -760,7 +768,32 @@ STEPS:
    - Directory: traverse into it; do not emit a record for the directory itself.
    - Special file: skip it; do not read, hash, or emit it, and do not error.
    Skip package-pristine files and symlinks, the keep-list, and
-   `/etc/etc.syncpoint`. content_ref is "".
+   `/etc/etc.syncpoint`.
+
+   Content store (how `content_ref` is populated): by default describe is read-only
+   and sets `content_ref` to "" on every record. When the `content-store` option
+   gives a base path, describe ALSO captures file content so the describe output is
+   sufficient to reproduce `/etc`:
+   - for every EMITTED record whose on-disk type is a regular file (whether
+     changed-from-package or unpackaged), read the file's bytes, store them in the
+     content store content-addressed by their SHA256 at
+     `<content-store>/sha256/<digest>` (idempotent: if a blob with that digest is
+     already present, do not rewrite it, identical content deduplicates), and set the
+     record's `content_ref` to `sha256/<digest>`. The digest is the same SHA256
+     already recorded in the record's `sha256` field, so `content_ref` and `sha256`
+     are always consistent.
+   - symlinks and directories have no content; their `content_ref` stays "" (a
+     symlink is fully described by its `target`).
+   - a regular file that is emitted but whose CONTENT cannot be read (a protected
+     file an unprivileged reader cannot open) follows `on_unreadable`: under
+     `on-unreadable=error` it is an error naming the path; under `on-unreadable=warn`
+     the record is still emitted with its metadata but `content_ref` is "" and a
+     diagnostic is appended. Content-unreadability is NEVER silently treated as
+     either pristine or absent.
+   This is the first step toward an applicable manifest: the manifest stays small (it
+   carries references, not inlined bytes), while the bytes live in the content store,
+   deduplicated and verifiable by digest, ready for `apply` to resolve via
+   `content_ref` against `content-store`.
 
    Ownership and the pristine rule (this is the emission test, and the source of a
    real divergence between implementations, so it is pinned here):
@@ -827,25 +860,57 @@ STEPS:
    - GHOST files (paths the package marks as present but does not ship content for,
      for example `%ghost`; the package records no usable content baseline for them)
      follow the same reproducibility criterion:
-     - a ghost path with REAL on-disk content (it exists and is non-empty) is
+     - a ghost REGULAR FILE with REAL on-disk content (it exists and is non-empty) is
        EMITTED: a fresh install ships no content for it, so the content would not
        be reproduced and must be captured. The worked case is
        `/etc/pam.d/common-auth-pc`: `pam-config` ships it as a 0-byte `%ghost
        %config`, but on disk it holds the real 462-byte PAM configuration, so it
        is emitted with that content and digest.
-     - a ghost path that is EMPTY on disk and whose recorded baseline is also empty
-       (the 0-byte ghost matches the 0-byte on-disk file) is SUPPRESSED: a fresh
-       install reproduces "the empty/absent ghost" equally well, so nothing need be
-       carried. (An empty-ghost-matching-empty is the one ghost case that is
-       suppressed; any ghost with content is emitted.)
+     - a ghost regular file that is EMPTY on disk and whose recorded baseline is also
+       empty (the 0-byte ghost matches the 0-byte on-disk file) is SUPPRESSED: a
+       fresh install reproduces "the empty/absent ghost" equally well, so nothing
+       need be carried. (An empty-ghost-matching-empty is the one ghost-file case
+       that is suppressed; any ghost file with content is emitted.)
+   - GHOST SYMLINKS follow the SAME reproducibility criterion, but the thing a fresh
+     install reproduces is the link TARGET, not file content, so "has content" is
+     NOT the test (every symlink has a target). The test is whether a fresh install,
+     including the package scriptlets that establish the link, would reproduce the
+     CURRENT on-disk target:
+     - the canonical case is `/etc/alternatives/*`, the symlinks the alternatives
+       system maintains. The package marks them `%ghost` and does not record a
+       target; the target is chosen at install time by the alternatives machinery as
+       the highest-priority (auto/best) installed provider. So the expected,
+       reproducible target is the alternatives system's AUTO/BEST choice for that
+       name.
+     - a ghost symlink whose on-disk target EQUALS the auto/best target is PRISTINE
+       and is SUPPRESSED: a fresh install plus scriptlets would recreate exactly
+       that link, so it carries no declarable intent. This is why the bulk of
+       `/etc/alternatives/*` on a default system does not appear.
+     - a ghost symlink whose on-disk target DIFFERS from the auto/best target is
+       EMITTED as a type "link" record with its verbatim on-disk target: the admin
+       has manually selected a non-default alternative (for example
+       `update-alternatives --set`), which a fresh install would NOT reproduce, so
+       it is genuine declarable intent and must be captured.
+     - the auto/best target is determined from the alternatives database (for
+       example `update-alternatives --query <name>`, or by reading
+       `/var/lib/alternatives/<name>`), comparing the live link to the auto choice.
+       An implementation that cannot consult the alternatives database for a given
+       ghost symlink treats it under `on_unreadable` (it must NOT default to either
+       blanket-emit or blanket-suppress, both of which break reproducibility). A
+       ghost symlink outside the alternatives system is judged the same way against
+       whatever target a fresh install would establish; where no such expected
+       target can be determined it is emitted (its on-disk target is not known to be
+       reproducible).
      A ghost is treated as "no recorded content baseline", so it can never be
-     pristine-by-digest against a shipped baseline; its emission turns solely on
-     whether it currently has content to reproduce.
+     pristine-by-digest against a shipped baseline; a ghost regular file's emission
+     turns on whether it has content to reproduce, and a ghost symlink's emission
+     turns on whether its target matches the reproducible (auto/best) target.
      If any compared attribute differs, or the path is a type mismatch, or a ghost
-     with content, the entry is changed-from-package and is emitted, with a
-     `changes` interpretation analogous to the changed_managed_files `changes` list
-     (the differing attribute set, the type transition, or the presence of
-     ghost content is what makes it non-pristine).
+     file with content, or a ghost symlink whose target is not the reproducible one,
+     the entry is changed-from-package and is emitted, with a `changes` interpretation
+     analogous to the changed_managed_files `changes` list (the differing attribute
+     set, the type transition, the presence of ghost content, or the non-default
+     link target is what makes it non-pristine).
    - `package_name` carries the bare package NAME only (for example
      `openssh-server`), never the full name-version-release-arch identifier (not
      `openssh-server-9.6p1-150600.6.37.1.x86_64`). The version and release are
@@ -1478,8 +1543,12 @@ layering). Control via environment variables is forbidden.
 - `repo-lock` = fallback pinned repository or channel used only when the manifest
   declares no `repositories` scope. The primary, declarative source of the pin is
   the manifest's repositories scope.
-- `content-store` = base path against which ManagedFileRecord `content_ref`
-  values are resolved at apply time.
+- `content-store` = base path for file content, content-addressed as
+  `<content-store>/sha256/<digest>`. At apply time, ManagedFileRecord `content_ref`
+  values are resolved against it. At describe time, when this option is set, describe
+  populates it with the bytes of every emitted regular-file record and sets each
+  record's `content_ref` to `sha256/<digest>`; when it is unset, describe is
+  read-only and leaves `content_ref` empty.
 - `keep-list` = path to the allowlist of persistent-but-undeclared paths that
   `describe-actual-state`, `compute-drift`, and `converge-files` must never
   report or delete (machine-id, SSH host keys, the systemd random seed). Used by
@@ -1678,9 +1747,16 @@ resolver fills in the transitive set.
   owning package and not collapsed with any target.
 - [observable] A ghost path (one the package reserves without shipping content,
   for example `%ghost`) is emitted when it currently has real on-disk content (a
-  fresh install would not reproduce that content), and is suppressed only when it
-  is empty on disk and its recorded baseline is also empty. A ghost is never
-  treated as pristine-by-digest against a shipped baseline.
+  ghost regular file) and is suppressed only when it is empty on disk and its
+  recorded baseline is also empty. A ghost is never pristine-by-digest.
+- [observable] When `content-store` is set, `describe` writes the bytes of every
+  emitted regular-file record into `<content-store>/sha256/<digest>` (deduplicated:
+  an already-present digest is not rewritten) and sets that record's `content_ref`
+  to `sha256/<digest>`, consistent with the record's `sha256`. Symlinks and
+  directories keep `content_ref` "". When `content-store` is unset, `describe` is
+  read-only and every `content_ref` is "". A regular file emitted but unreadable
+  follows `on_unreadable` (error, or warn with empty `content_ref` and a
+  diagnostic), never silent.
 - [observable] `package_name` in a config_files record is the bare package name
   (for example `openssh-server`), never the full name-version-release-arch
   identifier.
@@ -2090,6 +2166,57 @@ THEN:
     sha256 and package_name "pam-config"
   it is emitted because a fresh install ships no content for the ghost, so the
     462 bytes would not be reproduced and must be captured
+
+### EXAMPLE: describe_default_alternative_symlink_suppressed
+GIVEN:
+  /etc/alternatives/awk is a %ghost symlink maintained by the alternatives system
+  the alternatives database reports the auto/best provider for "awk" is
+    /usr/bin/gawk, and the on-disk link points at /usr/bin/gawk
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  /etc/alternatives/awk is suppressed (absent from config_files)
+  a fresh install plus scriptlets would recreate the link pointing at the auto/best
+    provider, so the current target is reproducible and carries no declarable intent
+
+### EXAMPLE: describe_manual_alternative_symlink_emitted
+GIVEN:
+  /etc/alternatives/awk is a %ghost symlink maintained by the alternatives system
+  the alternatives database reports the auto/best provider for "awk" is
+    /usr/bin/gawk, but the admin ran update-alternatives --set and the on-disk link
+    now points at /usr/bin/mawk
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  /etc/alternatives/awk is emitted as a type "link" record with target
+    "/usr/bin/mawk"
+  it is emitted because a fresh install would point the link at the auto/best
+    provider /usr/bin/gawk, not /usr/bin/mawk, so the manual selection is declarable
+    intent that would not be reproduced
+
+### EXAMPLE: describe_populates_content_store
+GIVEN:
+  /etc/ssh/sshd_config is a changed-from-package regular file with sha256 ABC...
+  invocation: zypper declarative describe content-store=/var/lib/zypper-declarative/content
+WHEN:
+  describe runs
+THEN:
+  the bytes of /etc/ssh/sshd_config are written to
+    /var/lib/zypper-declarative/content/sha256/ABC...
+  the emitted record has content_ref "sha256/ABC..." matching its sha256 "ABC..."
+  a second describe with the same content store does not rewrite the existing blob
+
+### EXAMPLE: describe_without_content_store_is_readonly
+GIVEN:
+  /etc/ssh/sshd_config is a changed-from-package regular file
+  invocation: zypper declarative describe
+WHEN:
+  describe runs
+THEN:
+  no content store is written
+  the emitted record has content_ref ""
 
 ### EXAMPLE: describe_empty_ghost_suppressed
 GIVEN:

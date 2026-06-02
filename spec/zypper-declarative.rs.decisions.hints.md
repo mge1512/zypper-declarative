@@ -171,17 +171,32 @@ spec's examples are the shared target and the three-way diff is the check.)
   "deleted"); the Go sibling left these null in its first verdict-parse build, do
   not repeat that. No digest map,
   no algorithm handling, no per-path join.
-- `[spec]` CONTENT-BEARING GHOSTS (the one case `rpm -V` skips): enumerate
+- `[spec]` GHOST REGULAR FILES (the one case `rpm -V` skips): enumerate
   ghost-flagged `/etc` paths (`rpm -qf --queryformat '[%{FILENAMES} %{FILEFLAGS}\n]'`
-  or scan owning packages' file lists for FILEFLAGS bit 64). For each ghost path
-  with real on-disk content, EMIT type "file" with real sha256 (e.g.
-  `/etc/pam.d/common-auth-pc`); an empty ghost is suppressed. A small pass over the
-  few ghost paths, not a walk of all `/etc`.
+  or scan owning packages' file lists for FILEFLAGS bit 64). For each ghost REGULAR
+  FILE with real on-disk content, EMIT type "file" with real sha256 (e.g.
+  `/etc/pam.d/common-auth-pc`); an empty ghost file is suppressed. Small pass over
+  the few ghost paths, not a walk of all `/etc`.
+- `[spec]` GHOST SYMLINKS (the `/etc/alternatives/*` case): "has content" is NOT the
+  test (every symlink has a target); the test is whether the on-disk target equals
+  the target a fresh install would establish, for alternatives the auto/best
+  provider. Query `update-alternatives --query <name>` (or read
+  `/var/lib/alternatives/<name>`): target EQUALS auto/best -> SUPPRESS (drops most of
+  `/etc/alternatives/*`); DIFFERS (a manual `--set`) -> EMIT as type "link" with the
+  verbatim target. If the alternatives DB cannot be consulted, treat under
+  `on_unreadable`, do NOT blanket-emit or blanket-suppress.
 - `[spec]` UNPACKAGED files: an `/etc` path no package owns is emitted; find these
   by walking `/etc` and subtracting the rpm-owned path set. Do not mark a file
   unpackaged because a lookup was skipped.
 - `[spec]` Exclusions: drop the keep-list and `/etc/etc.syncpoint`; stay bounded to
-  `/etc`. `content_ref` is empty in actual state.
+  `/etc`.
+- `[spec]` CONTENT STORE: by default describe is read-only and every `content_ref`
+  is "". When `content-store` gives a base path, for each EMITTED regular-file record
+  write its bytes to `<content-store>/sha256/<digest>` (idempotent, dedup by content)
+  and set `content_ref` to `sha256/<digest>` (same digest as the record's `sha256`).
+  Symlinks/dirs keep `content_ref` "". A regular file emitted but unreadable follows
+  `on_unreadable` (error, or under warn emit with `content_ref` "" plus a
+  diagnostic), never silent. Reference content, never inline it.
 - `[spec]` `created_at` is a real RFC3339 timestamp (a properly converted
   `SystemTime::now()`; the first build emitted `1970-01-01T00:00:36Z`),
   informational and excluded from comparison and the hash, but correct.
@@ -251,6 +266,12 @@ spec's examples are the shared target and the three-way diff is the check.)
 
 ## Changelog
 
+- 2026-06-02: Tracks spec v0.6.6. Split ghost handling into ghost FILES (emit if
+  on-disk content) and ghost SYMLINKS (`/etc/alternatives/*`: suppress when the link
+  equals the alternatives auto/best target via `update-alternatives --query`, emit a
+  manually-set link). Added content-store population: when `content-store` is set,
+  describe writes emitted regular-file bytes content-addressed by sha256 and sets
+  `content_ref`; read-only otherwise.
 - 2026-06-01: Switched config_files from a self-built recorded-baseline map to
   `rpm -V` verdict-parsing, the method the sister tool sitar uses (working Go and
   Rust) and which converges; the self-built join failed repeatedly in the Go
