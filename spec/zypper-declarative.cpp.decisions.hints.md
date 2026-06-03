@@ -445,6 +445,12 @@ and the code must not assume one version's API.
   are black-box assertions; the symlink and fifo cases are constructible under a
   synthetic root without root privilege, cover them rather than leaving them
   code-review-only.
+- `[pcd]` The test harness's command-runner contract (hermetic per-invocation temp
+  files or concurrently-drained pipes, never shared `/tmp/out`/`/tmp/err`, never
+  `std::system`/shell, run as the build user without sudo) is generic and is
+  specified in the cli-tool milestones scaffold; follow it. The project-specific
+  part is that this tool's live-reading verbs take `on-unreadable=warn` in tests
+  (below) so a protected root-only source never aborts a test.
 - `[spec]` Required self-checks (black-box, against the build host's real rpmdb). Run
   with the binary invoked as the build user, NOT via `sudo` and NOT assuming root:
   run `describe` with `on-unreadable=warn` so a protected root-only file (e.g.

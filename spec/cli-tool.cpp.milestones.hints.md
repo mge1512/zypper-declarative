@@ -47,29 +47,69 @@ Minimal `CMakeLists.txt` shape:
 
 ```cmake
 cmake_minimum_required(VERSION 3.20)   # 3.28 on SLE 15 SP7, 3.31 on SLE 16; 3.20 is a safe floor
-project(zypper-declarative CXX)
+project(<tool> CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Dependencies are DYNAMICALLY linked distro libraries (see component hints).
+# Dependencies are DYNAMICALLY linked distro libraries (see the project decisions file).
 find_package(PkgConfig REQUIRED)
-# Prefer pkg_check_modules(... REQUIRED IMPORTED_TARGET ...) for the distro libs
-# (libzypp, jsoncpp, yaml-cpp): their CMake configs are fragile across service packs
-# (some are Meson-generated and omit the package-config helper), whereas the .pc
-# files are stable on both SPs. See the component decisions file.
+# Prefer pkg_check_modules(... REQUIRED IMPORTED_TARGET ...) for the distro libs:
+# their CMake configs can be fragile across service packs (some are Meson-generated
+# and omit the package-config helper), whereas the .pc files are stable. The project
+# decisions file names the specific libraries and the exact modules to request.
 
-add_executable(zypper-declarative
+add_executable(<tool>
   src/main.cpp src/cli.cpp src/command_runner.cpp
   # ... one .cpp per behaviour group
 )
-target_include_directories(zypper-declarative PRIVATE src include)
-# target_link_libraries(zypper-declarative PRIVATE ...) per component hints.
+target_include_directories(<tool> PRIVATE src include)
+# target_link_libraries(<tool> PRIVATE ...) per component hints.
 
 include(GNUInstallDirs)
-install(TARGETS zypper-declarative RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS <tool> RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 ```
+
+A thin top-level `Makefile` wraps CMake and provides the conventional targets. It is
+REQUIRED (not optional) and MUST define at least these phony targets: `build`
+(configure + `cmake --build`, then copy the binary to the project root), `test`
+(build, then compile and run the black-box tests), `man` (render the man page),
+`clean`, and `dist`. The `dist` target is REQUIRED and produces the release source
+tarball: `<tool>-$(VERSION).tar.gz` containing a single top-level
+directory `<tool>-$(VERSION)/`, where `$(VERSION)` is read from the
+top-level `VERSION` file (so it is identical to the RPM spec `Version:` and the
+embedded binary version), and build artefacts (`build/`, VCS dirs) are excluded.
+`dist` is the conventional name (autotools heritage) and is used deliberately
+instead of `package`, which collides with CMake CPack's own `package` target. Shape:
+
+```make
+VERSION := $(shell cat VERSION)
+NAME    := <tool>
+CXX     ?= g++-15
+
+.PHONY: build test man clean dist
+
+build:
+	cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=$(CXX)
+	cmake --build build -j
+	cp -f build/$(NAME) ./$(NAME)
+
+dist:
+	rm -rf $(NAME)-$(VERSION)
+	mkdir -p $(NAME)-$(VERSION)
+	# copy sources, CMakeLists.txt, Makefile, VERSION, LICENSE, README,
+	# man source, packaging, tests; exclude build/ and VCS dirs
+	git archive --format=tar --prefix=$(NAME)-$(VERSION)/ HEAD 2>/dev/null | tar -x \
+	  || cp -a --parents $$(git ls-files 2>/dev/null || echo .) $(NAME)-$(VERSION)/
+	tar czf $(NAME)-$(VERSION).tar.gz $(NAME)-$(VERSION)
+	rm -rf $(NAME)-$(VERSION)
+```
+
+The exact recipe may differ (a non-git file list is fine), but the OUTPUT contract
+is fixed: a `$(NAME)-$(VERSION).tar.gz` whose sole top-level entry is
+`$(NAME)-$(VERSION)/`, version sourced from the `VERSION` file, so `rpmbuild`'s
+default `%setup`/`%autosetup` (which cd's into `%{name}-%{version}/`) succeeds.
 
 ---
 
@@ -93,13 +133,11 @@ gcc15-c++` and build with g++-15; on SLE 16, the default toolchain suffices.
 
 This C++ tool links its dependencies DYNAMICALLY against the distribution's
 supported shared libraries. Do not attempt a static binary, and do not vendor or
-pin the dependencies: building against each service pack's own libzypp, libsnapper,
-jsoncpp, and yaml-cpp via OBS is the supply-chain-correct approach, and static
-linking would force vendoring (a liability under a signed-supply-chain posture).
-The per-SP package then links the right soname.
-
-(This is the deliberate difference from the Go sibling, which builds a single
-static `CGO_ENABLED=0` binary. C++ here is dynamic by design.)
+pin the dependencies: building against each service pack's own shared libraries via
+OBS is the supply-chain-correct approach, and static linking would force vendoring
+(a liability under a signed-supply-chain posture). The per-SP package then links the
+right soname. The project decisions file lists the specific libraries this tool
+links and any per-SP soname or API differences among them.
 
 ---
 
@@ -125,7 +163,7 @@ Every stub must:
 
    ```cpp
    inline void debug_log(const std::string& msg) {
-       const char* d = std::getenv("ZYPPER_DECLARATIVE_DEBUG");
+       const char* d = std::getenv("<TOOL>_DEBUG");
        if (d && std::string(d) == "1")
            std::cerr << "DEBUG: " << msg << "\n";
    }
@@ -175,8 +213,10 @@ not failure.
 
 ## Data-model types and the ScopeWrapper pattern
 
-Model the spec's data model as plain structs. The `_attributes`/`_elements`
-Machinery idiom maps to a templated wrapper:
+Model the spec's data model as plain structs. A spec that uses an
+attributes-plus-elements wrapper for each scope (an `_attributes` map and an
+`_elements` list, with underscore_style serialised keys) maps to a templated
+wrapper:
 
 ```cpp
 template <class T>
@@ -219,6 +259,34 @@ public:
 
 The black-box acceptance tests (tests/) invoke the built binary itself and assert
 on stdout, stderr, and exit code; they do not link the internals.
+
+The test harness's OWN command-runner (the helper the black-box tests use to launch
+the binary and capture its output) MUST be hermetic and robust; this is a required
+contract, not left to the author's discretion, because a shortcut here is unsafe:
+- Capture stdout and stderr PER INVOCATION into unique temporary files (`mkstemp`)
+  or a per-test temporary directory, and clean them up. NEVER write to shared fixed
+  paths such as `/tmp/out` and `/tmp/err`: shared paths race and cross-contaminate
+  across tests, break re-runs, and make the suite non-parallelizable and
+  non-hermetic.
+- Do NOT launch the binary through a shell (`std::system`/`popen` with a command
+  string): that exposes a shell-quoting and injection surface for any argument
+  containing spaces or special characters. Use `posix_spawn`, or `fork`+`execvp`
+  with an argv vector, passing arguments as a vector, not a concatenated string.
+- If capturing via pipes rather than temp files, drain stdout AND stderr
+  CONCURRENTLY (poll/select or two threads); a sequential read of one then the other
+  deadlocks when the binary fills the other pipe's buffer (a real failure mode on a
+  large output from the launched binary). Temp files avoid this deadlock and are the
+  simpler
+  choice; either is acceptable as long as it is per-invocation and shell-free.
+- Run the binary as the build user, never via `sudo`; an interactive sudo prompt
+  hangs the suite. If the tool reads privileged system state, a test should use the
+  tool's own non-fatal mode for unreadable sources where one exists (the project
+  decisions file gives the specific option), so a protected root-only source does
+  not abort a test.
+
+A "simplified" command-runner that uses `std::system` with shared `/tmp/out` and
+`/tmp/err` is NOT acceptable even though it compiles; it is the exact shortcut to
+avoid.
 
 ---
 
@@ -284,12 +352,12 @@ implements that operation.
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-file build/zypper-declarative          # an ELF dynamically linked executable
-ldd build/zypper-declarative           # shows libzypp, libsnapper, etc. (dynamic)
-./build/zypper-declarative version     # prints version + spec hash, exit 0
-./build/zypper-declarative help        # prints usage, exit 0
-./build/zypper-declarative --version   # tolerated alias, identical output, exit 0
-./build/zypper-declarative format=bad_value ; test $? -eq 2   # invocation error
+file build/<tool>          # an ELF dynamically linked executable
+ldd build/<tool>           # shows the project's linked distro shared libs (dynamic)
+./build/<tool> version     # prints version + spec hash, exit 0
+./build/<tool> help        # prints usage, exit 0
+./build/<tool> --version   # tolerated alias, identical output, exit 0
+./build/<tool> <bad-option> ; test $? -eq 2   # invocation error (exit 2)
 ```
 
 Note the gate uses bare-word `version` and `help` (the canonical global commands),
@@ -297,12 +365,11 @@ with `--version` accepted as a tolerated alias. There is no static-binary check
 here (this build is dynamic by design); instead confirm with `ldd` that the
 expected shared libraries are linked.
 
-Only operations that MUTATE the system or genuinely require root to run (real
-snapshot creation and the apply/transaction path) are deferred to on-target human
-verification. Read-only system queries are NOT deferred: they run during
-translation and their behaviour is verified there. In particular a read-only
-package-database query (whether via a linked library such as libzypp or via an
-`rpm -q`-class command) is exercised at translation time against the build host's
+Only operations that MUTATE the system or genuinely require root to run are
+deferred to on-target human verification. Read-only system queries are NOT
+deferred: they run during translation and their behaviour is verified there. In
+particular a read-only system-database query (whether via a linked library or via a
+command-line query tool) is exercised at translation time against the build host's
 real database; do not defer it, and do not treat an empty result from a query you
 chose not to run as a real absence of data. Only the unprivileged paths above plus
 these read-only queries are verifiable during translation; the mutating paths defer.
