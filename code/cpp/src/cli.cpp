@@ -1,132 +1,111 @@
 // generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 #include "cli.hpp"
-
-#include <iostream>
-#include <set>
-#include <sstream>
-
-#include "commands.hpp"
+#include "config.hpp"
+#include "verbs.hpp"
+#include "command_runner.hpp"
 #include "meta.hpp"
+
+#include <set>
 
 namespace zd {
 
-std::string version_text() {
-    std::ostringstream o;
-    o << kProgramName << " " << kVersion << " spec:" << kSpecSha256 << "\n";
-    return o.str();
+void print_version(std::ostream& os) {
+    os << "zypper-declarative " << ZD_VERSION << " spec:" << ZD_SPEC_SHA256 << "\n";
 }
 
-std::string usage_text() {
-    std::ostringstream o;
-    o << "usage: zypper-declarative <verb> [key=value ...]\n"
-      << "\n"
-      << "verbs:\n"
-      << "  apply      converge the system to the desired manifest\n"
-      << "  diff       print what apply would change (dry run)\n"
-      << "  verify     check the actual state against a reference\n"
-      << "  status     print the current declarative state\n"
-      << "  describe   emit the actual state as a manifest\n"
-      << "  init       adopt the current state as the managed baseline\n"
-      << "  version    print version and spec hash\n"
-      << "  help       print this usage\n"
-      << "\n"
-      << "options (key=value; precede or follow the verb):\n"
-      << "  mode=auto|external|internal     transaction binding (default auto)\n"
-      << "  manifest-path=<path>            desired/reference manifest\n"
-      << "  state-path=<path>               captured actual state (verify, diff)\n"
-      << "  format=json|yaml                serialisation for this invocation\n"
-      << "  root=<path>                     root to describe (default /)\n"
-      << "  out=<path>                      describe output file (default stdout)\n"
-      << "  on-unreadable=error|warn        describe unreadable-source handling\n"
-      << "  scope=etc|full                  describe/verify read scope\n";
-    return o.str();
+void print_usage(std::ostream& os) {
+    os << "usage: zypper-declarative <verb> [key=value ...]\n"
+       << "       (or: zypper declarative <verb> [key=value ...])\n"
+       << "\n"
+       << "verbs:\n"
+       << "  apply      converge the system to the desired manifest in a snapshot\n"
+       << "  diff       dry run: print what apply would change\n"
+       << "  verify     check the actual state against a reference declaration\n"
+       << "  status     print the current declarative state\n"
+       << "  describe   read the actual state and emit it as a manifest\n"
+       << "  init       adopt the current state as the managed baseline\n"
+       << "  version    print version and embedded spec hash\n"
+       << "  help       print this usage\n"
+       << "\n"
+       << "options (key=value, any position):\n"
+       << "  mode=auto|external|internal      transaction binding\n"
+       << "  manifest-path=<path>             desired/reference manifest\n"
+       << "  state-path=<path>                captured actual state (offline)\n"
+       << "  format=json|yaml                 serialisation for this invocation\n"
+       << "  root=<path>                      describe root (default /)\n"
+       << "  out=<path>                       describe/init output file\n"
+       << "  on-unreadable=error|warn         unreadable-source handling\n"
+       << "  scope=etc|full                   describe/verify read scope\n"
+       << "  content-store=<path>             content store base path\n"
+       << "  keep-list=<path>                 allowlist of undeclared paths\n"
+       << "  applied-root=<path>              generation root for the applied record\n"
+       << "\n"
+       << "exit codes: 0 success  1 logical failure  2 invocation error\n";
 }
 
-int run_cli(const std::vector<std::string>& args, const CommandRunner& runner) {
-    // Separate bare words (verbs / global commands) from key=value options.
-    Invocation inv;
-    std::vector<std::string> bare;
-    bool unknown_option_form = false;
-    std::string offending;
+int dispatch(const std::vector<std::string>& argv, std::ostream& out, std::ostream& err) {
+    ParsedArgs parsed = parse_args(argv);
 
-    for (const auto& a : args) {
-        auto eq = a.find('=');
-        if (eq != std::string::npos && eq > 0 && a[0] != '-') {
-            inv.options[a.substr(0, eq)] = a.substr(eq + 1);
-        } else if (a == "--version" || a == "--help" || a == "-h") {
-            bare.push_back(a);  // tolerated global aliases
-        } else if (!a.empty() && a[0] == '-') {
-            // POSIX --flag style is not used for options.
-            unknown_option_form = true;
-            offending = a;
-        } else {
-            bare.push_back(a);
-        }
-    }
+    // version/help global commands win (handled by the dispatcher).
+    if (parsed.version) { print_version(out); return 0; }
+    if (parsed.help) { print_usage(out); return 0; }
 
-    // Global commands first (handled by the dispatcher, not behaviours).
-    for (const auto& b : bare) {
-        if (b == "version" || b == "--version") {
-            std::cout << version_text();
-            return 0;
-        }
-        if (b == "help" || b == "--help" || b == "-h") {
-            std::cout << usage_text();
-            return 0;
-        }
-    }
-
-    // Bare invocation (no verb at all): print usage to stdout, exit 0.
-    if (bare.empty() && inv.options.empty()) {
-        std::cout << usage_text();
-        return 0;
-    }
-
-    // An unknown option-form flag (POSIX --flag style for a non-global option)
-    // is an invocation error.
-    if (unknown_option_form && bare.empty()) {
-        std::cerr << "error: invocation: unrecognised argument " << offending << "\n";
-        std::cerr << usage_text();
+    if (!parsed.ok) {
+        print_usage(err);
+        err << "error: domain=invocation: " << parsed.error << "\n";
         return 2;
     }
 
-    // The first bare word is the verb.
-    if (bare.empty()) {
-        // Only options given but no verb -> invocation error unless it's a help
-        // discovery. A bad format value (e.g. `format=bad`) reaches a verb only
-        // when a verb is present; with no verb we validate the option globally.
-        // Validate any format= value here so `format=bad_value` -> exit 2.
-        auto it = inv.options.find("format");
-        if (it != inv.options.end() && it->second != "json" && it->second != "yaml") {
-            std::cerr << usage_text();
+    // Bare invocation (no verb): print usage to stdout, exit 0. But an invalid
+    // option value (e.g. format=bad_value) is still an invocation error even
+    // without a verb, so option values are validated first.
+    {
+        std::string cfgerr0;
+        auto cfg0 = build_config(parsed, cfgerr0);
+        if (!cfg0) {
+            print_usage(err);
+            err << "error: domain=invocation: " << cfgerr0 << "\n";
             return 2;
         }
-        // No verb: treat as discovery, print usage to stdout, exit 0.
-        std::cout << usage_text();
+    }
+
+    if (parsed.verb.empty()) {
+        print_usage(out);
         return 0;
     }
 
-    inv.verb = bare.front();
-    if (bare.size() > 1) {
-        // Extra bare words are not expected for any verb (verbs take key=value).
-        std::cerr << usage_text();
+    const std::set<std::string> verbs = {"apply", "diff", "verify", "status", "describe", "init"};
+    if (verbs.find(parsed.verb) == verbs.end()) {
+        print_usage(err);
+        err << "error: domain=invocation: unknown verb '" << parsed.verb << "'\n";
         return 2;
     }
 
-    if (unknown_option_form) {
-        std::cerr << usage_text();
+    // scope is accepted only on describe and verify.
+    if (parsed.options.count("scope") && parsed.verb != "describe" && parsed.verb != "verify") {
+        print_usage(err);
+        err << "error: domain=invocation: option 'scope' is not accepted for verb '"
+            << parsed.verb << "'\n";
         return 2;
     }
 
-    if (inv.verb == "apply")    return cmd_apply(inv, runner);
-    if (inv.verb == "diff")     return cmd_diff(inv, runner);
-    if (inv.verb == "verify")   return cmd_verify(inv, runner);
-    if (inv.verb == "status")   return cmd_status(inv, runner);
-    if (inv.verb == "describe") return cmd_describe(inv, runner);
-    if (inv.verb == "init")     return cmd_init(inv, runner);
+    std::string cfgerr;
+    auto cfg = build_config(parsed, cfgerr);
+    if (!cfg) {
+        print_usage(err);
+        err << "error: domain=invocation: " << cfgerr << "\n";
+        return 2;
+    }
 
-    // Unknown verb.
-    std::cerr << usage_text();
+    OSCommandRunner runner;
+    if (parsed.verb == "apply") return verb_apply(*cfg, runner, out, err);
+    if (parsed.verb == "diff") return verb_diff(*cfg, runner, out, err);
+    if (parsed.verb == "verify") return verb_verify(*cfg, runner, out, err);
+    if (parsed.verb == "status") return verb_status(*cfg, runner, out, err);
+    if (parsed.verb == "describe") return verb_describe(*cfg, runner, out, err);
+    if (parsed.verb == "init") return verb_init(*cfg, runner, out, err);
+
+    print_usage(err);
     return 2;
 }
 

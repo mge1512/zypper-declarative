@@ -1,16 +1,9 @@
 // generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
-//
-// OSCommandRunner: executes an external command via fork/execvp with separate
-// stdout/stderr capture and a clean exit status. Used for the few operations
-// that have no in-process library API (offline systemctl enablement, the
-// alternatives database query). A non-zero exit is returned in `code`, not
-// thrown, because some tools report "differences found" with a non-zero exit
-// that the caller must interpret as data, not failure.
-#ifndef ZD_COMMAND_RUNNER_HPP
-#define ZD_COMMAND_RUNNER_HPP
+#pragma once
 
 #include <string>
 #include <vector>
+#include <map>
 
 namespace zd {
 
@@ -18,9 +11,9 @@ struct CommandResult {
     std::string out;
     std::string err;
     int code = 0;
-    bool spawn_failed = false;  // true if the binary could not be executed
 };
 
+// Abstract command runner seam (INTERFACES: a runtime command surface).
 class CommandRunner {
 public:
     virtual ~CommandRunner() = default;
@@ -28,12 +21,22 @@ public:
                               const std::vector<std::string>& args) const = 0;
 };
 
+// Production runner: fork/execvp with separate stdout/stderr pipes, fixed PATH
+// in the child, no shell. A non-zero exit is returned in `code`, never thrown
+// (some tools report "differences found" with a non-zero exit that the caller
+// must interpret as data, not failure).
 class OSCommandRunner : public CommandRunner {
 public:
     CommandResult run(const std::string& cmd,
                       const std::vector<std::string>& args) const override;
 };
 
-}  // namespace zd
+// Test double for unit tests; not used by the production code paths.
+class FakeCommandRunner : public CommandRunner {
+public:
+    std::map<std::string, CommandResult> responses;
+    CommandResult run(const std::string& cmd,
+                      const std::vector<std::string>&) const override;
+};
 
-#endif  // ZD_COMMAND_RUNNER_HPP
+}  // namespace zd

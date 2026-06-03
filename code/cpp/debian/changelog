@@ -1,18 +1,6 @@
 zypper-declarative (0.6.9-1) unstable; urgency=medium
 
-  * Generated from spec zypper-declarative.spec.md v0.6.9
-    (sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3).
-  * Symlink mechanism classified before judging: only true alternatives links
-    (under /etc/alternatives/ or known in /var/lib/alternatives) consult the
-    alternatives database; crypto-policies/motd.d/issue.d links use the normal
-    target rule (v0.6.9 bug fix).
-  * init forces on_unreadable=warn for its internal live read (v0.6.9 change).
+  * C++17 implementation tracking zypper-declarative.spec.md v0.6.9
+    (spec sha256 aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3).
 
- -- Matthias G. Eckermann <pcd@mailbox.org>  Tue, 02 Jun 2026 21:00:00 +0000
-
-zypper-declarative (0.6.8-1) unstable; urgency=medium
-
-  * Generated from spec zypper-declarative.spec.md v0.6.8.
-  * on_unreadable knob now honored on diff, verify, and apply (v0.6.8 change).
-
- -- Matthias G. Eckermann <pcd@mailbox.org>  Tue, 02 Jun 2026 20:00:00 +0000
+ -- Matthias G. Eckermann <pcd@mailbox.org>  Wed, 03 Jun 2026 16:00:00 +0000

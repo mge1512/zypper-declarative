@@ -1,21 +1,16 @@
-# translation-workflow.pikchr
 # generated from spec: zypper-declarative.spec.md sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
-#
-# Pikchr diagram of the zypper-declarative C++ translation workflow:
-# spec + template + hints -> tests-first -> implementation -> compile gate
-# -> packaging -> report.
+# Translation workflow for the C++ implementation of zypper-declarative.
+# Renderable with pikchr (https://pikchr.org).
 
-down
-box "spec v0.6.9" "+ cli-tool template" "+ C++ hints" fit fill 0xeef
-arrow
-box "Phase 1" "Tests First" "(independent_tests/" "claude-opus-4-8/)" fit fill 0xefe
-arrow
-box "Phase 2" "Core impl" "(src/*.cpp, *.hpp," "CMakeLists.txt)" fit fill 0xefe
-arrow
-box "Phase 3" "Packaging" "(Makefile, .spec," "debian/, LICENSE)" fit fill 0xfee
-arrow
-box "Phase 5" "Docs" "(README.md," "man page)" fit fill 0xfee
-arrow
-box "Phase 6" "Compile gate" "cmake build +" "make test (36/36)" fit fill 0xffe
-arrow
-box "Phase 7" "TRANSLATION_" "REPORT.md" fit fill 0xeef
+arrow right 200% "spec" "(v0.6.9)" above
+box "merge spec" "(no includes)" fit
+arrow right 200% "merged" above
+box "Tests First" "independent_tests/" "claude-opus-4-8/" fit
+arrow right 200% "tests pass" above
+box "implementation" "src/*.cpp" "CMake + libzypp" fit
+arrow right 200% "make build" above
+box "compile gate" "make test" "(53 translator," "62 author pass)" fit
+arrow right 200% "verified" above
+box "packaging" "RPM / DEB" "Makefile / man" fit
+arrow down 150% from last box.s
+box "TRANSLATION_REPORT.md" "(written last)" fit

@@ -3,27 +3,25 @@ Section: admin
 Priority: optional
 Maintainer: Matthias G. Eckermann <pcd@mailbox.org>
 Build-Depends: debhelper-compat (= 13),
- cmake (>= 3.20),
- pkg-config,
- pandoc,
- g++,
- libzypp-devel,
- libsnapper-dev,
- libjsoncpp-dev,
- libyaml-cpp-dev,
- libssl-dev
+               cmake,
+               pkg-config,
+               g++,
+               pandoc,
+               libzypp-devel,
+               libsnapper-devel,
+               libjsoncpp-dev,
+               libyaml-cpp-dev,
+               libssl-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/mge1512/zypper-declarative
 X-PCD-Spec-SHA256: aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 
 Package: zypper-declarative
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, zypper
 Description: Declarative convergence of SUSE system state in a snapshot transaction
- zypper-declarative converges a SUSE system to a declarative manifest
- describing the declarable subset of the SUSE Machinery system description
- (packages, repositories, services, and /etc config files), inside a single
- snapshot transaction. The manifest is JSON (Machinery format_version 1) by
- default, with YAML as an opt-in serialisation. It reads the live system into
- the same model itself, so no separate collector is required, and is surfaced
- as a zypper subcommand as well as invokable directly.
+ zypper-declarative converges the declarable subset of a SUSE Machinery system
+ description (packages, repositories, services, config_files) to a desired
+ manifest inside a single snapshot transaction, recording what was applied.
+ It links libzypp, libsnapper, jsoncpp, yaml-cpp and libcrypto dynamically and
+ is surfaced as a zypper subcommand.

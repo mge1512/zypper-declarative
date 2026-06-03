@@ -1,15 +1,11 @@
 # pcd-spec-sha256: aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 #
-# RPM spec for zypper-declarative. OBS build target (build.opensuse.org).
-# C++17, built with CMake, dynamically linked against the distribution's
-# libzypp / libsnapper / jsoncpp / yaml-cpp / libcrypto. No curl-based install.
-#
-# Per-SP compiler note: on SLE 15 SP7 the default g++ is GCC 7 (too old for
-# C++17); BuildRequires gcc15-c++ and build with g++-15. On SLE 16.0 the
-# default toolchain is GCC 15 and no special selection is needed.
+# OBS RPM spec for zypper-declarative (C++ implementation, dynamically linked).
+# On SLE 15 SP7 build with gcc15-c++ (the default gcc-c++ is GCC 7, too old for
+# C++17); on SLE 16.0 the default toolchain (GCC 15) suffices.
 
 Name:           zypper-declarative
-Version:        %(cat %{_sourcedir}/VERSION 2>/dev/null || echo 0.6.9)
+Version:        %(cat %{_sourcedir}/VERSION)
 Release:        0
 Summary:        Declarative convergence of SUSE system state in a snapshot transaction
 License:        GPL-2.0-or-later
@@ -17,67 +13,56 @@ Group:          System/Management
 URL:            https://github.com/mge1512/zypper-declarative
 Source0:        %{name}-%{version}.tar.gz
 
-BuildRequires:  cmake >= 3.20
+BuildRequires:  cmake
 BuildRequires:  pkgconfig
 BuildRequires:  pandoc
-# C++17 toolchain. On SLE 15 SP7 use the side-by-side GCC 15:
 %if 0%{?sle_version} && 0%{?sle_version} < 160000
 BuildRequires:  gcc15-c++
 %else
 BuildRequires:  gcc-c++
 %endif
-# Dynamically linked distribution libraries (devel packages).
 BuildRequires:  libzypp-devel
 BuildRequires:  libsnapper-devel
 BuildRequires:  jsoncpp-devel
-BuildRequires:  libyaml-cpp-devel
+BuildRequires:  yaml-cpp-devel
 BuildRequires:  libopenssl-3-devel
 
+# Runtime: dynamic dependencies are resolved automatically by the linker; the
+# tool is surfaced as a zypper subcommand and requires zypper at runtime.
+Requires:       zypper
+
 %description
-zypper-declarative converges a SUSE system to a declarative manifest describing
-the declarable subset of the SUSE Machinery system description (packages,
-repositories, services, and /etc config files), inside a single snapshot
-transaction. The manifest is JSON (Machinery format_version 1) by default, with
-YAML as an opt-in serialisation. It reads the live system into the same model
-itself, so no separate collector is required. It is surfaced as a zypper
-subcommand and is also invokable directly.
+zypper-declarative converges the declarable subset of a SUSE Machinery system
+description (packages, repositories, services, config_files) to a desired
+manifest inside a single snapshot transaction, recording what was applied.
+It links libzypp, libsnapper, jsoncpp, yaml-cpp and libcrypto dynamically and
+is surfaced as a zypper subcommand.
 
 %prep
-%autosetup
+%autosetup -n %{name}-%{version}
 
 %build
 %if 0%{?sle_version} && 0%{?sle_version} < 160000
 export CXX=g++-15
 %endif
 cmake -S . -B build \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=%{_prefix} \
-    %{?with_g15:-DCMAKE_CXX_COMPILER=g++-15}
-cmake --build build -j%{?_smp_build_ncpus}
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=%{_prefix}
+cmake --build build %{?_smp_mflags}
 pandoc %{name}.1.md -s -t man -o %{name}.1
 
 %install
-install -D -m 0755 build/%{name} %{buildroot}%{_bindir}/%{name}
-# zypper subcommand discovery directory
-install -D -m 0755 build/%{name} %{buildroot}%{_prefix}/lib/zypper/commands/%{name}
-install -D -m 0644 %{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
+install -D -m0755 build/%{name} %{buildroot}%{_prefix}/lib/zypper/commands/%{name}
+install -D -m0644 %{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
 
 %files
 %license LICENSE
 %doc README.md
-%{_bindir}/%{name}
+# /usr/lib/zypper and /usr/lib/zypper/commands are owned by the zypper package
+# (Requires: zypper), so they are not claimed here to avoid duplicate ownership.
 %{_prefix}/lib/zypper/commands/%{name}
 %{_mandir}/man1/%{name}.1*
 
 %changelog
-* Tue Jun 02 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.9-0
-- Generated from spec zypper-declarative.spec.md v0.6.9
-  (sha256:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3).
-- Symlink mechanism classified before judging: only true alternatives links
-  (under /etc/alternatives/ or known in /var/lib/alternatives) consult the
-  alternatives DB; crypto-policies/motd.d/issue.d links use the normal target
-  rule (v0.6.9 bug fix).
-- init forces on_unreadable=warn for its internal live read (v0.6.9).
-* Tue Jun 02 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.8-0
-- Generated from spec zypper-declarative.spec.md v0.6.8.
-- on_unreadable knob now honored on diff, verify, and apply (v0.6.8).
+* Wed Jun 03 2026 Matthias G. Eckermann <pcd@mailbox.org> - 0.6.9
+- C++17 implementation tracking zypper-declarative.spec.md v0.6.9.
