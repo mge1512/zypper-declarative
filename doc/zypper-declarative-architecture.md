@@ -3,8 +3,9 @@
 **Status:** Working architecture document (POC scoping)
 **Date:** 2026-05-29
 **Author:** Matthias G. Eckermann
-**Substrate:** SL Micro 6.2 / SLES 16.1
-**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.5)
+**Substrate:** SL Micro 6.x / SLES 16.x (also builds on SLES 15 SP7)
+**Companion artifact:** `zypper-declarative.spec.md` (PCD specification, cli-tool deployment, v0.6.9)
+**Implementations:** three independent generations from the one specification (C++, Go, Rust)
 **Manifest format:** SUSE Machinery system description (`format_version` 1), declarable subset; JSON canonical, YAML optional
 
 ---
@@ -560,6 +561,18 @@ objective.
 ---
 
 ## Changelog
+
+- 2026-06-03: Aligned with `zypper-declarative.spec.md` v0.6.9. No structural
+  change to the architecture. Updates: substrate stated as SL Micro 6.x / SLES 16.x
+  (the work now centres 16.0/16.1, with SLES 15 SP7 as an additional build target);
+  recorded that the specification is generated independently into three languages
+  (C++, Go, Rust) and that their agreement on a host is the correctness check.
+  Specification developments since v0.6.5 that this document's model already
+  accommodates: the `init` onboarding verb (adopt the current state as the baseline
+  inside a snapshot, converging nothing); `diff` computing drift against the desired
+  manifest (not the applied record); the `on-unreadable` knob exposed on all
+  live-reading verbs; symlink classification so only true alternatives consult the
+  alternatives database; and the content-store population path.
 
 - 2026-06-01: Aligned with `zypper-declarative.spec.md` v0.6.5. No structural
   change; the config_files emission test is now stated as a reproducibility

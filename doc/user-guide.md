@@ -1,6 +1,6 @@
 # zypper-declarative User Guide
 
-This guide is for operators and architects who want to put a SUSE SL Micro 6.2
+This guide is for operators and architects who want to put a SUSE SL Micro 6.x
 host under declarative management with `zypper-declarative`: how to get the tool
 and a first manifest onto a freshly provisioned machine, how to author a baseline
 from a running reference system, and how the pieces fit together. It is a
@@ -199,6 +199,23 @@ authoring the baseline.
 
 ### 3.1 Capture, edit, validate
 
+The quickest way to bring a hand-configured host under management is `init`, which
+does the capture and the baseline adoption in one step: it describes the host,
+opens a snapshot, writes the current state as the applied-record baseline (it reads
+with `on-unreadable=warn`, so a protected file never aborts onboarding), converges
+nothing, and writes the manifest for you to edit.
+
+```bash
+zypper declarative init out=baseline.json
+# the machine is now managed; baseline.json is the adopted state, ready to edit
+```
+
+After `init`, `diff` against that manifest is clean and `verify` matches; you then
+edit `baseline.json` into a statement of intent (below) and `apply` the edited
+version. If you prefer to author a baseline without yet adopting it (for example to
+build a manifest you will apply to *other* hosts), use `describe` instead of `init`
+and follow the same editing steps:
+
 1. Install SL Micro and configure it by hand to taste.
 
 2. Capture the current state:
@@ -355,6 +372,12 @@ tool and the same manifests work across both.
 
 ## Changelog
 
+- 2026-06-03: Aligned with `zypper-declarative.spec.md` v0.6.9. Added `init` as the
+  one-command onboarding path (describe + snapshot + adopt baseline, converging
+  nothing) in Section 3.1; noted that the live-reading verbs accept
+  `on-unreadable=error|warn` and that `init` forces `warn`; updated the substrate to
+  SL Micro 6.x / SLES 16.x. The two-diff model, manifest format, offline comparison,
+  and transaction-boundary mechanics are unchanged.
 - 2026-05-29: Initial user guide. Covers the goal, initiating an SL Micro host via
   a Combustion script (virtual and physical delivery), designing and validating a
   baseline (including the offline two-file comparison and why a raw describe dump

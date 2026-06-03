@@ -13,29 +13,32 @@ the SUSE Machinery system description.
 
 | | |
 |---|---|
-| Substrate | SL Micro 6.2++, SLES 16 (immutable and transactional, btrfs + snapper) |
+| Substrate | SL Micro 6.x, SLES 16.x (immutable and transactional, btrfs + snapper); also builds on SLES 15 SP7 |
 | Surface | `zypper declarative <verb>` (or `zypper-declarative <verb>`) |
 | Manifest | Machinery system description, declarable subset; JSON canonical, YAML optional |
 | Method | Post-Coding Development (spec-driven, generated implementation) |
+| Implementations | Three independent generations from one specification: C++, Go, Rust |
 | License | GPL-2.0-or-later |
-| Status | pre-1.0, specification-complete through v0.5.1; see Status below |
+| Status | pre-1.0; specification mature through v0.6.9; see Status below |
 
 ## Status
 
 This is early work and not production software. The specification is the mature
-artifact; the implementation is generated from it milestone by milestone (see
-Roadmap). The read-only foundation (the `describe`, `status`, `version`, and
-`help` commands, manifest loading, and the live-state reader) is the current
-focus. The convergence commands (`apply` and the package, file, and unit
-convergers) are milestone-gated and not all complete. Do not point it at a host
-you care about yet.
+artifact; the implementation is generated from it, milestone by milestone (see
+Roadmap), in three independent languages (C++, Go, Rust) from the one
+specification, their agreement is the correctness check. The read-only and
+onboarding foundation (`describe`, `init`, `diff`, `verify`, `status`, `version`,
+and `help`, manifest loading, the live-state reader, and the applied-record
+ledger) is verified. The convergence side of `apply` (the package, file, and unit
+convergers acting inside a live snapshot) is milestone-gated and exercised on a
+transactional target; do not point it at a host you care about yet.
 
 Every build embeds the SHA256 of the specification it was generated from, so you
 can always tell what a binary corresponds to:
 
 ```bash
 zypper declarative version
-# zypper-declarative 0.5.1 spec:<sha256-of-spec>
+# zypper-declarative 0.6.9 spec:aafbb3158415b5c82fe459a26d0d21cbd39a077f689d5fdfb998bf5f947350a3
 ```
 
 ## What it does
@@ -63,27 +66,31 @@ and package-owned files are never candidates.
 ## How it is built: Post-Coding Development
 
 This repository follows the Post-Coding Development paradigm (PCD, "Piccadilly").
-The source of truth is the specification, `zypper-declarative.spec.md`. The Go
-implementation is generated from that specification by a translator; humans do not
-hand-edit the generated code. When behaviour is wrong, the fix goes into the
-specification and the code is regenerated, never the other way round.
+The source of truth is the specification, `zypper-declarative.spec.md`. The
+implementations are generated from that specification by a translator; humans do
+not hand-edit the generated code. When behaviour is wrong, the fix goes into the
+specification (or the language-specific decisions-hints that guide regeneration)
+and the code is regenerated, never the other way round. The same specification is
+generated independently into three languages (C++, Go, Rust); the three agreeing
+on the same host is the project's correctness story, and a divergence between them
+has repeatedly located a genuine specification gap.
 
 That has two practical consequences for anyone reading this repository:
 
 - the specification, not the code, is the document to read to understand what the
   tool does and why;
 - contributions are proposed against the specification (see Contributing), and the
-  generated implementation is a build artifact.
+  generated implementations are build artifacts.
 
-The repository carries three companion documents:
+The repository carries these companion documents:
 
 - `zypper-declarative.spec.md` - the PCD specification (the source of truth).
 - `zypper-declarative-architecture.md` - the rationale and system context: the
   declarative ladder, the substrate, the two-diff model, the manifest format, the
   delivery paths, and the reproducibility stance.
-- `zypper-declarative.go.decisions.hints.md` - the language-specific
-  implementation decisions used to guide regeneration (disposable, not a spec
-  artifact).
+- `zypper-declarative.{cpp,go,rs}.decisions.hints.md` - the per-language
+  implementation decisions used to guide regeneration (disposable, not spec
+  artifacts).
 
 ## The manifest
 
@@ -185,7 +192,13 @@ zypper declarative version
 zypper declarative describe
 zypper declarative describe format=yaml out=/tmp/host.yaml
 
-# see what apply would change, without changing anything
+# onboard this machine in one command: describe it, open a snapshot, adopt the
+# current state as the managed baseline (the applied record), converge nothing,
+# and write the manifest for you to edit
+zypper declarative init out=/etc/zypper-declarative/desired.json
+
+# see what apply would change, without changing anything (drift is computed
+# against the desired manifest, so an unchanged machine shows none)
 zypper declarative diff manifest-path=/etc/zypper-declarative/desired.json
 
 # check whether the system still matches the recorded declaration
@@ -198,13 +211,19 @@ zypper declarative status
 zypper declarative apply manifest-path=/etc/zypper-declarative/desired.json
 ```
 
-The read-only verbs (`diff`, `verify`, `status`, `describe`) never modify the
-system. `apply` is the only privileged verb and is idempotent: re-running it
-against an unchanged manifest and an undrifted system makes no changes and creates
-no new snapshot.
+The read-only verbs (`describe`, `diff`, `verify`, `status`) never modify the
+system. `init` and `apply` open a snapshot: `init` adopts the current state as the
+baseline and converges nothing (it is how you onboard a machine; afterwards `diff`
+is clean and `verify` is meaningful), and `apply` is the only converging verb. Both
+are idempotent: re-running `apply` against an unchanged manifest and an undrifted
+system makes no changes and creates no new snapshot.
 
-A convenient way to start a manifest is to describe a hand-configured reference
-host and edit the result down:
+The live-reading verbs accept `on-unreadable=error|warn` (default `error`); pass
+`warn` to skip a protected, root-only source with a diagnostic instead of aborting.
+`init` always reads with `warn` so onboarding never fails on a protected file.
+
+A convenient way to start is `init` (which both adopts and writes the manifest), or
+to describe a hand-configured reference host and edit the result down:
 
 ```bash
 zypper declarative describe > base.json    # or: format=yaml > base.yaml
@@ -222,15 +241,29 @@ convergence behaviour is identical either way.
 
 The intended distribution is a signed RPM built in the Open Build Service
 (https://build.opensuse.org), installed from a pinned, signed repository. There is
-no `curl | sh` install path, by design.
+no `curl | sh` install path, by design. On a transactional host the package is
+installed with `transactional-update pkg install` and takes effect after a reboot.
 
-To build from source (Go, static binary):
+The tool is generated in three languages from one specification; pick whichever
+fits your environment (they are behaviourally equivalent). To build from source:
 
 ```bash
 git clone https://github.com/mge1512/zypper-declarative
 cd zypper-declarative
-CGO_ENABLED=0 go build -o zypper-declarative .
+
+# C++ (links libzypp and libsnapper directly; the reference build):
+cd code/cpp && make build        # produces ./zypper-declarative
+
+# Go (static binary):
+cd code/go && make build         # CGO_ENABLED=0 go build
+
+# Rust:
+cd code/rs && make build         # cargo build --release
 ```
+
+Each implementation's `Makefile` also provides `make test`, `make man`, and
+`make dist` (the release source tarball). The C++ build discovers its system
+libraries (libzypp, libsnapper, jsoncpp, yaml-cpp, libcrypto) via pkg-config.
 
 To expose it as a zypper subcommand, place the binary on `PATH` as
 `zypper-declarative`, or install it into `/usr/lib/zypper/commands/`; zypper then
@@ -250,16 +283,22 @@ runs it as `zypper declarative`. It is also invokable directly as
 The implementation is generated against the milestones declared in the
 specification, scaffold first:
 
-- 0.0.0 compilable skeleton (all commands present, no logic)
+- 0.0.0 compilable skeleton (all verbs present, no logic)
 - 0.1.0 read-only foundation: `status`, `describe`, the live-state reader, manifest loading
 - 0.2.0 `diff` and the intent and drift comparisons
 - 0.3.0 `verify`
-- 0.4.0 `apply` with file convergence and the applied-record ledger
+- 0.4.0 `init` (onboarding: adopt the current state as the baseline, in a snapshot,
+  converging nothing) and `apply` with file convergence and the applied-record ledger
 - 0.5.0 package convergence
 - 0.6.0 unit convergence and idempotent full converge
 
+The read-only and onboarding foundation (through `verify` and `init`) is verified
+across all three implementations. The converging side of `apply` is exercised on a
+transactional target.
+
 Deliberately deferred: secret material in the manifest, the kernel command line as
-declared state, and the hard-reset keep-list.
+declared state, the hard-reset keep-list, NixOS-style version coexistence, and
+resolving alternatives slaves to suppress default selections.
 
 ## Contributing
 
