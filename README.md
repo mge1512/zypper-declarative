@@ -240,9 +240,9 @@ convergence behaviour is identical either way.
 ## Installation
 
 The intended distribution is a signed RPM built in the Open Build Service
-(https://build.opensuse.org), installed from a pinned, signed repository. There is
-no `curl | sh` install path, by design. On a transactional host the package is
-installed with `transactional-update pkg install` and takes effect after a reboot.
+(https://build.opensuse.org), installed from a pinned, signed repository.  On a transactional host the package is installed with `transactional-update pkg install` and takes effect after a reboot.
+
+Currently there are test packages at: https://build.opensuse.org/project/show/home:mge1512:declarative 
 
 The tool is generated in three languages from one specification; pick whichever
 fits your environment (they are behaviourally equivalent). To build from source:
