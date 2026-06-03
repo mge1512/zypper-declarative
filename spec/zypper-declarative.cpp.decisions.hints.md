@@ -451,6 +451,33 @@ and the code must not assume one version's API.
   specified in the cli-tool milestones scaffold; follow it. The project-specific
   part is that this tool's live-reading verbs take `on-unreadable=warn` in tests
   (below) so a protected root-only source never aborts a test.
+- `[pcd]` No hollow tests (the milestones scaffold states the general rule; this is
+  how it applies here). A test for an EXAMPLE asserts that example's THEN, the
+  emitted/suppressed records, the drift report content, the exit code, the specific
+  diagnostic, NOT merely `exit_code == 0`. Concretely, build the fixture the
+  example's GIVEN implies and assert the real outcome:
+  - manifest-driven examples (`apply_*`, `diff_*`, `verify_*`, `intent_diff_*`,
+    `idempotent_second_apply`): write the desired manifest as a JSON (or YAML) file
+    in a temp dir, and for verify/diff also write a captured actual-state dump;
+    use the OFFLINE modes the spec provides (`diff manifest-path=... state-path=...`,
+    `verify manifest-path=... state-path=...`) so the behaviour is asserted with no
+    live system, then assert the plan/drift lines or exit code the example states.
+  - describe examples that judge `/etc` content (`describe_records_symlink_verbatim`,
+    `describe_skips_special_file`, `describe_traverses_etc_subdirectories`,
+    `describe_type_mismatch_emitted`, `describe_ghost_with_content_emitted`,
+    `describe_*_alternative_symlink_*`, `describe_crypto_policies_symlinks_not_alternatives`,
+    `describe_config_files_bounded_to_etc`): construct a SYNTHETIC root/`/etc` subtree
+    in a temp dir with the specific objects (a symlink with a known target, a fifo, a
+    nested file, a link whose target differs from auto/best), point describe at it via
+    the root option the spec defines, and assert the record is present/absent with the
+    expected `type`/`target`/`sha256`. These are constructible without root.
+  - the `init`/snapshot/apply-convergence examples that need a real transactional
+    root or root privilege the build user lacks: mark SKIPPED (needs a live
+    transactional target), do not emit an exit-0 stub. The offline-checkable half of
+    init (that it WRITES a manifest and an applied record, idempotent diff afterwards)
+    can still be asserted where the snapshot step is not required.
+  A suite where the describe/verify/apply examples are bare `exit_code == 0` stubs
+  with an "auto-generated generic"/"fallback" comment is a FAILED run; reject it.
 - `[spec]` Required self-checks (black-box, against the build host's real rpmdb). Run
   with the binary invoked as the build user, NOT via `sudo` and NOT assuming root:
   run `describe` with `on-unreadable=warn` so a protected root-only file (e.g.

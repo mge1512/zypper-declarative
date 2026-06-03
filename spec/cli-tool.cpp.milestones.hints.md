@@ -264,6 +264,61 @@ A "simplified" command-runner that uses `std::system` with shared `/tmp/out` and
 `/tmp/err` is NOT acceptable even though it compiles; it is the exact shortcut to
 avoid.
 
+### Every test must assert the EXAMPLE's actual outcome (no hollow tests)
+
+A test generated for an `### EXAMPLE:` MUST assert that example's THEN conditions,
+the specific stdout/stderr content, exit code, file or scope state the example
+declares, NOT merely that the binary exited 0. A test whose only assertion is
+`exit_code == 0` is FORBIDDEN: it is "green theater", it passes even when the
+behaviour under test is completely broken, and it is worse than no test because it
+manufactures false confidence. Do NOT emit "fallback" or "auto-generated generic"
+test bodies; that pattern (a single exit-code check standing in for a real
+behavioural assertion) is exactly what must not happen, and a suite where most
+tests are such stubs is a failed test-authoring run, not a passing one.
+
+If an EXAMPLE needs a FIXTURE to be testable, BUILD the fixture; do not fall back
+to a bare run. The example's GIVEN tells you what to construct: a manifest file (a
+specific JSON/YAML document), an applied-record baseline, a synthetic root or `/etc`
+subtree, or specific filesystem objects (a symlink, a special file, a ghost). Create
+them in a per-test temporary directory, point the tool at them (via the relevant
+`*-path` / root option the spec defines), run the verb, and assert the THEN. Offline
+modes (comparing a manifest against a captured state dump, where the spec provides
+them) let many behaviours be asserted without a live system; prefer them for
+fixture-based tests.
+
+If a behaviour GENUINELY cannot be exercised at test time, because it requires a
+live transactional root, real snapshot creation, or root privilege the build user
+lacks, the test MUST be explicitly marked deferred/skipped and counted as such (the
+report distinguishes tested from deferred), NOT emitted as a passing exit-0 stub. An
+honest "skipped: needs a live transactional target" is correct; a fake-green stub is
+not. Mark such a case clearly (e.g. print a SKIP line and do not count it as a
+pass), so the suite's green status reflects only behaviours actually verified.
+
+---
+
+## Clean up after yourself (test-author and translator)
+
+Both roles MUST leave no stray artifacts behind. A run that litters the build host
+or the source tree with temporary files, scratch directories, or half-written
+outputs is not a clean run, even if it compiles and passes.
+
+- The TEST-AUTHOR: every test creates its fixtures (temp files, scratch dirs,
+  manifests, synthetic roots) in a per-test temporary location and DELETES them
+  when the test finishes, including on the failure path (use RAII or an explicit
+  cleanup at every return). Capture temp files (`mkstemp`) are `unlink`ed after use.
+  No fixture is written to a fixed shared path or left in `/tmp`, the source tree,
+  or the working directory after the suite exits. The suite must be re-runnable any
+  number of times with no residue and no dependence on leftovers from a prior run.
+- The TRANSLATOR: do not leave scratch files, generated intermediates, editor
+  backups, or `build/` contents in the source tree as deliverables. Build output
+  goes under the build directory and is excluded from `make dist` (the tarball
+  contains only sources, not artifacts). Temporary files created during generation
+  or self-checks are removed before the run is considered done. The committed tree
+  is the sources plus the generated code, nothing extraneous.
+
+The test of a clean run: after it finishes, `git status` shows only intended files,
+and a second identical run starts from the same clean state and behaves identically.
+
 ---
 
 ## Output path construction
