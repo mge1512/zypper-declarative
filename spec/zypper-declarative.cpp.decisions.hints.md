@@ -37,9 +37,9 @@ and the code must not assume one version's API.
 | Concern | Library | devel package | SLE 15 SP7 | SLE 16.0 | Note |
 |---|---|---|---|---|---|
 | packages, rpmdb query, file ownership, baseline digests | libzypp | `libzypp-devel` | 17.37.x (Basesystem) | 17.37-17.38 (SLES core) | major 17 on both; minor API moves |
-| snapshots / generations | libsnapper | `libsnapper-devel` | `libsnapper5` 0.8.16 (Basesystem) | `libsnapper7` 0.12.1 (SLES core) | soname 5 vs 7: binary-incompatible, build per-SP |
+| snapshots / generations | libsnapper | `libsnapper-devel` | runtime lib `libsnapper5` 0.8.16 (15 SP7) | `libsnapper7` 0.12.x (16.x), `libsnapper8` 0.13.x (TW) | soname 5/7/8 binary-incompatible AND the API differs (Plugins::Report added in 0.12, one-arg removed in 0.13); build per-target, guard the snapshot call (see Snapshots section). devel pkg is `libsnapper-devel` on all |
 | JSON | jsoncpp | `jsoncpp-devel` | 1.8.4 (Dev Tools) | 1.9.6 (SLES core) | stable API across these versions |
-| YAML | yaml-cpp | `libyaml-cpp` | `libyaml-cpp0_6` 0.6.3 (Basesystem) | `libyaml-cpp0_8` 0.8.0 (SLES core) | 0.6 vs 0.8: API differs, compile against both |
+| YAML | yaml-cpp | `yaml-cpp-devel` | 0.6.3 (Basesystem; runtime lib `libyaml-cpp0_6`) | 0.8.0 (SLES core; runtime lib `libyaml-cpp0_8`) | 0.6 vs 0.8: API differs, compile against both; devel pkg is `yaml-cpp-devel` on BOTH, NOT `libyaml-cpp-devel` |
 
 ### Packages and per-file baseline: libzypp ONLY, via `RpmHeader::tag_fileinfos()`
 
@@ -142,20 +142,41 @@ and the code must not assume one version's API.
   `cmake/` if no `.pc` is present. Record the mechanism and detected version in
   `TRANSLATION_REPORT.md` and verify on the host.
 
-### Snapshots: libsnapper, soname 5 vs 7
+### Snapshots: libsnapper, soname 5 vs 7 vs 8, and the Plugins::Report API break
 
 - Link libsnapper (`libsnapper-devel`) for snapshot/generation operations the
   transaction binding needs (creating, listing, querying btrfs snapshots, and
   reading/writing snapshot userdata where the applied-record ledger rides along).
-- The soname differs: `libsnapper5` (0.8.16) on 15 SP7 vs `libsnapper7` (0.12.1) on
-  16.0, binary-incompatible, and the 0.8->0.12 jump may move the API. The code must
-  compile against whichever is present and not hardcode one version's assumptions;
-  OBS builds per SP so each RPM links the correct soname. Where the API differs,
-  guard with a configure-time CMake feature test, not a version-macro guess. Record
-  the detected version in `TRANSLATION_REPORT.md`.
-- If a given operation has no stable libsnapper API across both SPs, THAT operation
-  (only) may fall back to `OSCommandRunner` invoking `snapper`, noted explicitly;
-  the default remains the library.
+- The soname AND the API differ across the targets, this is a hard
+  compile-time divergence, not just a soname bump:
+  - `libsnapper5` 0.8.16 (15 SP7): only `createSingleSnapshotOfDefault(const SCD&)`;
+    the `Plugins` namespace and `Plugins::Report` type DO NOT EXIST.
+  - `libsnapper7` 0.12.x (16.0/16.1): BOTH `createSingleSnapshotOfDefault(const SCD&)`
+    (marked `SN_DEPRECATED`) AND `createSingleSnapshotOfDefault(const SCD&,
+    Plugins::Report&)` exist.
+  - `libsnapper8` 0.13.1 (Tumbleweed): the one-arg form is REMOVED; only
+    `createSingleSnapshotOfDefault(const SCD&, Plugins::Report&)` exists.
+  In snapper 0.12 every mutating call (createSingleSnapshot, createPreSnapshot,
+  modifySnapshot, deleteSnapshot, ...) gained a trailing `Plugins::Report&`; the same
+  conditioning applies to any of them the binding uses.
+- REQUIRED: the snapshot-creation call MUST be guarded so it compiles on all three.
+  A single unconditional call cannot work (the `Plugins::Report` type is absent on
+  0.8.16, and the one-arg overload is absent on 0.13.1). Detect snapper >= 0.12 and
+  branch:
+  - on >= 0.12: default-construct a `snapper::Plugins::Report` and call the two-arg
+    form `createSingleSnapshotOfDefault(scd, report)` (this is the non-deprecated path
+    and avoids the `SN_DEPRECATED` warning on 16.x, the demo target).
+  - on < 0.12: call the one-arg form `createSingleSnapshotOfDefault(scd)`.
+- MECHANISM: do the version detection in CMake (it already has the snapper version
+  from `pkg_check_modules`, captured as the snapper module version), NOT a guessed
+  snapper header macro. When the detected version is >= 0.12, define a project macro,
+  e.g. `target_compile_definitions(zypper-declarative PRIVATE ZD_SNAPPER_REPORT_PARAM)`;
+  the code does `#if defined(ZD_SNAPPER_REPORT_PARAM)`. This keeps the version logic
+  in the build (where the version is known) and out of a fragile header probe. Record
+  the detected snapper version and which branch was compiled in `TRANSLATION_REPORT.md`.
+- If some other operation has no stable libsnapper API across the versions, THAT
+  operation (only) may fall back to `OSCommandRunner` invoking `snapper`, noted
+  explicitly; the default remains the library.
 
 ### JSON: jsoncpp
 
@@ -177,11 +198,14 @@ and the code must not assume one version's API.
 
 ### YAML: yaml-cpp, 0.6 vs 0.8
 
-- Use yaml-cpp (`libyaml-cpp`) for the opt-in YAML serialisation; present on both
-  but at different API levels (`libyaml-cpp0_6` 0.6.3 on 15 SP7 vs `libyaml-cpp0_8`
-  0.8.0 on 16.0). Compile against both: restrict usage to API stable across 0.6
-  through 0.8, avoid 0.7+-only entry points. DISCOVER via `pkg_check_modules(YAMLCPP
-  REQUIRED IMPORTED_TARGET yaml-cpp)` and link `PkgConfig::YAMLCPP`, NOT
+- Use yaml-cpp for the opt-in YAML serialisation; present on both but at different
+  API levels (runtime lib `libyaml-cpp0_6` 0.6.3 on 15 SP7 vs `libyaml-cpp0_8` 0.8.0
+  on 16.0). The devel package to BuildRequire is `yaml-cpp-devel` on BOTH SLE 15 and
+  16, NOT `libyaml-cpp-devel`; the `lib...0_6`/`0_8` names are the RUNTIME shared-lib
+  packages, not the devel package. Compile against both: restrict usage to API stable
+  across 0.6 through 0.8, avoid 0.7+-only entry points. DISCOVER via
+  `pkg_check_modules(YAMLCPP REQUIRED IMPORTED_TARGET yaml-cpp)` (pkg-config module is
+  `yaml-cpp`, no `lib`) and link `PkgConfig::YAMLCPP`, NOT
   `find_package(yaml-cpp)`: yaml-cpp's CMake config has the same per-SP fragility as
   jsoncpp (the SLE 16 build can ship a config that assumes a helper preamble it does
   not include), and pkg-config (`yaml-cpp.pc`, present on both) is immune. If a
@@ -370,26 +394,47 @@ and the code must not assume one version's API.
   `configure_file`) holding version and hash; `version` prints
   `zypper-declarative <version> spec:<sha256>`.
 - `[spec]` Surfaced as a zypper subcommand (`/usr/lib/zypper/commands`) and invocable
-  directly. OBS package, no curl install. RPM spec: `BuildRequires: gcc15-c++` on
-  SLE 15, plus `libzypp-devel`, `libsnapper-devel`, `jsoncpp-devel`, and the right
-  `libyaml-cpp` devel for the SP; dynamic runtime requires resolved by the linker.
-  The jsoncpp devel package is named `jsoncpp-devel` on BOTH SLE 15 and SLE 16, NOT
-  `libjsoncpp-devel`; do not prefix it with `lib` (a prior RPM spec used the wrong
-  `libjsoncpp-devel` and failed to find the dependency). The VERSION single-source
+  directly. OBS package, no curl install. RPM spec `BuildRequires:` on SLE 15:
+  `gcc15-c++`, `libzypp-devel`, `libsnapper-devel`, `jsoncpp-devel`, `yaml-cpp-devel`,
+  `libopenssl-3-devel`; dynamic runtime requires resolved by the linker. TWO devel
+  package names are commonly gotten wrong; both follow the `<name>-devel` convention
+  with NO `lib` prefix on SLE 15 AND 16: the jsoncpp devel package is `jsoncpp-devel`
+  (NOT `libjsoncpp-devel`), and the yaml-cpp devel package is `yaml-cpp-devel` (NOT
+  `libyaml-cpp-devel`). The `lib...` names with soname digits (`libyaml-cpp0_6`,
+  `libyaml-cpp0_8`) are the RUNTIME shared-library packages, not the devel packages;
+  do NOT put them in `BuildRequires`. (A prior RPM spec used `libjsoncpp-devel` and
+  `libyaml-cpp-devel` and failed to find the dependencies.) The VERSION single-source
   file (below) supplies the spec `Version:`. SIGTERM/SIGINT clean exit; an
   interrupted `apply` discards the transaction.
+- `[spec]` RPM directory ownership (OBS Factory `50-check-filelist` FAILS the build
+  on directories owned by no package): the package installs into
+  `/usr/lib/zypper/commands/`, so it MUST ensure `/usr/lib/zypper` and
+  `/usr/lib/zypper/commands` are owned. Add `Requires: zypper` (correct regardless,
+  it is a zypper subcommand and needs zypper at runtime). THEN: if the `zypper`
+  package owns `/usr/lib/zypper/commands` (check on the target with
+  `rpm -qf /usr/lib/zypper/commands`), do NOT also `%dir` it (that causes a
+  duplicate-ownership rpmlint complaint), the `Requires: zypper` suffices. If zypper
+  does NOT own it, the `%files` section must claim both directories with
+  `%dir %{_prefix}/lib/zypper` and `%dir %{_prefix}/lib/zypper/commands`. A prior
+  build failed `50-check-filelist` with "directories not owned by a package:
+  /usr/lib/zypper, /usr/lib/zypper/commands" on both 15 SP7 and 16.1 because neither
+  the dirs were owned nor zypper required. (Note: the build itself succeeds and the
+  RPM is written; this check runs AFTER and fails the OBS build, so it is easy to
+  miss in a local rpmbuild that does not run the OBS post-checks.)
 - `[pcd]` Version single-source: a top-level `VERSION` file (one line, e.g. `0.6.7`)
   is the sole version authority. The RPM spec reads it for `Version:` (e.g.
   `Version: %(cat %{_sourcedir}/VERSION)` or injected at tarball build), the
   `make dist` target (below) reads it for the tarball name and subdirectory, and the
   build embeds it (via `configure_file`) so the binary's `version` output, the RPM
   `Version:`, and the tarball `zypper-declarative-X.Y.Z/` are guaranteed identical.
-- `[pcd]` `make dist` target in the Makefile (the conventional name; avoids CMake
-  CPack's `package`): produce `zypper-declarative-X.Y.Z.tar.gz` containing a single
-  top-level directory `zypper-declarative-X.Y.Z/`, where `X.Y.Z` is read from
-  `VERSION`, so `rpmbuild`'s default `%setup`/`%autosetup` (which cd's into
+- `[pcd]` The Makefile MUST define a `make dist` target (this is REQUIRED, not
+  optional; a prior build omitted it). Conventional name, avoids CMake CPack's
+  `package` collision. It produces `zypper-declarative-X.Y.Z.tar.gz` containing a
+  single top-level directory `zypper-declarative-X.Y.Z/`, where `X.Y.Z` is read from
+  the `VERSION` file, so `rpmbuild`'s default `%setup`/`%autosetup` (which cd's into
   `%{name}-%{version}/`) finds the expected directory. Exclude build artifacts
-  (`build/`, VCS dirs) from the tarball.
+  (`build/`, VCS dirs) from the tarball. See the milestones hints for the Makefile
+  target list and shape; `dist` sits alongside `build`, `test`, `man`, `clean`.
 
 ### Testing boundary
 
