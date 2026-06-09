@@ -230,6 +230,38 @@ commit messages, not in the normative spec text.
   mechanism, with the decision deliberately left open. Secrets, kernel cmdline,
   and sysctl domains reserved for a later Version.
 
+## Version 0.6.10
+
+- 2026-06-08: Added two transaction modes, `snapshot` and `plain`, to the
+  `TransactionMode` axis (was `auto | external | internal`, all transactional-
+  update flavours) and taught `auto` to resolve by substrate across all five.
+  Background: a caller on a throwaway root (an ephemeral build VM whose overlay is
+  discarded after the run) has no use for a sealed boot snapshot, and a normal
+  btrfs SLES host wants the stock snapper pre/post bracket rather than a
+  transactional-update generation; neither was expressible. (1) `snapshot`
+  brackets the whole apply in a snapper pre/post pair on the running root: changes
+  are live immediately, the pair is the rollback unit (`snapper rollback`), and no
+  boot target is set. This is the stock SLES-12+ btrfs zypper behaviour, now a
+  first-class mode. (2) `plain` applies in place on the running root with no
+  snapshot and no transactional wrapper; it has no undo unit, so a mid-run failure
+  leaves the partial changes already made (non-atomic by design), which is
+  acceptable for a throwaway root or an offline bake. (3) `auto` now resolves by
+  substrate: inside a transactional-update snapshot -> external; on a
+  transactional-update host -> internal; on a non-transactional btrfs root with
+  snapper -> snapshot; otherwise -> plain. The transactional modes are unchanged,
+  and the resolved mode governs only the undo unit and finalisation, never which
+  scopes are converged or how (the convergence code path is identical across
+  modes). Touched TYPES (TransactionMode, TransactionContext),
+  acquire-transaction-context (substrate resolution and the snapshot/plain
+  bindings), the apply and init finalisation steps and their postconditions (the
+  plain non-atomicity is stated explicitly), CONFIG (transaction-mode values;
+  activation-policy noted as transactional-only), and added invariants and
+  examples for snapshot, plain, and the auto resolution. This is the spec-side
+  counterpart of kvm-manager's dev-run, which invokes
+  `zypper declarative apply mode=plain` inside its ephemeral overlay. An offline
+  target (a root= input for in-place baking of a mounted tree) is deliberately NOT
+  added here; it remains a possible later addition, orthogonal to the mode axis.
+
 ## Version 0.6.9
 
 - 2026-06-02: Fixed symlink classification (a real bug that shipped in the v0.6.8

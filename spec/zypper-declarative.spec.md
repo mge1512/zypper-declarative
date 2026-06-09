@@ -2,7 +2,7 @@
 
 ## META
 Deployment:  cli-tool
-Version:     0.6.9
+Version:     0.6.10
 Spec-Schema: 0.4.0
 Author:      Matthias G. Eckermann <pcd@mailbox.org>
 License:     GPL-2.0-or-later
@@ -238,15 +238,35 @@ AppliedRecord := Manifest
 // Transaction binding (deliberately deferred)
 // -----------------------------------------------------------------------
 
-TransactionMode := one_of("auto" | "external" | "internal")
-// auto     = detect whether already running inside a snapshot transaction
-// external = a separate mechanism opened it (e.g. transactional-update run ...)
-// internal = open and commit it through the zypper-merged machinery (SLES 16.1)
+TransactionMode := one_of("auto" | "external" | "internal" | "snapshot" | "plain")
+// The undo unit, and the tree the apply runs against. The first three are
+// transactional-update flavours (a fresh snapshot becomes the next boot root);
+// the last two operate on the running root.
+// auto     = detect the substrate and resolve to one of the modes below (see
+//            acquire-transaction-context): a transactional-update host resolves
+//            to external or internal; a non-transactional btrfs host with
+//            snapper resolves to snapshot; otherwise to plain.
+// external = a separate mechanism opened a transactional-update snapshot
+//            (e.g. transactional-update run ...); this tool converges within it.
+// internal = open and commit a transactional-update snapshot through the
+//            zypper-merged machinery (SLES 16.1).
+// snapshot = bracket the whole apply in a snapper pre/post pair on the running
+//            root. Changes take effect immediately, not at next boot; the undo
+//            unit is the pair (snapper rollback). The stock SLES btrfs default.
+// plain    = apply in place on the running root with no snapshot and no
+//            transactional wrapper. There is no undo unit: a mid-run failure
+//            leaves partial changes. For a throwaway root (an ephemeral overlay)
+//            or an offline image bake, where non-atomicity is acceptable.
 
 TransactionContext := {
   mode:        TransactionMode,
-  root:        AbsolutePath,   // mount point of the new snapshot's root tree
-  opened_here: bool            // true if this tool opened it; false if external
+  root:        AbsolutePath,   // tree convergence runs against: the new snapshot
+                               // mount for the transactional modes; the running
+                               // root "/" for snapshot and plain
+  opened_here: bool            // true if this tool opened the undo unit (an
+                               // internal transactional snapshot, or the snapper
+                               // pre/post bracket under snapshot); false for
+                               // external and for plain (plain opens nothing)
 }
 
 // -----------------------------------------------------------------------
@@ -441,22 +461,30 @@ STEPS:
    `resolve-format(out)`, so the operator has the document to edit for future
    desired changes. Writing the operator-facing manifest is not part of the
    transaction's convergence; it is the same content as the applied record.
-6. Seal and activate: if `opened_here`, seal the snapshot read-only, mark it the
-   default boot target, and schedule activation per the activation policy in
-   CONFIG; if not `opened_here`, leave sealing and activation to the external
-   mechanism. Emit the adoption summary (scope counts, snapshot id) to stdout and
-   exit 0.
+6. Finalise according to `mode`. Transactional modes (`internal`, `external`, or
+   `auto` resolved to either): if `opened_here`, seal the snapshot read-only, mark
+   it the default boot target, and schedule activation per the activation policy
+   in CONFIG; if not `opened_here`, leave sealing and activation to the external
+   mechanism. `snapshot`: take the matching snapper post-snapshot, closing the
+   bracket (the adopted baseline is live on the running root, no boot target
+   changes). `plain`: nothing to finalise (the baseline is written in place on the
+   running root). Emit the adoption summary (scope counts, generation id) to
+   stdout and exit 0.
 
 POSTCONDITIONS:
-- On exit 0, a new sealed snapshot exists whose `applied.json` records the adopted
-  current state and its `desired_sha256`; no `/etc` file, package, or unit was
-  modified (the machine is byte-for-byte as before, plus the snapshot and applied
-  record).
+- On exit 0, `applied.json` records the adopted current state and its
+  `desired_sha256`, and no `/etc` file, package, or unit was modified (the machine
+  is byte-for-byte as before, plus the applied record). For the transactional
+  modes this record lives in a new sealed snapshot; for `snapshot` and `plain` it
+  is written under the running root.
 - Immediately after `init`, `diff manifest-path=<the adopted manifest>` computes an
   EMPTY intent diff and an EMPTY drift report, and `verify` against the applied
   record reports a match (the machine is onboarded and idempotent).
-- On any non-zero exit, no new snapshot is left as the default boot target and the
-  running system is unchanged.
+- On any non-zero exit under a transactional mode or `snapshot`, no new snapshot
+  is left as the default boot target and the running system is unchanged. Under
+  `plain` the applied-record write is the only effect and is not transactional;
+  `init` converges nothing, so a failed `plain` init leaves at most a partially
+  written applied record and no scope changes.
 
 ERRORS:
 - state collection failed -> exit 1, domain=files (or the failing scope's domain)
@@ -523,18 +551,30 @@ STEPS:
     on the context root and run `compute-drift` against the new applied record.
     If the drift report is non-empty (excluding the keep-list), discard and
     exit 1.
-11. Seal and activate: if `opened_here`, seal the snapshot read-only, mark it the
-    default boot target, and schedule activation per the activation policy in
-    CONFIG; if not `opened_here`, leave sealing and activation to the external
-    mechanism. Emit the change summary to stdout and exit 0.
+11. Finalise according to `mode`. Transactional modes (`internal`, `external`,
+    or `auto` resolved to either): if `opened_here`, seal the snapshot read-only,
+    mark it the default boot target, and schedule activation per the activation
+    policy in CONFIG; if not `opened_here`, leave sealing and activation to the
+    external mechanism (changes take effect at next boot into the new snapshot).
+    `snapshot`: take the matching snapper post-snapshot, closing the bracket; the
+    changes are already live on the running root and no boot target changes, the
+    pre/post pair being the rollback unit. `plain`: nothing to finalise; the
+    changes are live in place on the running root with no rollback unit. Emit the
+    change summary to stdout and exit 0.
 
 POSTCONDITIONS:
-- On exit 0, either the system was already converged (no snapshot created), or a
-  new sealed snapshot exists whose managed scopes equal the desired manifest, and
-  whose `applied.json` records that manifest's `desired_sha256` and the resolved
-  packages scope.
-- On any non-zero exit, no new snapshot is left as the default boot target; the
-  running system is unchanged.
+- On exit 0, either the system was already converged (nothing opened), or the
+  managed scopes equal the desired manifest and `applied.json` records that
+  manifest's `desired_sha256` and the resolved packages scope. For the
+  transactional modes the result is a new sealed boot snapshot; for `snapshot`
+  and `plain` the changes are live on the running root (a closed snapper pre/post
+  pair for `snapshot`, in place for `plain`), and `applied.json` is written under
+  the running root.
+- On any non-zero exit under a transactional mode or `snapshot`, no new snapshot
+  is left as the default boot target and the running system is unchanged (a
+  transactional discard, or a snapper rollback to the pre-snapshot). Under `plain`
+  there is no transaction to discard: partial changes made before the failure
+  remain (see INVARIANTS).
 - Re-running `apply` with the same manifest against the resulting system computes
   an empty intent diff and an empty drift report (idempotence).
 
@@ -1434,25 +1474,39 @@ error: Diagnostic           // on failure (returned to caller)
 ```
 
 STEPS:
-1. If mode=auto, detect whether the process already runs inside a fresh snapshot
-   transaction. If so resolve to external; otherwise resolve to internal.
+1. If mode=auto, detect the substrate and resolve to a concrete mode:
+   - already running inside a fresh transactional-update snapshot -> external;
+   - a transactional-update host (read-only root with the transactional-update
+     machinery) but not yet inside a transaction -> internal;
+   - a non-transactional btrfs root with snapper available -> snapshot;
+   - otherwise (no snapper, or a non-btrfs root) -> plain.
 2. If external: assert a writable new-generation root is present; set
    opened_here=false and root to that mount point. If no such root is present,
    return a transaction error (the caller must be invoked inside a transaction).
 3. If internal: open a new snapshot transaction through the zypper-merged
    transactional machinery; set opened_here=true and root to the new mount point.
    On failure return a transaction error.
-4. Return the TransactionContext.
+4. If snapshot: assert snapper is available on the running root; create a snapper
+   pre-snapshot to open the bracket; set opened_here=true and root="/". The
+   matching post-snapshot is taken by the caller at finalisation. If snapper is
+   unavailable, return a transaction error.
+5. If plain: open nothing; set opened_here=false and root="/".
+6. Return the TransactionContext.
 
 POSTCONDITIONS:
-- A returned context has a writable root distinct from the running system root.
-- opened_here is true if and only if this tool opened the transaction.
-- The same convergence behaviour applies regardless of which binding was
-  resolved.
+- For the transactional modes the returned context has a writable root distinct
+  from the running system root; for snapshot and plain the root is the running
+  root "/".
+- opened_here is true if and only if this tool opened the undo unit (an internal
+  transactional snapshot, or the snapper pre/post bracket under snapshot).
+- The same convergence behaviour applies regardless of which mode was resolved;
+  the mode governs only the undo unit and finalisation, not the convergence
+  steps.
 
 ERRORS:
 - external mode but not running inside a transaction -> transaction error
 - internal mode but transaction could not be opened -> transaction error
+- snapshot mode but snapper is unavailable on the running root -> transaction error
 
 ---
 
@@ -1665,7 +1719,12 @@ the binding is resolved at build or run time.
 All knobs are surfaced via key=value arguments or preset files (systemd-style
 layering). Control via environment variables is forbidden.
 
-- `transaction-mode` = auto | external | internal. Default auto.
+- `transaction-mode` = auto | external | internal | snapshot | plain. Default
+  auto. The first three are transactional-update flavours (a fresh snapshot
+  becomes the next boot root); `snapshot` brackets the apply in a snapper pre/post
+  pair on the running root (live, the stock btrfs default); `plain` applies in
+  place on the running root with no snapshot and no undo unit. See TYPES and
+  acquire-transaction-context.
 - `manifest-path` = path to the desired manifest. Default a fixed staging path
   supplied by the delivery layer.
 - `manifest-format` = json | yaml. Default json. The fallback serialisation used
@@ -1701,7 +1760,9 @@ layering). Control via environment variables is forbidden.
   the hard-reset path; harmless for incremental convergence.
 - `signature-verification` = on | off, plus the keyring path when on. Default on.
 - `activation-policy` = reboot | soft-reboot | none. How `apply` schedules
-  activation of a freshly sealed snapshot.
+  activation of a freshly sealed snapshot. Applies only to the transactional
+  modes; `snapshot` and `plain` are live on the running root and schedule no
+  activation.
 - `applied-root` = generation root from which `load-applied-record` reads the
   applied record. Default "/". Set it to a mounted snapshot to inspect that
   generation's record.
@@ -1949,8 +2010,25 @@ resolver fills in the transitive set.
 - [implementation] There is exactly one live-state reader, `describe-actual-state`;
   `diff`, `verify`, `status`, `describe`, and `apply` obtain actual state through
   it or through a supplied dump in the same format.
-- [implementation] The same convergence code path runs regardless of whether the
-  transaction binding resolved to external or internal.
+- [implementation] The same convergence code path runs regardless of the resolved
+  transaction mode; the mode governs only the undo unit (a transactional snapshot,
+  a snapper pre/post bracket, or none) and finalisation, never which scopes are
+  converged or how.
+- [observable] Under `snapshot`, the apply is bracketed by a snapper pre/post pair
+  on the running root: the changes are live immediately (not at next boot), the
+  pair is the rollback unit (`snapper rollback`), and no new boot target is set. A
+  mid-run failure rolls back to the pre-snapshot and leaves the running system
+  unchanged.
+- [observable] Under `plain`, `apply` opens no transaction and creates no
+  snapshot: changes are made in place on the running root and there is no rollback
+  unit, so a mid-run failure leaves the partial changes already made. `plain` is
+  intended for a throwaway root (an ephemeral overlay) or an offline bake, where
+  the absence of atomicity is acceptable because the whole root is discarded or
+  rebuilt on failure.
+- [observable] `mode=auto` resolves by substrate: inside a transactional-update
+  snapshot -> external; on a transactional-update host -> internal; on a
+  non-transactional btrfs root with snapper -> snapshot; otherwise -> plain. The
+  resolution changes only the undo unit, never the converged result.
 - [observable] Every generated artifact embeds the SHA256 of the spec file it was
   produced from.
 
@@ -2061,6 +2139,47 @@ THEN:
   no new snapshot is left as the default boot target
   stderr contains one diagnostic with domain=packages
   exit_code = 1
+
+### EXAMPLE: apply_mode_plain_in_place
+GIVEN:
+  transaction-mode = plain
+  a desired manifest that installs one package and writes one /etc file
+  the running root is a throwaway overlay (no snapper required)
+  invocation: zypper declarative apply mode=plain
+WHEN:
+  apply runs and converges successfully
+THEN:
+  no snapshot is created and no transaction is opened
+  the package is installed and the /etc file is written on the running root
+  applied.json is written under the running root
+  no boot target is changed
+  exit_code = 0
+
+### EXAMPLE: apply_mode_snapshot_brackets_with_snapper
+GIVEN:
+  transaction-mode = snapshot
+  snapper is available on the running btrfs root
+  a desired manifest with one package to install
+  invocation: zypper declarative apply mode=snapshot
+WHEN:
+  apply runs and converges successfully
+THEN:
+  a snapper pre-snapshot is taken before convergence and a post-snapshot after
+  the changes are live on the running root and no boot target is changed
+  the pre/post pair is the rollback unit
+  exit_code = 0
+
+### EXAMPLE: apply_auto_resolves_to_snapshot_on_non_transactional
+GIVEN:
+  transaction-mode = auto
+  the host is a normal btrfs SLES system with snapper, not transactional-update
+  invocation: zypper declarative apply
+WHEN:
+  apply runs
+THEN:
+  auto resolves to snapshot (not internal/external, not plain)
+  the apply is bracketed by a snapper pre/post pair on the running root
+  exit_code = 0
 
 ### EXAMPLE: diff_prints_plan
 GIVEN:
